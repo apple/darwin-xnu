@@ -33,18 +33,18 @@
 #ifndef _ESP_CHACHA_POLY_H_
 #define _ESP_CHACHA_POLY_H_
 
-#define ESP_CHACHAPOLY_PAD_BOUND			1
-#define ESP_CHACHAPOLY_IV_LEN				8
-#define ESP_CHACHAPOLY_ICV_LEN				16
-#define ESP_CHACHAPOLY_KEYBITS_WITH_SALT	288 /* 32 bytes key + 4 bytes salt */
+#define ESP_CHACHAPOLY_PAD_BOUND                        1
+#define ESP_CHACHAPOLY_IV_LEN                           8
+#define ESP_CHACHAPOLY_ICV_LEN                          16
+#define ESP_CHACHAPOLY_KEYBITS_WITH_SALT        288 /* 32 bytes key + 4 bytes salt */
 
 int esp_chachapoly_schedlen(const struct esp_algorithm *);
 int esp_chachapoly_schedule(const struct esp_algorithm *,
-							struct secasvar *);
+    struct secasvar *);
 int esp_chachapoly_encrypt(struct mbuf *, size_t, size_t, struct secasvar *,
-						   const struct esp_algorithm *, int);
+    const struct esp_algorithm *, int);
 int esp_chachapoly_decrypt(struct mbuf *, size_t, struct secasvar *,
-						   const struct esp_algorithm *, int);
+    const struct esp_algorithm *, int);
 int esp_chachapoly_encrypt_finalize(struct secasvar *, unsigned char *, unsigned int);
 int esp_chachapoly_decrypt_finalize(struct secasvar *, unsigned char *, unsigned int);
 int esp_chachapoly_mature(struct secasvar *);

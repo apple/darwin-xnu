@@ -2,7 +2,7 @@
  * Copyright (c) 2007-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
@@ -86,25 +86,26 @@ mac_inpcb_label_alloc(int flag)
 	int error;
 
 	label = mac_labelzone_alloc(flag);
-	if (label == NULL)
-		return (NULL);
+	if (label == NULL) {
+		return NULL;
+	}
 	MAC_CHECK(inpcb_label_init, label, flag);
 	if (error) {
 		MAC_PERFORM(inpcb_label_destroy, label);
 		mac_labelzone_free(label);
-		return (NULL);
+		return NULL;
 	}
-	return (label);
+	return label;
 }
 
 int
 mac_inpcb_label_init(struct inpcb *inp, int flag)
 {
-
 	inp->inp_label = mac_inpcb_label_alloc(flag);
-	if (inp->inp_label == NULL)
-		return (ENOMEM);
-	return (0);
+	if (inp->inp_label == NULL) {
+		return ENOMEM;
+	}
+	return 0;
 }
 
 static struct label *
@@ -114,32 +115,32 @@ mac_ipq_label_alloc(int flag)
 	int error;
 
 	label = mac_labelzone_alloc(flag);
-	if (label == NULL)
-		return (NULL);
+	if (label == NULL) {
+		return NULL;
+	}
 
 	MAC_CHECK(ipq_label_init, label, flag);
 	if (error) {
 		MAC_PERFORM(ipq_label_destroy, label);
 		mac_labelzone_free(label);
-		return (NULL);
+		return NULL;
 	}
-	return (label);
+	return label;
 }
 
 int
 mac_ipq_label_init(struct ipq *ipq, int flag)
 {
-
 	ipq->ipq_label = mac_ipq_label_alloc(flag);
-	if (ipq->ipq_label == NULL)
-		return (ENOMEM);
-	return (0);
+	if (ipq->ipq_label == NULL) {
+		return ENOMEM;
+	}
+	return 0;
 }
 
 static void
 mac_inpcb_label_free(struct label *label)
 {
-
 	MAC_PERFORM(inpcb_label_destroy, label);
 	mac_labelzone_free(label);
 }
@@ -147,7 +148,6 @@ mac_inpcb_label_free(struct label *label)
 void
 mac_inpcb_label_destroy(struct inpcb *inp)
 {
-
 	mac_inpcb_label_free(inp->inp_label);
 	inp->inp_label = NULL;
 }
@@ -155,14 +155,12 @@ mac_inpcb_label_destroy(struct inpcb *inp)
 void
 mac_inpcb_label_recycle(struct inpcb *inp)
 {
-
 	MAC_PERFORM(inpcb_label_recycle, inp->inp_label);
 }
 
 static void
 mac_ipq_label_free(struct label *label)
 {
-
 	MAC_PERFORM(ipq_label_destroy, label);
 	mac_labelzone_free(label);
 }
@@ -170,7 +168,6 @@ mac_ipq_label_free(struct label *label)
 void
 mac_ipq_label_destroy(struct ipq *ipq)
 {
-
 	mac_ipq_label_free(ipq->ipq_label);
 	ipq->ipq_label = NULL;
 }
@@ -178,7 +175,6 @@ mac_ipq_label_destroy(struct ipq *ipq)
 void
 mac_inpcb_label_associate(struct socket *so, struct inpcb *inp)
 {
-
 	MAC_PERFORM(inpcb_label_associate, so, so->so_label, inp,
 	    inp->inp_label);
 }
@@ -237,7 +233,7 @@ mac_ipq_label_compare(struct mbuf *fragment, struct ipq *ipq)
 	result = 1;
 	MAC_BOOLEAN(ipq_label_compare, &&, fragment, label, ipq, ipq->ipq_label);
 
-	return (result);
+	return result;
 }
 
 void
@@ -276,15 +272,16 @@ mac_inpcb_check_deliver(struct inpcb *inp, struct mbuf *m, int family, int type)
 	struct label *label;
 	int error;
 
-	if ((m->m_flags & M_PKTHDR) == 0)
+	if ((m->m_flags & M_PKTHDR) == 0) {
 		panic("%s: no mbuf packet header!", __func__);
+	}
 
 	label = mac_mbuf_to_label(m);
 
 	MAC_CHECK(inpcb_check_deliver, inp, inp->inp_label, m, label,
 	    family, type);
 
-	return (error);
+	return error;
 }
 
 /*
@@ -296,7 +293,7 @@ mac_inpcb_label_update(struct socket *so)
 	struct inpcb *inp;
 
 	/* XXX: assert socket lock. */
-	inp = sotoinpcb(so);	/* XXX: inp locking */
+	inp = sotoinpcb(so);    /* XXX: inp locking */
 
 	if (inp != NULL) {
 		/* INP_LOCK_ASSERT(inp); */

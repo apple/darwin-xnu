@@ -1,4 +1,3 @@
-
 #ifndef _SYS_MEMDEV_H_
 #define _SYS_MEMDEV_H_
 
@@ -14,4 +13,4 @@ void mdevinit(vm_offset_t base, unsigned int size);
 
 #endif /* KERNEL_PRIVATE */
 
-#endif	/* _SYS_MEMDEV_H_*/
+#endif  /* _SYS_MEMDEV_H_*/

@@ -33,7 +33,8 @@
 int vsnprintf(char *, size_t, const char *, va_list);
 
 void
-ktest_set_current_expr(const char * expr_fmt, ...) {
+ktest_set_current_expr(const char * expr_fmt, ...)
+{
 	int ret;
 	va_list args;
 
@@ -43,37 +44,40 @@ ktest_set_current_expr(const char * expr_fmt, ...) {
 }
 
 void
-ktest_set_current_var(const char * name, const char * value_fmt, ...) {
+ktest_set_current_var(const char * name, const char * value_fmt, ...)
+{
 	int ret;
 	va_list args;
 
-	if(ktest_current_var_index >= KTEST_MAXVARS) {
+	if (ktest_current_var_index >= KTEST_MAXVARS) {
 		panic("Internal ktest error in " __func__);
 	}
 
 	strlcpy(ktest_current_var_names[ktest_current_var_index],
-			name,
-			KTEST_MAXLEN);
+	    name,
+	    KTEST_MAXLEN);
 
 	va_start(args, value_fmt);
 	ret = vsnprintf(ktest_current_var_values[ktest_current_var_index],
-			KTEST_MAXLEN,
-			value_fmt,
-			args);
+	    KTEST_MAXLEN,
+	    value_fmt,
+	    args);
 	va_end(args);
 
 	ktest_current_var_index++;
 }
 
 void
-ktest_set_current_msg(const char * msg, ...) {
+ktest_set_current_msg(const char * msg, ...)
+{
 	int ret;
 	va_list args;
 
-	if(msg == NULL) return;
+	if (msg == NULL) {
+		return;
+	}
 
 	va_start(args, msg);
 	ret = vsnprintf(ktest_current_msg, KTEST_MAXLEN, msg, args);
 	va_end(args);
 }
-

@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -81,7 +81,8 @@ int mockfs_blockmap(struct vnop_blockmap_args * ap);
  *
  * Returns 0 on success, or an error.
  */
-int mockfs_lookup(struct vnop_lookup_args * ap)
+int
+mockfs_lookup(struct vnop_lookup_args * ap)
 {
 	char held_char;
 	int rvalue;
@@ -116,21 +117,22 @@ int mockfs_lookup(struct vnop_lookup_args * ap)
 		 *   accidentally commit a change to the init_process pathname.  We map from name to node type
 		 *   here, as mockfs doesn't current use names; just unique types.
 		 */
-		if (!strncmp(cnp->cn_nameptr, "sbin", 5))
+		if (!strncmp(cnp->cn_nameptr, "sbin", 5)) {
 			target_fsnode = fsnode;
-		else if (!strncmp(cnp->cn_nameptr, "dev", 4))
+		} else if (!strncmp(cnp->cn_nameptr, "dev", 4)) {
 			mockfs_fsnode_child_by_type(fsnode, MOCKFS_DEV, &target_fsnode);
-		else if (!strncmp(cnp->cn_nameptr, "launchd", 8))
+		} else if (!strncmp(cnp->cn_nameptr, "launchd", 8)) {
 			mockfs_fsnode_child_by_type(fsnode, MOCKFS_FILE, &target_fsnode);
-		else
+		} else {
 			rvalue = ENOENT;
+		}
 
 		cnp->cn_nameptr[cnp->cn_namelen] = held_char;
 
-		if (target_fsnode)
+		if (target_fsnode) {
 			rvalue = mockfs_fsnode_vnode(target_fsnode, vpp);
-	}
-	else {
+		}
+	} else {
 		/*
 		 * We aren't looking in root; the query may actually be reasonable, but we're not
 		 *   going to support it.
@@ -138,7 +140,7 @@ int mockfs_lookup(struct vnop_lookup_args * ap)
 		rvalue = ENOENT;
 	}
 
-	return rvalue;	
+	return rvalue;
 }
 
 /*
@@ -157,7 +159,8 @@ int mockfs_lookup(struct vnop_lookup_args * ap)
  *
  * Returns 0 on success, or an error.
  */
-int mockfs_getattr(struct vnop_getattr_args * ap)
+int
+mockfs_getattr(struct vnop_getattr_args * ap)
 {
 	/*
 	 * For the moment, we don't actually care about most attributes.  We'll
@@ -179,7 +182,7 @@ int mockfs_getattr(struct vnop_getattr_args * ap)
 	VATTR_RETURN(vap, va_data_size, fsnode->size);
 	VATTR_RETURN(vap, va_data_alloc, fsnode->size);
 
-	return (0);
+	return 0;
 }
 
 /*
@@ -201,7 +204,8 @@ int mockfs_getattr(struct vnop_getattr_args * ap)
  *
  * Returns 0 on success, or an error.
  */
-int mockfs_read(struct vnop_read_args * ap)
+int
+mockfs_read(struct vnop_read_args * ap)
 {
 	int rvalue;
 	vnode_t vp;
@@ -216,8 +220,7 @@ int mockfs_read(struct vnop_read_args * ap)
 	 */
 	if (vp->v_type == VREG) {
 		rvalue = cluster_read(vp, ap->a_uio, fsnode->size, ap->a_ioflag);
-	}
-	else {
+	} else {
 		/*
 		 * You've tried to read from a nonregular file; I hate you.
 		 */
@@ -239,7 +242,8 @@ int mockfs_read(struct vnop_read_args * ap)
  *   is always in memory, we have very little to do as part of reclaim, so we'll just zero a few pointers and let
  *   VFS reclaim the vnode.
  */
-int mockfs_reclaim(struct vnop_reclaim_args * ap)
+int
+mockfs_reclaim(struct vnop_reclaim_args * ap)
 {
 	int rvalue;
 	vnode_t vp;
@@ -265,7 +269,8 @@ int mockfs_reclaim(struct vnop_reclaim_args * ap)
  *
  * Returns 0 on success, or an error.
  */
-int mockfs_strategy(struct vnop_strategy_args * ap)
+int
+mockfs_strategy(struct vnop_strategy_args * ap)
 {
 	int rvalue;
 	vnode_t dvp;
@@ -280,8 +285,7 @@ int mockfs_strategy(struct vnop_strategy_args * ap)
 	if (dvp) {
 		rvalue = buf_strategy(dvp, ap);
 		vnode_put(dvp);
-	}
-	else {
+	} else {
 		/*
 		 * I'm not certain this is the BEST error to return for this case.
 		 */
@@ -310,7 +314,8 @@ int mockfs_strategy(struct vnop_strategy_args * ap)
  *
  * Returns 0 on success, or an error.
  */
-int mockfs_pagein(struct vnop_pagein_args * ap)
+int
+mockfs_pagein(struct vnop_pagein_args * ap)
 {
 	mockfs_fsnode_t fsnode;
 	mockfs_mount_t mockfs_mnt;
@@ -319,16 +324,17 @@ int mockfs_pagein(struct vnop_pagein_args * ap)
 	 * Nothing special needed from us; just nab the filesize and kick the work over to cluster_pagein.
 	 */
 	fsnode = (mockfs_fsnode_t) ap->a_vp->v_data;
-	mockfs_mnt = ((mockfs_mount_t) fsnode->mnt->mnt_data);	
+	mockfs_mnt = ((mockfs_mount_t) fsnode->mnt->mnt_data);
 
 	/*
 	 * If we represent a memory backed device, we should be pointing directly to the backing store; we should never
 	 *   see a pagein in this case.
 	 */
-	if (mockfs_mnt->mockfs_memory_backed)
+	if (mockfs_mnt->mockfs_memory_backed) {
 		panic("mockfs_pagein called for a memory-backed device");
+	}
 
-	return cluster_pagein(ap->a_vp, ap->a_pl, ap->a_pl_offset, ap->a_f_offset, ap->a_size, fsnode->size, ap->a_flags);	
+	return cluster_pagein(ap->a_vp, ap->a_pl, ap->a_pl_offset, ap->a_f_offset, ap->a_size, fsnode->size, ap->a_flags);
 }
 
 /*
@@ -338,7 +344,7 @@ int mockfs_pagein(struct vnop_pagein_args * ap)
  *   off_t a_foffset;             // File offset we are interested in
  *   size_t a_size;               // Size of the region we are interested in
  *   daddr64_t *a_bpn;            // Return parameter: physical block number the region we are interest in starts at
- *   size_t *a_run;               // Return parameter: number of contiguous bytes of data 
+ *   size_t *a_run;               // Return parameter: number of contiguous bytes of data
  *   void *a_poff;                // Unused, as far as I know
  *   int a_flags;                 // Used to distinguish reads and writes; we don't care
  *   vfs_context_t a_context;     // We don't care about this (for now)
@@ -353,7 +359,8 @@ int mockfs_pagein(struct vnop_pagein_args * ap)
  *
  * Returns 0 on success, or an error.
  */
-int mockfs_blockmap(struct vnop_blockmap_args * ap)
+int
+mockfs_blockmap(struct vnop_blockmap_args * ap)
 {
 	int rvalue;
 	off_t foffset;
@@ -376,8 +383,9 @@ int mockfs_blockmap(struct vnop_blockmap_args * ap)
 	 *   be satisfied from the UBC, and any called to blockmap (inidicating an attempted IO to the backing store)
 	 *   is therefore disallowed.
 	 */
-	if (((mockfs_mount_t) fsnode->mnt->mnt_data)->mockfs_memory_backed)
+	if (((mockfs_mount_t) fsnode->mnt->mnt_data)->mockfs_memory_backed) {
 		printf("mockfs_blockmap called for a memory-backed device\n");
+	}
 
 	/*
 	 * This will ultimately be simple; the vnode must be VREG (init), and the mapping will be 1 to 1.
@@ -391,56 +399,54 @@ int mockfs_blockmap(struct vnop_blockmap_args * ap)
 			/* We've been asked for more data than the backing device can provide; we're done. */
 			panic("mockfs_blockmap was asked for a region that extended past the end of the backing device");
 		}
-	}
-	else {
+	} else {
 		rvalue = ENOTSUP;
 	}
 
 	return rvalue;
 }
 
-int (**mockfs_vnodeop_p)(void *);
-struct vnodeopv_entry_desc mockfs_vnodeop_entries[] = {
-	{ &vnop_default_desc, (VOPFUNC) vn_default_error }, /* default */
-	{ &vnop_lookup_desc, (VOPFUNC) mockfs_lookup }, /* lookup */
-	{ &vnop_create_desc, (VOPFUNC) err_create },/* create */
-	{ &vnop_open_desc, (VOPFUNC) err_open }, /* open */
-	{ &vnop_mknod_desc, (VOPFUNC) err_mknod }, /* mknod */
-	{ &vnop_close_desc, (VOPFUNC) err_close }, /* close */
-	{ &vnop_access_desc, (VOPFUNC) err_access }, /* access */
-	{ &vnop_getattr_desc, (VOPFUNC) mockfs_getattr }, /* getattr */
-	{ &vnop_setattr_desc, (VOPFUNC) err_setattr }, /* setattr */
-	{ &vnop_read_desc, (VOPFUNC) mockfs_read }, /* read */
-	{ &vnop_write_desc, (VOPFUNC) err_write }, /* write */
-	{ &vnop_ioctl_desc, (VOPFUNC) err_ioctl }, /* ioctl */
-	{ &vnop_select_desc, (VOPFUNC) err_select }, /* select */
-	{ &vnop_mmap_desc, (VOPFUNC) err_mmap }, /* mmap */
-	{ &vnop_fsync_desc, (VOPFUNC) nop_fsync }, /* fsync */
-	{ &vnop_remove_desc, (VOPFUNC) err_remove }, /* remove */
-	{ &vnop_link_desc, (VOPFUNC) err_link }, /* link */
-	{ &vnop_rename_desc, (VOPFUNC) err_rename }, /* rename */
-	{ &vnop_mkdir_desc, (VOPFUNC) err_mkdir }, /* mkdir */
-	{ &vnop_rmdir_desc, (VOPFUNC) err_rmdir }, /* rmdir */
-	{ &vnop_symlink_desc, (VOPFUNC) err_symlink }, /* symlink */
-	{ &vnop_readdir_desc, (VOPFUNC) err_readdir }, /* readdir */
-	{ &vnop_readlink_desc, (VOPFUNC) err_readlink }, /* readlink */
-	{ &vnop_inactive_desc, (VOPFUNC) err_inactive }, /* inactive */
-	{ &vnop_reclaim_desc, (VOPFUNC) mockfs_reclaim }, /* reclaim */
-	{ &vnop_strategy_desc, (VOPFUNC) mockfs_strategy }, /* strategy */
-	{ &vnop_pathconf_desc, (VOPFUNC) err_pathconf }, /* pathconf */
-	{ &vnop_advlock_desc, (VOPFUNC) err_advlock }, /* advlock */
-	{ &vnop_bwrite_desc, (VOPFUNC) err_bwrite }, /* bwrite */
-	{ &vnop_pagein_desc, (VOPFUNC) mockfs_pagein }, /* pagein */
-	{ &vnop_pageout_desc, (VOPFUNC) err_pageout }, /* pageout */
-	{ &vnop_copyfile_desc, (VOPFUNC) err_copyfile }, /* copyfile */
-	{ &vnop_blktooff_desc, (VOPFUNC) err_blktooff }, /* blktooff */
-	{ &vnop_offtoblk_desc, (VOPFUNC) err_offtoblk }, /* offtoblk */
-	{ &vnop_blockmap_desc, (VOPFUNC) mockfs_blockmap }, /* blockmap */
-	{ (struct vnodeop_desc *) NULL, (VOPFUNC) NULL }
+int(**mockfs_vnodeop_p)(void *);
+const struct vnodeopv_entry_desc mockfs_vnodeop_entries[] = {
+	{ .opve_op = &vnop_default_desc, .opve_impl = (VOPFUNC) vn_default_error }, /* default */
+	{ .opve_op = &vnop_lookup_desc, .opve_impl = (VOPFUNC) mockfs_lookup }, /* lookup */
+	{ .opve_op = &vnop_create_desc, .opve_impl = (VOPFUNC) err_create },/* create */
+	{ .opve_op = &vnop_open_desc, .opve_impl = (VOPFUNC) err_open }, /* open */
+	{ .opve_op = &vnop_mknod_desc, .opve_impl = (VOPFUNC) err_mknod }, /* mknod */
+	{ .opve_op = &vnop_close_desc, .opve_impl = (VOPFUNC) err_close }, /* close */
+	{ .opve_op = &vnop_access_desc, .opve_impl = (VOPFUNC) err_access }, /* access */
+	{ .opve_op = &vnop_getattr_desc, .opve_impl = (VOPFUNC) mockfs_getattr }, /* getattr */
+	{ .opve_op = &vnop_setattr_desc, .opve_impl = (VOPFUNC) err_setattr }, /* setattr */
+	{ .opve_op = &vnop_read_desc, .opve_impl = (VOPFUNC) mockfs_read }, /* read */
+	{ .opve_op = &vnop_write_desc, .opve_impl = (VOPFUNC) err_write }, /* write */
+	{ .opve_op = &vnop_ioctl_desc, .opve_impl = (VOPFUNC) err_ioctl }, /* ioctl */
+	{ .opve_op = &vnop_select_desc, .opve_impl = (VOPFUNC) err_select }, /* select */
+	{ .opve_op = &vnop_mmap_desc, .opve_impl = (VOPFUNC) err_mmap }, /* mmap */
+	{ .opve_op = &vnop_fsync_desc, .opve_impl = (VOPFUNC) nop_fsync }, /* fsync */
+	{ .opve_op = &vnop_remove_desc, .opve_impl = (VOPFUNC) err_remove }, /* remove */
+	{ .opve_op = &vnop_link_desc, .opve_impl = (VOPFUNC) err_link }, /* link */
+	{ .opve_op = &vnop_rename_desc, .opve_impl = (VOPFUNC) err_rename }, /* rename */
+	{ .opve_op = &vnop_mkdir_desc, .opve_impl = (VOPFUNC) err_mkdir }, /* mkdir */
+	{ .opve_op = &vnop_rmdir_desc, .opve_impl = (VOPFUNC) err_rmdir }, /* rmdir */
+	{ .opve_op = &vnop_symlink_desc, .opve_impl = (VOPFUNC) err_symlink }, /* symlink */
+	{ .opve_op = &vnop_readdir_desc, .opve_impl = (VOPFUNC) err_readdir }, /* readdir */
+	{ .opve_op = &vnop_readlink_desc, .opve_impl = (VOPFUNC) err_readlink }, /* readlink */
+	{ .opve_op = &vnop_inactive_desc, .opve_impl = (VOPFUNC) err_inactive }, /* inactive */
+	{ .opve_op = &vnop_reclaim_desc, .opve_impl = (VOPFUNC) mockfs_reclaim }, /* reclaim */
+	{ .opve_op = &vnop_strategy_desc, .opve_impl = (VOPFUNC) mockfs_strategy }, /* strategy */
+	{ .opve_op = &vnop_pathconf_desc, .opve_impl = (VOPFUNC) err_pathconf }, /* pathconf */
+	{ .opve_op = &vnop_advlock_desc, .opve_impl = (VOPFUNC) err_advlock }, /* advlock */
+	{ .opve_op = &vnop_bwrite_desc, .opve_impl = (VOPFUNC) err_bwrite }, /* bwrite */
+	{ .opve_op = &vnop_pagein_desc, .opve_impl = (VOPFUNC) mockfs_pagein }, /* pagein */
+	{ .opve_op = &vnop_pageout_desc, .opve_impl = (VOPFUNC) err_pageout }, /* pageout */
+	{ .opve_op = &vnop_copyfile_desc, .opve_impl = (VOPFUNC) err_copyfile }, /* copyfile */
+	{ .opve_op = &vnop_blktooff_desc, .opve_impl = (VOPFUNC) err_blktooff }, /* blktooff */
+	{ .opve_op = &vnop_offtoblk_desc, .opve_impl = (VOPFUNC) err_offtoblk }, /* offtoblk */
+	{ .opve_op = &vnop_blockmap_desc, .opve_impl = (VOPFUNC) mockfs_blockmap }, /* blockmap */
+	{ .opve_op = (struct vnodeop_desc *) NULL, .opve_impl = (VOPFUNC) NULL }
 };
 
-struct vnodeopv_desc mockfs_vnodeop_opv_desc = {
-	&mockfs_vnodeop_p,
-	mockfs_vnodeop_entries
+const struct vnodeopv_desc mockfs_vnodeop_opv_desc = {
+	.opv_desc_vector_p = &mockfs_vnodeop_p,
+	.opv_desc_ops = mockfs_vnodeop_entries
 };
-

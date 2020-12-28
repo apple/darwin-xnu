@@ -720,11 +720,6 @@ icache_invalidate_trap:
 	dsb		ish
 	isb
 #endif
-	mov		r4, r0
-	mov		r5, r1
-	bl		EXT(CleanPoU_DcacheRegion)
-	mov		r0, r4
-	mov		r1, r5
 	bl		EXT(InvalidatePoU_IcacheRegion)
 	mrc		p15, 0, r9, c13, c0, 4				// Reload r9 from TPIDRPRW
 #if __ARM_USER_PROTECT__
@@ -1354,15 +1349,14 @@ fleh_irq_handler:
 	mrc		p15, 0, r9, c13, c0, 4				// Reload r9 from TPIDRPRW
 	bl		EXT(ml_get_timebase)				// get current timebase
 	LOAD_ADDR(r3, EntropyData)
-	ldr		r2, [r3, ENTROPY_INDEX_PTR]
-	add		r1, r3, ENTROPY_DATA_SIZE
-	add		r2, r2, #4
-	cmp		r2, r1
-	addge	r2, r3, ENTROPY_BUFFER
-	ldr		r4, [r2]
-	eor		r0, r0, r4, ROR #9
-	str		r0, [r2]							// Update gEntropie
-	str		r2, [r3, ENTROPY_INDEX_PTR]
+	ldr		r2, [r3, ENTROPY_SAMPLE_COUNT]
+	add		r1, r2, 1
+	str		r1, [r3, ENTROPY_SAMPLE_COUNT]
+	and		r2, r2, ENTROPY_BUFFER_INDEX_MASK
+	add		r1, r3, ENTROPY_BUFFER
+	ldr		r4, [r1, r2, lsl #2]
+	eor		r0, r0, r4, ror #9
+	str		r0, [r1, r2, lsl #2]				// Update gEntropie
 
 return_from_irq:
 	mov		r5, #0

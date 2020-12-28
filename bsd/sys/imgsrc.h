@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -64,36 +64,35 @@
 #define _SYS_IMGSRC_H_
 
 #include <stdint.h>
-/* 
+/*
  * For mount(2), defined here for easy use with System.framework/PrivateHeaders.
  */
-#define MNT_IMGSRC_BY_INDEX	0x20000000	
+#define MNT_IMGSRC_BY_INDEX     0x20000000
 
-typedef struct imgsrc_info 
-{
-	uint32_t	ii_height;	/* Nesting height: 0 is outermost */
-	uint32_t 	ii_flags;	/* Currently unused */
-	dev_t		ii_dev;		/* dev_t for this volume */
-	char		ii_reserved[24];/* TBD */
+typedef struct imgsrc_info {
+	uint32_t        ii_height;      /* Nesting height: 0 is outermost */
+	uint32_t        ii_flags;       /* Currently unused */
+	dev_t           ii_dev;         /* dev_t for this volume */
+	char            ii_reserved[24];/* TBD */
 } *imgsrc_info_t;
 
 struct mnt_imgsrc_args {
-	uint32_t 	mi_height;	/* As determined from an imgsrc_info structure */
-	uint32_t	mi_flags;	/* TBD */
-	const char*	mi_devpath;	/* Path to devnode */
+	uint32_t        mi_height;      /* As determined from an imgsrc_info structure */
+	uint32_t        mi_flags;       /* TBD */
+	const char*     mi_devpath;     /* Path to devnode */
 };
 
 #ifdef BSD_KERNEL_PRIVATE
 struct user64_mnt_imgsrc_args {
-	uint32_t 	mi_height;
-	uint32_t	mi_flags;
-	user64_addr_t 	mi_devpath;
-}; 
+	uint32_t        mi_height;
+	uint32_t        mi_flags;
+	user64_addr_t   mi_devpath;
+};
 
 struct user32_mnt_imgsrc_args {
-	uint32_t 	mi_height;
-	uint32_t	mi_flags;
-	user32_addr_t	mi_devpath;
-}; 
+	uint32_t        mi_height;
+	uint32_t        mi_flags;
+	user32_addr_t   mi_devpath;
+};
 #endif /* XNU_KERNEL_PRIVATE */
 #endif /* _SYS_IMGSRC_H_ */

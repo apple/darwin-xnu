@@ -42,8 +42,7 @@ kperf_kpc_thread_ast(thread_t thread)
 {
 	kpc_thread_ast_handler(thread);
 	kperf_thread_ast_handler(thread);
-
-	thread->kperf_flags = 0;
+	thread->kperf_ast = 0;
 }
 
 void
@@ -55,10 +54,10 @@ kperf_kpc_thread_sample(struct kpcdata *kpcd, int sample_config)
 	/* let kpc_get_curthread_counters set the correct count */
 	kpcd->counterc = KPC_MAX_COUNTERS;
 	if (kpc_get_curthread_counters(&kpcd->counterc,
-	                               kpcd->counterv)) {
+	    kpcd->counterv)) {
 		/* if thread counters aren't ready, default to 0 */
 		memset(kpcd->counterv, 0,
-		       sizeof(uint64_t) * kpcd->counterc);
+		    sizeof(uint64_t) * kpcd->counterc);
 	}
 	/* help out Instruments by sampling KPC's config */
 	if (!sample_config) {
@@ -78,8 +77,8 @@ kperf_kpc_cpu_sample(struct kpcdata *kpcd, int sample_config)
 
 	kpcd->running  = kpc_get_running();
 	kpcd->counterc = kpc_get_cpu_counters(0, kpcd->running,
-	                                      &kpcd->curcpu,
-	                                      kpcd->counterv);
+	    &kpcd->curcpu,
+	    kpcd->counterv);
 	if (!sample_config) {
 		kpcd->configc = 0;
 	} else {
@@ -90,72 +89,74 @@ kperf_kpc_cpu_sample(struct kpcdata *kpcd, int sample_config)
 	BUF_INFO(PERF_KPC_CPU_SAMPLE | DBG_FUNC_END, kpcd->running, kpcd->counterc);
 }
 
-static void
+void
 kperf_kpc_config_log(const struct kpcdata *kpcd)
 {
 	BUF_DATA(PERF_KPC_CONFIG,
-	         kpcd->running,
-	         kpcd->counterc,
-	         kpc_get_counter_count(KPC_CLASS_FIXED_MASK),
-	         kpcd->configc);
+	    kpcd->running,
+	    kpcd->counterc,
+	    kpc_get_counter_count(KPC_CLASS_FIXED_MASK),
+	    kpcd->configc);
+
+#if __LP64__
+	unsigned int max = (kpcd->configc + 3) / 4;
+	for (unsigned int i = 0; i < max; i++) {
+		uint32_t flag = (i == 0) ? DBG_FUNC_START : ((i == (max - 1)) ? DBG_FUNC_END : DBG_FUNC_NONE);
+		BUF_DATA(PERF_KPC_CFG_REG | flag,
+		    kpcd->configv[0 + i * 4], kpcd->configv[1 + i * 4],
+		    kpcd->configv[2 + i * 4], kpcd->configv[3 + i * 4]);
+	}
+#else /* __LP64__ */
+	unsigned int max = (kpcd->configc + 1) / 2;
+	for (unsigned int i = 0; i < max; i++) {
+		uint32_t flag = (i == 0) ? DBG_FUNC_START : ((i == (max - 1)) ? DBG_FUNC_END : DBG_FUNC_NONE);
+		BUF_DATA(PERF_KPC_CFG_REG32 | flag,
+		    kpcd->configv[i * 2] >> 32ULL,
+		    kpcd->configv[i * 2] & 0xffffffffULL,
+		    kpcd->configv[i * 2 + 1] >> 32ULL,
+		    kpcd->configv[i * 2 + 1] & 0xffffffffULL);
+	}
+#endif /* !__LP64__ */
 }
 
 static void
 kperf_kpc_log(uint32_t code, uint32_t code32, const struct kpcdata *kpcd)
 {
-	unsigned i;
-
 #if __LP64__
-	(void)code32;
-	/* config registers */
-	for (i = 0; i < ((kpcd->configc + 3) / 4); i++) {
-		BUF_DATA(PERF_KPC_CFG_REG,
-		         kpcd->configv[0 + i * 4],
-		         kpcd->configv[1 + i * 4],
-		         kpcd->configv[2 + i * 4],
-		         kpcd->configv[3 + i * 4]);
-	}
-
+#pragma unused(code32)
+	unsigned int max = (kpcd->counterc + 3) / 4;
 	/* and the actual counts with one 64-bit argument each */
-	for (i = 0; i < ((kpcd->counterc + 3) / 4); i++) {
-		BUF_DATA(code,
-		         kpcd->counterv[0 + i * 4],
-		         kpcd->counterv[1 + i * 4],
-		         kpcd->counterv[2 + i * 4],
-		         kpcd->counterv[3 + i * 4]);
+	for (unsigned int i = 0; i < max; i++) {
+		uint32_t flag = (i == 0) ? DBG_FUNC_START : ((i == (max - 1)) ? DBG_FUNC_END : DBG_FUNC_NONE);
+		BUF_DATA(code | flag,
+		    kpcd->counterv[0 + i * 4],
+		    kpcd->counterv[1 + i * 4],
+		    kpcd->counterv[2 + i * 4],
+		    kpcd->counterv[3 + i * 4]);
 	}
-#else
-	(void)code;
-	/* config registers */
-	for (i = 0; i < ((kpcd->configc + 1) / 2); i++) {
-		BUF_DATA(PERF_KPC_CFG_REG32,
-		         (kpcd->configv[0 + i * 2] >> 32ULL),
-		         kpcd->configv[0 + i * 2] & 0xffffffffULL,
-		         (kpcd->configv[1 + i * 2] >> 32ULL),
-		         kpcd->configv[1 + i * 2] & 0xffffffffULL);
-	}
-
+#else /* __LP64__ */
+#pragma unused(code)
+	unsigned int max = (kpcd->counterc + 1) / 2;
 	/* and the actual counts with two 32-bit trace arguments each */
-	for (i = 0; i < ((kpcd->counterc + 1) / 2); i++) {
-		BUF_DATA(code32,
-		         (kpcd->counterv[0 + i * 2] >> 32ULL),
-		         kpcd->counterv[0 + i * 2] & 0xffffffffULL,
-		         (kpcd->counterv[1 + i * 2] >> 32ULL),
-		         kpcd->counterv[1 + i * 2] & 0xffffffffULL);
+	for (unsigned int i = 0; i < max; i++) {
+		uint32_t flag = (i == 0) ? DBG_FUNC_START : ((i == (max - 1)) ? DBG_FUNC_END : DBG_FUNC_NONE);
+		BUF_DATA(code32 | flag,
+		    (kpcd->counterv[0 + i * 2] >> 32ULL),
+		    kpcd->counterv[0 + i * 2] & 0xffffffffULL,
+		    (kpcd->counterv[1 + i * 2] >> 32ULL),
+		    kpcd->counterv[1 + i * 2] & 0xffffffffULL);
 	}
-#endif
+#endif /* !__LP64__ */
 }
 
 void
 kperf_kpc_cpu_log(const struct kpcdata *kpcd)
 {
-	kperf_kpc_config_log(kpcd);
 	kperf_kpc_log(PERF_KPC_DATA, PERF_KPC_DATA32, kpcd);
 }
 
 void
 kperf_kpc_thread_log(const struct kpcdata *kpcd)
 {
-	kperf_kpc_config_log(kpcd);
 	kperf_kpc_log(PERF_KPC_DATA_THREAD, PERF_KPC_DATA_THREAD32, kpcd);
 }

@@ -59,7 +59,7 @@
  * changes without encumbrance.
  */
 #ifndef _NET_ALTQ_ALTQ_HFSC_H_
-#define	_NET_ALTQ_ALTQ_HFSC_H_
+#define _NET_ALTQ_ALTQ_HFSC_H_
 
 #include <net/pfvar.h>
 #include <net/altq/altq.h>

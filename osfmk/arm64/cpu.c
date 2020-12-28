@@ -67,8 +67,8 @@
 #include <kern/monotonic.h>
 #endif /* MONOTONIC */
 
-extern boolean_t	idle_enable;
-extern uint64_t		wake_abstime;
+extern boolean_t        idle_enable;
+extern uint64_t         wake_abstime;
 
 #if WITH_CLASSIC_S2R
 void sleep_token_buffer_init(void);
@@ -84,12 +84,15 @@ extern void exc_vectors_table;
 
 extern void __attribute__((noreturn)) arm64_prepare_for_sleep(void);
 extern void arm64_force_wfi_clock_gate(void);
-#if (defined(APPLECYCLONE) || defined(APPLETYPHOON))
-// <rdar://problem/15827409> CPU1 Stuck in WFIWT Because of MMU Prefetch
-extern void cyclone_typhoon_prepare_for_wfi(void);
-extern void cyclone_typhoon_return_from_wfi(void);
+#if defined(APPLETYPHOON)
+// <rdar://problem/15827409>
+extern void typhoon_prepare_for_wfi(void);
+extern void typhoon_return_from_wfi(void);
 #endif
 
+#if HAS_RETENTION_STATE
+extern void arm64_retention_wfi(void);
+#endif
 
 vm_address_t   start_cpu_paddr;
 
@@ -116,6 +119,8 @@ static uint64_t wfi_delay = 0;
 
 #endif /* DEVELOPMENT || DEBUG */
 
+static bool idle_wfe_to_deadline = false;
+
 #if __ARM_GLOBAL_SLEEP_BIT__
 volatile boolean_t arm64_stall_sleep = TRUE;
 #endif
@@ -136,8 +141,11 @@ static boolean_t coresight_debug_enabled = FALSE;
 
 #if defined(CONFIG_XNUPOST)
 void arm64_ipi_test_callback(void *);
+void arm64_immediate_ipi_test_callback(void *);
 
-void arm64_ipi_test_callback(void *parm) {
+void
+arm64_ipi_test_callback(void *parm)
+{
 	volatile uint64_t *ipi_test_data = parm;
 	cpu_data_t *cpu_data;
 
@@ -146,10 +154,23 @@ void arm64_ipi_test_callback(void *parm) {
 	*ipi_test_data = cpu_data->cpu_number;
 }
 
-uint64_t arm64_ipi_test_data[MAX_CPUS];
+void
+arm64_immediate_ipi_test_callback(void *parm)
+{
+	volatile uint64_t *ipi_test_data = parm;
+	cpu_data_t *cpu_data;
 
-void arm64_ipi_test() {
-	volatile uint64_t *ipi_test_data;
+	cpu_data = getCpuDatap();
+
+	*ipi_test_data = cpu_data->cpu_number + MAX_CPUS;
+}
+
+uint64_t arm64_ipi_test_data[MAX_CPUS * 2];
+
+void
+arm64_ipi_test()
+{
+	volatile uint64_t *ipi_test_data, *immediate_ipi_test_data;
 	uint32_t timeout_ms = 100;
 	uint64_t then, now, delta;
 	int current_cpu_number = getCpuDatap()->cpu_number;
@@ -165,30 +186,45 @@ void arm64_ipi_test() {
 
 	for (unsigned int i = 0; i < MAX_CPUS; ++i) {
 		ipi_test_data = &arm64_ipi_test_data[i];
+		immediate_ipi_test_data = &arm64_ipi_test_data[i + MAX_CPUS];
 		*ipi_test_data = ~i;
 		kern_return_t error = cpu_xcall((int)i, (void *)arm64_ipi_test_callback, (void *)(uintptr_t)ipi_test_data);
-		if (error != KERN_SUCCESS)
+		if (error != KERN_SUCCESS) {
 			panic("CPU %d was unable to IPI CPU %u: error %d", current_cpu_number, i, error);
+		}
+
+		while ((error = cpu_immediate_xcall((int)i, (void *)arm64_immediate_ipi_test_callback,
+		    (void *)(uintptr_t)immediate_ipi_test_data)) == KERN_ALREADY_WAITING) {
+			now = mach_absolute_time();
+			absolutetime_to_nanoseconds(now - then, &delta);
+			if ((delta / NSEC_PER_MSEC) > timeout_ms) {
+				panic("CPU %d was unable to immediate-IPI CPU %u within %dms", current_cpu_number, i, timeout_ms);
+			}
+		}
+
+		if (error != KERN_SUCCESS) {
+			panic("CPU %d was unable to immediate-IPI CPU %u: error %d", current_cpu_number, i, error);
+		}
 
 		then = mach_absolute_time();
 
-		while (*ipi_test_data != i) {
+		while ((*ipi_test_data != i) || (*immediate_ipi_test_data != (i + MAX_CPUS))) {
 			now = mach_absolute_time();
-			absolutetime_to_nanoseconds(now-then, &delta);
+			absolutetime_to_nanoseconds(now - then, &delta);
 			if ((delta / NSEC_PER_MSEC) > timeout_ms) {
-				panic("CPU %d tried to IPI CPU %d but didn't get correct response within %dms, respose: %llx", current_cpu_number, i, timeout_ms, *ipi_test_data);
+				panic("CPU %d tried to IPI CPU %d but didn't get correct responses within %dms, responses: %llx, %llx",
+				    current_cpu_number, i, timeout_ms, *ipi_test_data, *immediate_ipi_test_data);
 			}
 		}
 	}
-
 }
 #endif /* defined(CONFIG_XNUPOST) */
 
 static void
 configure_coresight_registers(cpu_data_t *cdp)
 {
-	uint64_t	addr;
-	int		i;
+	uint64_t        addr;
+	int             i;
 
 	assert(cdp);
 
@@ -206,11 +242,13 @@ configure_coresight_registers(cpu_data_t *cdp)
 			 * need the kernel to unlock CTI, so it is safer
 			 * to avoid doing the access.
 			 */
-			if (i == CORESIGHT_CTI)
+			if (i == CORESIGHT_CTI) {
 				continue;
+			}
 			/* Skip debug-only registers on production chips */
-			if (((i == CORESIGHT_ED) || (i == CORESIGHT_UTT)) && !coresight_debug_enabled)
+			if (((i == CORESIGHT_ED) || (i == CORESIGHT_UTT)) && !coresight_debug_enabled) {
 				continue;
+			}
 
 			if (!cdp->coresight_base[i]) {
 				addr = cdp->cpu_regmap_paddr + CORESIGHT_OFFSET(i);
@@ -225,8 +263,9 @@ configure_coresight_registers(cpu_data_t *cdp)
 				}
 			}
 			/* Unlock EDLAR, CTILAR, PMLAR */
-			if (i != CORESIGHT_UTT)
+			if (i != CORESIGHT_UTT) {
 				*(volatile uint32_t *)(cdp->coresight_base[i] + ARM_DEBUG_OFFSET_DBGLAR) = ARM_DBG_LOCK_ACCESS_KEY;
+			}
 		}
 	}
 }
@@ -264,8 +303,29 @@ cpu_sleep(void)
 
 	CleanPoC_Dcache();
 
+	/* This calls:
+	 *
+	 * IOCPURunPlatformQuiesceActions when sleeping the boot cpu
+	 * ml_arm_sleep() on all CPUs
+	 *
+	 * It does not return.
+	 */
 	PE_cpu_machine_quiesce(cpu_data_ptr->cpu_id);
+	/*NOTREACHED*/
+}
 
+/*
+ *	Routine:	cpu_interrupt_is_pending
+ *	Function:	Returns the value of ISR.  Due to how this register is
+ *			is implemented, this returns 0 if there are no
+ *			interrupts pending, so it can be used as a boolean test.
+ */
+static int
+cpu_interrupt_is_pending(void)
+{
+	uint64_t isr_value;
+	isr_value = __builtin_arm_rsr64("ISR_EL1");
+	return (int)isr_value;
 }
 
 /*
@@ -276,22 +336,37 @@ void __attribute__((noreturn))
 cpu_idle(void)
 {
 	cpu_data_t     *cpu_data_ptr = getCpuDatap();
-	uint64_t	new_idle_timeout_ticks = 0x0ULL, lastPop;
+	uint64_t        new_idle_timeout_ticks = 0x0ULL, lastPop;
 
-	if ((!idle_enable) || (cpu_data_ptr->cpu_signal & SIGPdisabled))
+	if ((!idle_enable) || (cpu_data_ptr->cpu_signal & SIGPdisabled)) {
 		Idle_load_context();
-	if (!SetIdlePop())
+	}
+
+	if (!SetIdlePop()) {
+		/* If a deadline is pending, wait for it to elapse. */
+		if (idle_wfe_to_deadline) {
+			if (arm64_wfe_allowed()) {
+				while (!cpu_interrupt_is_pending()) {
+					__builtin_arm_wfe();
+				}
+			}
+		}
+
 		Idle_load_context();
+	}
+
 	lastPop = cpu_data_ptr->rtcPop;
 
 	pmap_switch_user_ttb(kernel_pmap);
 	cpu_data_ptr->cpu_active_thread = current_thread();
-	if (cpu_data_ptr->cpu_user_debug)
+	if (cpu_data_ptr->cpu_user_debug) {
 		arm_debug_set(NULL);
+	}
 	cpu_data_ptr->cpu_user_debug = NULL;
 
-	if (cpu_data_ptr->cpu_idle_notify)
-		((processor_idle_t) cpu_data_ptr->cpu_idle_notify) (cpu_data_ptr->cpu_id, TRUE, &new_idle_timeout_ticks);
+	if (cpu_data_ptr->cpu_idle_notify) {
+		((processor_idle_t) cpu_data_ptr->cpu_idle_notify)(cpu_data_ptr->cpu_id, TRUE, &new_idle_timeout_ticks);
+	}
 
 	if (cpu_data_ptr->idle_timer_notify != 0) {
 		if (new_idle_timeout_ticks == 0x0ULL) {
@@ -302,8 +377,9 @@ cpu_idle(void)
 			clock_absolutetime_interval_to_deadline(new_idle_timeout_ticks, &cpu_data_ptr->idle_timer_deadline);
 		}
 		timer_resync_deadlines();
-		if (cpu_data_ptr->rtcPop != lastPop)
+		if (cpu_data_ptr->rtcPop != lastPop) {
 			SetIdlePop();
+		}
 	}
 
 #if KPC
@@ -324,16 +400,20 @@ cpu_idle(void)
 		}
 #endif /* DEVELOPMENT || DEBUG */
 
-#if defined(APPLECYCLONE) || defined(APPLETYPHOON)
+#if defined(APPLETYPHOON)
 		// <rdar://problem/15827409> CPU1 Stuck in WFIWT Because of MMU Prefetch
-		cyclone_typhoon_prepare_for_wfi();
+		typhoon_prepare_for_wfi();
 #endif
 		__builtin_arm_dsb(DSB_SY);
+#if HAS_RETENTION_STATE
+		arm64_retention_wfi();
+#else
 		__builtin_arm_wfi();
+#endif
 
-#if defined(APPLECYCLONE) || defined(APPLETYPHOON)
+#if defined(APPLETYPHOON)
 		// <rdar://problem/15827409> CPU1 Stuck in WFIWT Because of MMU Prefetch
-		cyclone_typhoon_return_from_wfi();
+		typhoon_return_from_wfi();
 #endif
 
 #if DEVELOPMENT || DEBUG
@@ -375,14 +455,15 @@ cpu_idle(void)
 void
 cpu_idle_exit(boolean_t from_reset)
 {
-	uint64_t	new_idle_timeout_ticks = 0x0ULL;
+	uint64_t        new_idle_timeout_ticks = 0x0ULL;
 	cpu_data_t     *cpu_data_ptr = getCpuDatap();
 
 	assert(exception_stack_pointer() != 0);
 
 	/* Back from WFI, unlock OSLAR and EDLAR. */
-	if (from_reset)
+	if (from_reset) {
 		configure_coresight_registers(cpu_data_ptr);
+	}
 
 #if KPC
 	kpc_idle_exit();
@@ -394,8 +475,9 @@ cpu_idle_exit(boolean_t from_reset)
 
 	pmap_switch_user_ttb(cpu_data_ptr->cpu_active_thread->map->pmap);
 
-	if (cpu_data_ptr->cpu_idle_notify)
-		((processor_idle_t) cpu_data_ptr->cpu_idle_notify) (cpu_data_ptr->cpu_id, FALSE, &new_idle_timeout_ticks);
+	if (cpu_data_ptr->cpu_idle_notify) {
+		((processor_idle_t) cpu_data_ptr->cpu_idle_notify)(cpu_data_ptr->cpu_id, FALSE, &new_idle_timeout_ticks);
+	}
 
 	if (cpu_data_ptr->idle_timer_notify != 0) {
 		if (new_idle_timeout_ticks == 0x0ULL) {
@@ -420,7 +502,6 @@ cpu_init(void)
 	assert(exception_stack_pointer() != 0);
 
 	if (cdp->cpu_type != CPU_TYPE_ARM64) {
-
 		cdp->cpu_type = CPU_TYPE_ARM64;
 
 		timer_call_queue_init(&cdp->rtclock_timer.queue);
@@ -459,6 +540,9 @@ cpu_init(void)
 	cdp->cpu_stat.irq_ex_cnt_wake = 0;
 	cdp->cpu_stat.ipi_cnt_wake = 0;
 	cdp->cpu_stat.timer_cnt_wake = 0;
+#if MONOTONIC
+	cdp->cpu_stat.pmi_cnt_wake = 0;
+#endif /* MONOTONIC */
 	cdp->cpu_running = TRUE;
 	cdp->cpu_sleep_token_last = cdp->cpu_sleep_token;
 	cdp->cpu_sleep_token = 0x0UL;
@@ -473,27 +557,29 @@ cpu_init(void)
 void
 cpu_stack_alloc(cpu_data_t *cpu_data_ptr)
 {
-	vm_offset_t		irq_stack = 0;
-	vm_offset_t		exc_stack = 0;
+	vm_offset_t             irq_stack = 0;
+	vm_offset_t             exc_stack = 0;
 
 	kern_return_t kr = kernel_memory_allocate(kernel_map, &irq_stack,
-				   INTSTACK_SIZE + (2 * PAGE_SIZE),
-				   PAGE_MASK,
-				   KMA_GUARD_FIRST | KMA_GUARD_LAST | KMA_KSTACK | KMA_KOBJECT,
-				   VM_KERN_MEMORY_STACK);
-	if (kr != KERN_SUCCESS)
+	    INTSTACK_SIZE + (2 * PAGE_SIZE),
+	    PAGE_MASK,
+	    KMA_GUARD_FIRST | KMA_GUARD_LAST | KMA_KSTACK | KMA_KOBJECT,
+	    VM_KERN_MEMORY_STACK);
+	if (kr != KERN_SUCCESS) {
 		panic("Unable to allocate cpu interrupt stack\n");
+	}
 
 	cpu_data_ptr->intstack_top = irq_stack + PAGE_SIZE + INTSTACK_SIZE;
 	cpu_data_ptr->istackptr = cpu_data_ptr->intstack_top;
 
 	kr = kernel_memory_allocate(kernel_map, &exc_stack,
-				   EXCEPSTACK_SIZE + (2 * PAGE_SIZE),
-				   PAGE_MASK,
-				   KMA_GUARD_FIRST | KMA_GUARD_LAST | KMA_KSTACK | KMA_KOBJECT,
-				   VM_KERN_MEMORY_STACK);
-	if (kr != KERN_SUCCESS)
+	    EXCEPSTACK_SIZE + (2 * PAGE_SIZE),
+	    PAGE_MASK,
+	    KMA_GUARD_FIRST | KMA_GUARD_LAST | KMA_KSTACK | KMA_KOBJECT,
+	    VM_KERN_MEMORY_STACK);
+	if (kr != KERN_SUCCESS) {
 		panic("Unable to allocate cpu exception stack\n");
+	}
 
 	cpu_data_ptr->excepstack_top = exc_stack + PAGE_SIZE + EXCEPSTACK_SIZE;
 	cpu_data_ptr->excepstackptr = cpu_data_ptr->excepstack_top;
@@ -502,12 +588,18 @@ cpu_stack_alloc(cpu_data_t *cpu_data_ptr)
 void
 cpu_data_free(cpu_data_t *cpu_data_ptr)
 {
-        if (cpu_data_ptr == &BootCpuData)
-                return;
+	if ((cpu_data_ptr == NULL) || (cpu_data_ptr == &BootCpuData)) {
+		return;
+	}
 
 	cpu_processor_free( cpu_data_ptr->cpu_processor);
-	kfree( (void *)(cpu_data_ptr->intstack_top - INTSTACK_SIZE), INTSTACK_SIZE);
-	kfree( (void *)(cpu_data_ptr->excepstack_top - EXCEPSTACK_SIZE), EXCEPSTACK_SIZE);
+	if (CpuDataEntries[cpu_data_ptr->cpu_number].cpu_data_vaddr == cpu_data_ptr) {
+		CpuDataEntries[cpu_data_ptr->cpu_number].cpu_data_vaddr = NULL;
+		CpuDataEntries[cpu_data_ptr->cpu_number].cpu_data_paddr = 0;
+		__builtin_arm_dmb(DMB_ISH); // Ensure prior stores to cpu array are visible
+	}
+	(kfree)((void *)(cpu_data_ptr->intstack_top - INTSTACK_SIZE), INTSTACK_SIZE);
+	(kfree)((void *)(cpu_data_ptr->excepstack_top - EXCEPSTACK_SIZE), EXCEPSTACK_SIZE);
 	kmem_free(kernel_map, (vm_offset_t)cpu_data_ptr, sizeof(cpu_data_t));
 }
 
@@ -545,12 +637,6 @@ cpu_data_init(cpu_data_t *cpu_data_ptr)
 
 	cpu_data_ptr->cpu_signal = SIGPdisabled;
 
-#if DEBUG || DEVELOPMENT
-	cpu_data_ptr->failed_xcall = NULL;
-	cpu_data_ptr->failed_signal = 0;
-	cpu_data_ptr->failed_signal_count = 0;
-#endif
-
 	cpu_data_ptr->cpu_get_fiq_handler = NULL;
 	cpu_data_ptr->cpu_tbd_hardware_addr = NULL;
 	cpu_data_ptr->cpu_tbd_hardware_val = NULL;
@@ -560,11 +646,14 @@ cpu_data_init(cpu_data_t *cpu_data_ptr)
 	cpu_data_ptr->cpu_sleep_token_last = 0x00000000UL;
 	cpu_data_ptr->cpu_xcall_p0 = NULL;
 	cpu_data_ptr->cpu_xcall_p1 = NULL;
+	cpu_data_ptr->cpu_imm_xcall_p0 = NULL;
+	cpu_data_ptr->cpu_imm_xcall_p1 = NULL;
 
 	for (i = 0; i < CORESIGHT_REGIONS; ++i) {
 		cpu_data_ptr->coresight_base[i] = 0;
 	}
 
+#if !XNU_MONITOR
 	pmap_cpu_data_t * pmap_cpu_data_ptr = &cpu_data_ptr->cpu_pmap_cpu_data;
 
 	pmap_cpu_data_ptr->cpu_nested_pmap = (struct pmap *) NULL;
@@ -573,17 +662,21 @@ cpu_data_init(cpu_data_t *cpu_data_ptr)
 	for (i = 0; i < (sizeof(pmap_cpu_data_ptr->cpu_asid_high_bits) / sizeof(*pmap_cpu_data_ptr->cpu_asid_high_bits)); i++) {
 		pmap_cpu_data_ptr->cpu_asid_high_bits[i] = 0;
 	}
+#endif
 	cpu_data_ptr->halt_status = CPU_NOT_HALTED;
 #if __ARM_KERNEL_PROTECT__
 	cpu_data_ptr->cpu_exc_vectors = (vm_offset_t)&exc_vectors_table;
 #endif /* __ARM_KERNEL_PROTECT__ */
 
+#if defined(HAS_APPLE_PAC)
+	cpu_data_ptr->rop_key = 0;
+#endif
 }
 
 kern_return_t
 cpu_data_register(cpu_data_t *cpu_data_ptr)
 {
-	int	cpu = cpu_data_ptr->cpu_number;
+	int     cpu = cpu_data_ptr->cpu_number;
 
 #if KASAN
 	for (int i = 0; i < CPUWINDOWS_MAX; i++) {
@@ -591,12 +684,26 @@ cpu_data_register(cpu_data_t *cpu_data_ptr)
 	}
 #endif
 
+	__builtin_arm_dmb(DMB_ISH); // Ensure prior stores to cpu data are visible
 	CpuDataEntries[cpu].cpu_data_vaddr = cpu_data_ptr;
-	CpuDataEntries[cpu].cpu_data_paddr = (void *)ml_vtophys( (vm_offset_t)cpu_data_ptr);
+	CpuDataEntries[cpu].cpu_data_paddr = (void *)ml_vtophys((vm_offset_t)cpu_data_ptr);
 	return KERN_SUCCESS;
-
 }
 
+#if defined(KERNEL_INTEGRITY_CTRR)
+
+lck_spin_t ctrr_cpu_start_lck;
+bool ctrr_cluster_locked[__ARM_CLUSTER_COUNT__];
+
+void
+init_ctrr_cpu_start_lock(void)
+{
+	lck_grp_t *ctrr_cpu_start_lock_grp = lck_grp_alloc_init("ctrr_cpu_start_lock", 0);
+	assert(ctrr_cpu_start_lock_grp);
+	lck_spin_init(&ctrr_cpu_start_lck, ctrr_cpu_start_lock_grp, NULL);
+}
+
+#endif
 
 kern_return_t
 cpu_start(int cpu)
@@ -613,12 +720,15 @@ cpu_start(int cpu)
 
 		cpu_data_ptr->cpu_reset_handler = (vm_offset_t) start_cpu_paddr;
 
+#if !XNU_MONITOR
 		cpu_data_ptr->cpu_pmap_cpu_data.cpu_nested_pmap = NULL;
+#endif
 
-		if (cpu_data_ptr->cpu_processor->next_thread != THREAD_NULL)
-			first_thread = cpu_data_ptr->cpu_processor->next_thread;
-		else
+		if (cpu_data_ptr->cpu_processor->startup_thread != THREAD_NULL) {
+			first_thread = cpu_data_ptr->cpu_processor->startup_thread;
+		} else {
 			first_thread = cpu_data_ptr->cpu_processor->idle_thread;
+		}
 		cpu_data_ptr->cpu_active_thread = first_thread;
 		first_thread->machine.CpuDatap = cpu_data_ptr;
 
@@ -626,6 +736,22 @@ cpu_start(int cpu)
 
 		flush_dcache((vm_offset_t)&CpuDataEntries[cpu], sizeof(cpu_data_entry_t), FALSE);
 		flush_dcache((vm_offset_t)cpu_data_ptr, sizeof(cpu_data_t), FALSE);
+#if defined(KERNEL_INTEGRITY_CTRR)
+		/* first time CPU starts, if not cluster master, and if cluster is not already locked,
+		 * block until cluster becomes locked. */
+		if (cpu_data_ptr->cpu_processor->active_thread == THREAD_NULL
+		    && !cpu_data_ptr->cluster_master) {
+			lck_spin_lock(&ctrr_cpu_start_lck);
+			if (ctrr_cluster_locked[cpu_data_ptr->cpu_cluster_id] == 0) {
+				assert_wait(&ctrr_cluster_locked[cpu_data_ptr->cpu_cluster_id], THREAD_UNINT);
+				lck_spin_unlock(&ctrr_cpu_start_lck);
+				thread_block(THREAD_CONTINUE_NULL);
+				assert(ctrr_cluster_locked[cpu_data_ptr->cpu_cluster_id] == 1);
+			} else {
+				lck_spin_unlock(&ctrr_cpu_start_lck);
+			}
+		}
+#endif
 		(void) PE_cpu_start(cpu_data_ptr->cpu_id, (vm_offset_t)NULL, (vm_offset_t)NULL);
 	}
 
@@ -659,6 +785,9 @@ cpu_timebase_init(boolean_t from_boot)
 		 * This ensures that mach_absolute_time() stops ticking across sleep.
 		 */
 		rtclock_base_abstime = wake_abstime - ml_get_hwclock();
+	} else if (from_boot) {
+		/* On initial boot, initialize time_since_reset to CNTPCT_EL0. */
+		ml_set_reset_time(ml_get_hwclock());
 	}
 
 	cdp->cpu_decrementer = 0x7FFFFFFFUL;
@@ -669,28 +798,31 @@ cpu_timebase_init(boolean_t from_boot)
 int
 cpu_cluster_id(void)
 {
-	return (getCpuDatap()->cpu_cluster_id);
+	return getCpuDatap()->cpu_cluster_id;
 }
 
 __attribute__((noreturn))
 void
 ml_arm_sleep(void)
 {
-	cpu_data_t		*cpu_data_ptr = getCpuDatap();
+	cpu_data_t              *cpu_data_ptr = getCpuDatap();
 
 	if (cpu_data_ptr == &BootCpuData) {
 		cpu_data_t      *target_cdp;
-		int		cpu;
-		int		max_cpu;
+		int             cpu;
+		int             max_cpu;
 
 		max_cpu = ml_get_max_cpu_number();
-		for (cpu=0; cpu <= max_cpu; cpu++) {
+		for (cpu = 0; cpu <= max_cpu; cpu++) {
 			target_cdp = (cpu_data_t *)CpuDataEntries[cpu].cpu_data_vaddr;
 
-			if ((target_cdp == NULL) || (target_cdp == cpu_data_ptr))
+			if ((target_cdp == NULL) || (target_cdp == cpu_data_ptr)) {
 				continue;
+			}
 
-			while (target_cdp->cpu_sleep_token != ARM_CPU_ON_SLEEP_PATH);
+			while (target_cdp->cpu_sleep_token != ARM_CPU_ON_SLEEP_PATH) {
+				;
+			}
 		}
 
 		/*
@@ -698,6 +830,7 @@ ml_arm_sleep(void)
 		 * the abstime value we'll use when we resume.
 		 */
 		wake_abstime = ml_get_timebase();
+		ml_set_reset_time(UINT64_MAX);
 	} else {
 		CleanPoU_Dcache();
 	}
@@ -712,11 +845,10 @@ ml_arm_sleep(void)
 		// do not go through SecureROM/iBoot on the warm boot path. The
 		// reconfig engine script brings the CPU out of reset at the kernel's
 		// reset vector which points to the warm boot initialization code.
-		if(sleepTokenBuffer != (vm_offset_t) NULL) {
+		if (sleepTokenBuffer != (vm_offset_t) NULL) {
 			platform_cache_shutdown();
 			bcopy((const void *)suspend_signature, (void *)sleepTokenBuffer, sizeof(SleepToken));
-		}
-		else {
+		} else {
 			panic("No sleep token buffer");
 		}
 #endif
@@ -728,8 +860,8 @@ ml_arm_sleep(void)
 #endif
 
 		/* Architectural debug state: <rdar://problem/12390433>:
-		 * 	Grab debug lock EDLAR and clear bit 0 in EDPRCR,
-		 * 	tell debugger to not prevent power gating .
+		 *      Grab debug lock EDLAR and clear bit 0 in EDPRCR,
+		 *      tell debugger to not prevent power gating .
 		 */
 		if (cpu_data_ptr->coresight_base[CORESIGHT_ED]) {
 			*(volatile uint32_t *)(cpu_data_ptr->coresight_base[CORESIGHT_ED] + ARM_DEBUG_OFFSET_DBGLAR) = ARM_DBG_LOCK_ACCESS_KEY;
@@ -761,8 +893,8 @@ ml_arm_sleep(void)
 		CleanPoU_DcacheRegion((vm_offset_t) cpu_data_ptr, sizeof(cpu_data_t));
 
 		/* Architectural debug state: <rdar://problem/12390433>:
-		 * 	Grab debug lock EDLAR and clear bit 0 in EDPRCR,
-		 * 	tell debugger to not prevent power gating .
+		 *      Grab debug lock EDLAR and clear bit 0 in EDPRCR,
+		 *      tell debugger to not prevent power gating .
 		 */
 		if (cpu_data_ptr->coresight_base[CORESIGHT_ED]) {
 			*(volatile uint32_t *)(cpu_data_ptr->coresight_base[CORESIGHT_ED] + ARM_DEBUG_OFFSET_DBGLAR) = ARM_DBG_LOCK_ACCESS_KEY;
@@ -777,34 +909,36 @@ ml_arm_sleep(void)
 void
 cpu_machine_idle_init(boolean_t from_boot)
 {
-	static vm_address_t	resume_idle_cpu_paddr = (vm_address_t)NULL;
-	cpu_data_t		*cpu_data_ptr	= getCpuDatap();
+	static vm_address_t     resume_idle_cpu_paddr = (vm_address_t)NULL;
+	cpu_data_t              *cpu_data_ptr   = getCpuDatap();
 
 	if (from_boot) {
-		unsigned long	jtag = 0;
-		int		wfi_tmp = 1;
- 		uint32_t	production = 1;
- 		DTEntry		entry;
+		unsigned long   jtag = 0;
+		int             wfi_tmp = 1;
+		uint32_t        production = 1;
+		DTEntry         entry;
 
-		if (PE_parse_boot_argn("jtag", &jtag, sizeof (jtag))) {
-			if (jtag != 0)
+		if (PE_parse_boot_argn("jtag", &jtag, sizeof(jtag))) {
+			if (jtag != 0) {
 				idle_enable = FALSE;
-			else
+			} else {
 				idle_enable = TRUE;
-		} else
+			}
+		} else {
 			idle_enable = TRUE;
+		}
 
-		PE_parse_boot_argn("wfi", &wfi_tmp, sizeof (wfi_tmp));
+		PE_parse_boot_argn("wfi", &wfi_tmp, sizeof(wfi_tmp));
 
 		// bits 7..0 give the wfi type
 		switch (wfi_tmp & 0xff) {
-		case 0 :
+		case 0:
 			// disable wfi
 			wfi = 0;
 			break;
 
 #if DEVELOPMENT || DEBUG
-		case 2 :
+		case 2:
 			// wfi overhead simulation
 			// 31..16 - wfi delay is us
 			// 15..8  - flags
@@ -815,11 +949,13 @@ cpu_machine_idle_init(boolean_t from_boot)
 			break;
 #endif /* DEVELOPMENT || DEBUG */
 
-		case 1 :
-		default :
+		case 1:
+		default:
 			// do nothing
 			break;
 		}
+
+		PE_parse_boot_argn("idle_wfe_to_deadline", &idle_wfe_to_deadline, sizeof(idle_wfe_to_deadline));
 
 		ResetHandlerData.assist_reset_handler = 0;
 		ResetHandlerData.cpu_data_entries = ml_static_vtop((vm_offset_t)CpuDataEntries);
@@ -832,12 +968,14 @@ cpu_machine_idle_init(boolean_t from_boot)
 
 		// Determine if we are on production or debug chip
 		if (kSuccess == DTLookupEntry(NULL, "/chosen", &entry)) {
-			unsigned int	size;
-			void		*prop;
+			unsigned int    size;
+			void            *prop;
 
-			if (kSuccess == DTGetProperty(entry, "effective-production-status-ap", &prop, &size))
-				if (size == 4)
+			if (kSuccess == DTGetProperty(entry, "effective-production-status-ap", &prop, &size)) {
+				if (size == 4) {
 					bcopy(prop, &production, size);
+				}
+			}
 		}
 		if (!production) {
 #if defined(APPLE_ARM64_ARCH_FAMILY)
@@ -855,15 +993,15 @@ cpu_machine_idle_init(boolean_t from_boot)
 		static addr64_t SleepToken_low_paddr = (addr64_t)NULL;
 		if (sleepTokenBuffer != (vm_offset_t) NULL) {
 			SleepToken_low_paddr = ml_vtophys(sleepTokenBuffer);
-		}
-		else {
+		} else {
 			panic("No sleep token buffer");
 		}
 
 		bcopy_phys((addr64_t)ml_static_vtop((vm_offset_t)running_signature),
-		           SleepToken_low_paddr, sizeof(SleepToken));
+		    SleepToken_low_paddr, sizeof(SleepToken));
 		flush_dcache((vm_offset_t)SleepToken, sizeof(SleepToken), TRUE);
-	};
+	}
+	;
 #endif
 
 	cpu_data_ptr->cpu_reset_handler = resume_idle_cpu_paddr;
@@ -875,32 +1013,34 @@ _Atomic uint32_t cpu_idle_count = 0;
 void
 machine_track_platform_idle(boolean_t entry)
 {
-	if (entry)
-		(void)__c11_atomic_fetch_add(&cpu_idle_count, 1, __ATOMIC_RELAXED);
-	else
-		(void)__c11_atomic_fetch_sub(&cpu_idle_count, 1, __ATOMIC_RELAXED);
+	if (entry) {
+		os_atomic_inc(&cpu_idle_count, relaxed);
+	} else {
+		os_atomic_dec(&cpu_idle_count, relaxed);
+	}
 }
 
 #if WITH_CLASSIC_S2R
 void
 sleep_token_buffer_init(void)
 {
-	cpu_data_t	*cpu_data_ptr = getCpuDatap();
-	DTEntry		entry;
-	size_t		size;
-	void		**prop;
+	cpu_data_t      *cpu_data_ptr = getCpuDatap();
+	DTEntry         entry;
+	size_t          size;
+	void            **prop;
 
 	if ((cpu_data_ptr == &BootCpuData) && (sleepTokenBuffer == (vm_offset_t) NULL)) {
 		/* Find the stpage node in the device tree */
-		if (kSuccess != DTLookupEntry(0, "stram", &entry))
+		if (kSuccess != DTLookupEntry(0, "stram", &entry)) {
 			return;
+		}
 
-		if (kSuccess != DTGetProperty(entry, "reg", (void **)&prop, (unsigned int *)&size))
+		if (kSuccess != DTGetProperty(entry, "reg", (void **)&prop, (unsigned int *)&size)) {
 			return;
+		}
 
 		/* Map the page into the kernel space */
 		sleepTokenBuffer = ml_io_map(((vm_offset_t *)prop)[0], ((vm_size_t *)prop)[1]);
 	}
 }
 #endif
-

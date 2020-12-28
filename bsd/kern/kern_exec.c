@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -32,7 +32,7 @@
  * All rights reserved.  The CMU software License Agreement specifies
  * the terms and conditions for use and redistribution.
  */
- 
+
 /*-
  * Copyright (c) 1982, 1986, 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -92,7 +92,7 @@
 #include <sys/malloc.h>
 #include <sys/namei.h>
 #include <sys/mount_internal.h>
-#include <sys/vnode_internal.h>		
+#include <sys/vnode_internal.h>
 #include <sys/file_internal.h>
 #include <sys/stat.h>
 #include <sys/uio_internal.h>
@@ -105,9 +105,9 @@
 #include <sys/persona.h>
 #include <sys/reason.h>
 #if SYSV_SHM
-#include <sys/shm_internal.h>		/* shmexec() */
+#include <sys/shm_internal.h>           /* shmexec() */
 #endif
-#include <sys/ubc_internal.h>		/* ubc_map() */
+#include <sys/ubc_internal.h>           /* ubc_map() */
 #include <sys/spawn.h>
 #include <sys/spawn_internal.h>
 #include <sys/process_policy.h>
@@ -121,6 +121,7 @@
 
 #include <ipc/ipc_types.h>
 
+#include <mach/mach_param.h>
 #include <mach/mach_types.h>
 #include <mach/port.h>
 #include <mach/task.h>
@@ -145,6 +146,14 @@
 #include <security/mac_mach_internal.h>
 #endif
 
+#if CONFIG_AUDIT
+#include <bsm/audit_kevents.h>
+#endif
+
+#if CONFIG_ARCADE
+#include <kern/arcade.h>
+#endif
+
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_protos.h>
@@ -154,6 +163,7 @@
 
 #include <kdp/kdp_dyld.h>
 
+#include <machine/machine_routines.h>
 #include <machine/pal_routines.h>
 
 #include <pexpert/pexpert.h>
@@ -162,7 +172,11 @@
 #include <sys/kern_memorystatus.h>
 #endif
 
+#include <IOKit/IOBSD.h>
+
 extern boolean_t vm_darkwake_mode;
+
+extern int bootarg_execfailurereports; /* bsd_init.c */
 
 #if CONFIG_DTRACE
 /* Do not include dtrace.h, it redefines kmem_[alloc/free] */
@@ -180,12 +194,12 @@ static void (*dtrace_proc_waitfor_hook)(proc_t) = NULL;
 
 /* support for child creation in exec after vfork */
 thread_t fork_create_child(task_t parent_task,
-						   coalition_t *parent_coalition,
-						   proc_t child_proc,
-						   int inherit_memory,
-						   int is_64bit_addr,
-						   int is_64bit_data,
-						   int in_exec);
+    coalition_t *parent_coalition,
+    proc_t child_proc,
+    int inherit_memory,
+    int is_64bit_addr,
+    int is_64bit_data,
+    int in_exec);
 void vfork_exit(proc_t p, int rv);
 extern void proc_apply_task_networkbg_internal(proc_t, thread_t);
 extern void task_set_did_exec_flag(task_t task);
@@ -196,19 +210,24 @@ boolean_t thread_is_active(thread_t thread);
 void thread_copy_resource_info(thread_t dst_thread, thread_t src_thread);
 void *ipc_importance_exec_switch_task(task_t old_task, task_t new_task);
 extern void ipc_importance_release(void *elem);
+extern boolean_t task_has_watchports(task_t task);
 
 /*
  * Mach things for which prototypes are unavailable from Mach headers
  */
-void		ipc_task_reset(
-			task_t		task);
-void		ipc_thread_reset(
-			thread_t	thread);
+#define IPC_KMSG_FLAGS_ALLOW_IMMOVABLE_SEND 0x1
+void            ipc_task_reset(
+	task_t          task);
+void            ipc_thread_reset(
+	thread_t        thread);
 kern_return_t ipc_object_copyin(
-	ipc_space_t		space,
-	mach_port_name_t	name,
-	mach_msg_type_name_t	msgt_name,
-	ipc_object_t		*objectp);
+	ipc_space_t             space,
+	mach_port_name_t        name,
+	mach_msg_type_name_t    msgt_name,
+	ipc_object_t            *objectp,
+	mach_port_context_t     context,
+	mach_msg_guard_flags_t  *guard_flags,
+	uint32_t                kmsg_flags);
 void ipc_port_release_send(ipc_port_t);
 
 #if DEVELOPMENT || DEBUG
@@ -237,7 +256,7 @@ __attribute__((noinline)) int __EXEC_WAITING_ON_TASKGATED_CODE_SIGNATURE_UPCALL_
  *			activator in exec_activate_image() before treating
  *			it as malformed/corrupt.
  */
-#define EAI_ITERLIMIT		3
+#define EAI_ITERLIMIT           3
 
 /*
  * For #! interpreter parsing
@@ -247,22 +266,30 @@ __attribute__((noinline)) int __EXEC_WAITING_ON_TASKGATED_CODE_SIGNATURE_UPCALL_
 
 extern vm_map_t bsd_pageable_map;
 extern const struct fileops vnops;
+extern int nextpidversion;
 
-#define	USER_ADDR_ALIGN(addr, val) \
+#define USER_ADDR_ALIGN(addr, val) \
 	( ( (user_addr_t)(addr) + (val) - 1) \
-		& ~((val) - 1) )
+	        & ~((val) - 1) )
 
- /* Platform Code Exec Logging */
+/* Platform Code Exec Logging */
 static int platform_exec_logging = 0;
 
 SYSCTL_DECL(_security_mac);
 
 SYSCTL_INT(_security_mac, OID_AUTO, platform_exec_logging, CTLFLAG_RW, &platform_exec_logging, 0,
-		   "log cdhashes for all platform binary executions");
+    "log cdhashes for all platform binary executions");
 
 static os_log_t peLog = OS_LOG_DEFAULT;
 
-struct image_params;	/* Forward */
+struct exec_port_actions {
+	uint32_t portwatch_count;
+	uint32_t registered_count;
+	ipc_port_t *portwatch_array;
+	ipc_port_t *registered_array;
+};
+
+struct image_params;    /* Forward */
 static int exec_activate_image(struct image_params *imgp);
 static int exec_copyout_strings(struct image_params *imgp, user_addr_t *stackp);
 static int load_return_to_errno(load_return_t lrtn);
@@ -273,15 +300,17 @@ static int exec_extract_strings(struct image_params *imgp);
 static int exec_add_apple_strings(struct image_params *imgp, const load_result_t *load_result);
 static int exec_handle_sugid(struct image_params *imgp);
 static int sugid_scripts = 0;
-SYSCTL_INT (_kern, OID_AUTO, sugid_scripts, CTLFLAG_RW | CTLFLAG_LOCKED, &sugid_scripts, 0, "");
+SYSCTL_INT(_kern, OID_AUTO, sugid_scripts, CTLFLAG_RW | CTLFLAG_LOCKED, &sugid_scripts, 0, "");
 static kern_return_t create_unix_stack(vm_map_t map, load_result_t* load_result, proc_t p);
 static int copyoutptr(user_addr_t ua, user_addr_t ptr, int ptr_size);
 static void exec_resettextvp(proc_t, struct image_params *);
 static int check_for_signature(proc_t, struct image_params *);
 static void exec_prefault_data(proc_t, struct image_params *, load_result_t *);
-static errno_t exec_handle_port_actions(struct image_params *imgp, boolean_t * portwatch_present, ipc_port_t * portwatch_ports);
-static errno_t exec_handle_spawnattr_policy(proc_t p, int psa_apptype, uint64_t psa_qos_clamp, uint64_t psa_darwin_role,
-                             ipc_port_t * portwatch_ports, int portwatch_count);
+static errno_t exec_handle_port_actions(struct image_params *imgp,
+    struct exec_port_actions *port_actions);
+static errno_t exec_handle_spawnattr_policy(proc_t p, thread_t thread, int psa_apptype, uint64_t psa_qos_clamp,
+    uint64_t psa_darwin_role, struct exec_port_actions *port_actions);
+static void exec_port_actions_destroy(struct exec_port_actions *port_actions);
 
 /*
  * exec_add_user_string
@@ -305,35 +334,36 @@ static int
 exec_add_user_string(struct image_params *imgp, user_addr_t str, int seg, boolean_t is_ncargs)
 {
 	int error = 0;
-	
+
 	do {
 		size_t len = 0;
 		int space;
-		
-		if (is_ncargs)
+
+		if (is_ncargs) {
 			space = imgp->ip_argspace; /* by definition smaller than ip_strspace */
-		else
+		} else {
 			space = imgp->ip_strspace;
-		
+		}
+
 		if (space <= 0) {
 			error = E2BIG;
 			break;
 		}
-		
+
 		if (!UIO_SEG_IS_USER_SPACE(seg)) {
-			char *kstr = CAST_DOWN(char *,str);	/* SAFE */
+			char *kstr = CAST_DOWN(char *, str);     /* SAFE */
 			error = copystr(kstr, imgp->ip_strendp, space, &len);
-		} else  {
+		} else {
 			error = copyinstr(str, imgp->ip_strendp, space, &len);
 		}
 
 		imgp->ip_strendp += len;
 		imgp->ip_strspace -= len;
-		if (is_ncargs)
+		if (is_ncargs) {
 			imgp->ip_argspace -= len;
-		
+		}
 	} while (error == ENAMETOOLONG);
-	
+
 	return error;
 }
 
@@ -341,7 +371,7 @@ exec_add_user_string(struct image_params *imgp, user_addr_t str, int seg, boolea
  * dyld is now passed the executable path as a getenv-like variable
  * in the same fashion as the stack_guard and malloc_entropy keys.
  */
-#define	EXECUTABLE_KEY "executable_path="
+#define EXECUTABLE_KEY "executable_path="
 
 /*
  * exec_save_path
@@ -390,13 +420,13 @@ exec_save_path(struct image_params *imgp, user_addr_t path, int seg, const char 
 
 	len = MIN(MAXPATHLEN, imgp->ip_strspace);
 
-	switch(seg) {
+	switch (seg) {
 	case UIO_USERSPACE32:
-	case UIO_USERSPACE64:	/* Same for copyin()... */
+	case UIO_USERSPACE64:   /* Same for copyin()... */
 		error = copyinstr(path, imgp->ip_strings + strlen(EXECUTABLE_KEY), len, &len);
 		break;
 	case UIO_SYSSPACE:
-		kpath = CAST_DOWN(char *,path);	/* SAFE */
+		kpath = CAST_DOWN(char *, path); /* SAFE */
 		error = copystr(kpath, imgp->ip_strings + strlen(EXECUTABLE_KEY), len, &len);
 		break;
 	default:
@@ -416,7 +446,7 @@ exec_save_path(struct image_params *imgp, user_addr_t path, int seg, const char 
 		}
 	}
 
-	return(error);
+	return error;
 }
 
 /*
@@ -424,7 +454,7 @@ exec_save_path(struct image_params *imgp, user_addr_t path, int seg, const char 
  *
  * If we detect a shell script, we need to reset the string area
  * state so that the interpreter can be saved onto the stack.
-
+ *
  * Parameters;	struct image_params *		image parameter block
  *
  * Returns:	int			0	Success
@@ -441,9 +471,9 @@ exec_reset_save_path(struct image_params *imgp)
 {
 	imgp->ip_strendp = imgp->ip_strings;
 	imgp->ip_argspace = NCARGS;
-	imgp->ip_strspace = ( NCARGS + PAGE_SIZE );
+	imgp->ip_strspace = (NCARGS + PAGE_SIZE);
 
-	return (0);
+	return 0;
 }
 
 /*
@@ -482,12 +512,12 @@ exec_shell_imgact(struct image_params *imgp)
 	if (vdata[0] != '#' ||
 	    vdata[1] != '!' ||
 	    (imgp->ip_flags & IMGPF_INTERPRET) != 0) {
-		return (-1);
+		return -1;
 	}
 
 	if (imgp->ip_origcputype != 0) {
 		/* Fat header previously matched, don't allow shell script inside */
-		return (-1);
+		return -1;
 	}
 
 	imgp->ip_flags |= IMGPF_INTERPRET;
@@ -503,10 +533,10 @@ exec_shell_imgact(struct image_params *imgp)
 	}
 
 	/* Try to find the first non-whitespace character */
-	for( ihp = &vdata[2]; ihp < &vdata[IMG_SHSIZE]; ihp++ ) {
+	for (ihp = &vdata[2]; ihp < &vdata[IMG_SHSIZE]; ihp++) {
 		if (IS_EOL(*ihp)) {
 			/* Did not find interpreter, "#!\n" */
-			return (ENOEXEC);
+			return ENOEXEC;
 		} else if (IS_WHITESPACE(*ihp)) {
 			/* Whitespace, like "#!    /bin/sh\n", keep going. */
 		} else {
@@ -517,13 +547,13 @@ exec_shell_imgact(struct image_params *imgp)
 
 	if (ihp == &vdata[IMG_SHSIZE]) {
 		/* All whitespace, like "#!           " */
-		return (ENOEXEC);
+		return ENOEXEC;
 	}
 
 	line_startp = ihp;
 
 	/* Try to find the end of the interpreter+args string */
-	for ( ; ihp < &vdata[IMG_SHSIZE]; ihp++ ) {
+	for (; ihp < &vdata[IMG_SHSIZE]; ihp++) {
 		if (IS_EOL(*ihp)) {
 			/* Got it */
 			break;
@@ -534,7 +564,7 @@ exec_shell_imgact(struct image_params *imgp)
 
 	if (ihp == &vdata[IMG_SHSIZE]) {
 		/* A long line, like "#! blah blah blah" without end */
-		return (ENOEXEC);
+		return ENOEXEC;
 	}
 
 	/* Backtrack until we find the last non-whitespace */
@@ -554,18 +584,20 @@ exec_shell_imgact(struct image_params *imgp)
 
 	/* copy the interpreter name */
 	interp = imgp->ip_interp_buffer;
-	for ( ihp = line_startp; (ihp < line_endp) && !IS_WHITESPACE(*ihp); ihp++)
+	for (ihp = line_startp; (ihp < line_endp) && !IS_WHITESPACE(*ihp); ihp++) {
 		*interp++ = *ihp;
+	}
 	*interp = '\0';
 
 	exec_reset_save_path(imgp);
 	exec_save_path(imgp, CAST_USER_ADDR_T(imgp->ip_interp_buffer),
-							UIO_SYSSPACE, NULL);
+	    UIO_SYSSPACE, NULL);
 
 	/* Copy the entire interpreter + args for later processing into argv[] */
 	interp = imgp->ip_interp_buffer;
-	for ( ihp = line_startp; (ihp < line_endp); ihp++)
+	for (ihp = line_startp; (ihp < line_endp); ihp++) {
 		*interp++ = *ihp;
+	}
 	*interp = '\0';
 
 #if !SECURE_KERNEL
@@ -582,13 +614,14 @@ exec_shell_imgact(struct image_params *imgp)
 
 		p = vfs_context_proc(imgp->ip_vfs_context);
 		error = falloc(p, &fp, &fd, imgp->ip_vfs_context);
-		if (error)
-			return(error);
+		if (error) {
+			return error;
+		}
 
 		fp->f_fglob->fg_flag = FREAD;
 		fp->f_fglob->fg_ops = &vnops;
 		fp->f_fglob->fg_data = (caddr_t)imgp->ip_vp;
-		
+
 		proc_fdlock(p);
 		procfdtbl_releasefd(p, fd, NULL);
 		fp_drop(p, fd, fp, 1);
@@ -599,7 +632,7 @@ exec_shell_imgact(struct image_params *imgp)
 	}
 #endif
 
-	return (-3);
+	return -3;
 }
 
 
@@ -625,7 +658,7 @@ exec_shell_imgact(struct image_params *imgp)
  *		activators should not be given the opportunity to attempt
  *		to activate the image.
  *
- * 		If we find an encapsulated binary, we make no assertions
+ *              If we find an encapsulated binary, we make no assertions
  *		about its  validity; instead, we leave that up to a rescan
  *		for an activator to claim it, and, if it is claimed by one,
  *		that activator is responsible for determining validity.
@@ -680,9 +713,10 @@ exec_fat_imgact(struct image_params *imgp)
 			}
 
 			lret = fatfile_getbestarch_for_cputype(pref,
-							(vm_offset_t)fat_header,
-							PAGE_SIZE,
-							&fat_arch);
+			    (vm_offset_t)fat_header,
+			    PAGE_SIZE,
+			    imgp,
+			    &fat_arch);
 			if (lret == LOAD_SUCCESS) {
 				goto use_arch;
 			}
@@ -696,8 +730,9 @@ exec_fat_imgact(struct image_params *imgp)
 regular_grading:
 	/* Look up our preferred architecture in the fat file. */
 	lret = fatfile_getbestarch((vm_offset_t)fat_header,
-				PAGE_SIZE,
-				&fat_arch);
+	    PAGE_SIZE,
+	    imgp,
+	    &fat_arch);
 	if (lret != LOAD_SUCCESS) {
 		error = load_return_to_errno(lret);
 		goto bad;
@@ -706,9 +741,9 @@ regular_grading:
 use_arch:
 	/* Read the Mach-O header out of fat_arch */
 	error = vn_rdwr(UIO_READ, imgp->ip_vp, imgp->ip_vdata,
-			PAGE_SIZE, fat_arch.offset,
-			UIO_SYSSPACE, (IO_UNIT|IO_NODELOCKED),
-			cred, &resid, p);
+	    PAGE_SIZE, fat_arch.offset,
+	    UIO_SYSSPACE, (IO_UNIT | IO_NODELOCKED),
+	    cred, &resid, p);
 	if (error) {
 		goto bad;
 	}
@@ -726,7 +761,7 @@ use_arch:
 
 bad:
 	kauth_cred_unref(&cred);
-	return (error);
+	return error;
 }
 
 static int
@@ -741,6 +776,7 @@ activate_exec_state(task_t task, proc_t p, thread_t thread, load_result_t *resul
 	} else {
 		OSBitAndAtomic(~((uint32_t)P_LP64), &p->p_flag);
 	}
+	task_set_mach_header_address(task, result->mach_header);
 
 	ret = thread_state_initialize(thread);
 	if (ret != KERN_SUCCESS) {
@@ -783,7 +819,7 @@ set_proc_name(struct image_params *imgp, proc_t p)
 	}
 
 	bcopy((caddr_t)imgp->ip_ndp->ni_cnd.cn_nameptr, (caddr_t)p->p_name,
-		(unsigned)imgp->ip_ndp->ni_cnd.cn_namelen);
+	    (unsigned)imgp->ip_ndp->ni_cnd.cn_namelen);
 	p->p_name[imgp->ip_ndp->ni_cnd.cn_namelen] = '\0';
 
 	if (imgp->ip_ndp->ni_cnd.cn_namelen > MAXCOMLEN) {
@@ -791,17 +827,8 @@ set_proc_name(struct image_params *imgp, proc_t p)
 	}
 
 	bcopy((caddr_t)imgp->ip_ndp->ni_cnd.cn_nameptr, (caddr_t)p->p_comm,
-		(unsigned)imgp->ip_ndp->ni_cnd.cn_namelen);
+	    (unsigned)imgp->ip_ndp->ni_cnd.cn_namelen);
 	p->p_comm[imgp->ip_ndp->ni_cnd.cn_namelen] = '\0';
-}
-
-static uint64_t get_va_fsid(struct vnode_attr *vap)
-{
-	if (VATTR_IS_SUPPORTED(vap, va_fsid64)) {
-		return *(uint64_t *)&vap->va_fsid64;
-	} else {
-		return vap->va_fsid;
-	}
 }
 
 /*
@@ -831,28 +858,28 @@ static int
 exec_mach_imgact(struct image_params *imgp)
 {
 	struct mach_header *mach_header = (struct mach_header *)imgp->ip_vdata;
-	proc_t			p = vfs_context_proc(imgp->ip_vfs_context);
-	int			error = 0;
-	task_t			task;
-	task_t			new_task = NULL; /* protected by vfexec */
-	thread_t		thread;
-	struct uthread		*uthread;
+	proc_t                  p = vfs_context_proc(imgp->ip_vfs_context);
+	int                     error = 0;
+	task_t                  task;
+	task_t                  new_task = NULL; /* protected by vfexec */
+	thread_t                thread;
+	struct uthread          *uthread;
 	vm_map_t old_map = VM_MAP_NULL;
 	vm_map_t map = VM_MAP_NULL;
-	load_return_t		lret;
-	load_result_t		load_result = {};
+	load_return_t           lret;
+	load_result_t           load_result = {};
 	struct _posix_spawnattr *psa = NULL;
-	int			spawn = (imgp->ip_flags & IMGPF_SPAWN);
-	int			vfexec = (imgp->ip_flags & IMGPF_VFORK_EXEC);
-	int			exec = (imgp->ip_flags & IMGPF_EXEC);
-	os_reason_t		exec_failure_reason = OS_REASON_NULL;
+	int                     spawn = (imgp->ip_flags & IMGPF_SPAWN);
+	int                     vfexec = (imgp->ip_flags & IMGPF_VFORK_EXEC);
+	int                     exec = (imgp->ip_flags & IMGPF_EXEC);
+	os_reason_t             exec_failure_reason = OS_REASON_NULL;
 
 	/*
 	 * make sure it's a Mach-O 1.0 or Mach-O 2.0 binary; the difference
 	 * is a reserved field on the end, so for the most part, we can
 	 * treat them as if they were identical. Reverse-endian Mach-O
 	 * binaries are recognized but not compatible.
- 	 */
+	 */
 	if ((mach_header->magic == MH_CIGAM) ||
 	    (mach_header->magic == MH_CIGAM_64)) {
 		error = EBADARCH;
@@ -873,7 +900,7 @@ exec_mach_imgact(struct image_params *imgp)
 	if (imgp->ip_origcputype != 0) {
 		/* Fat header previously had an idea about this thin file */
 		if (imgp->ip_origcputype != mach_header->cputype ||
-			imgp->ip_origcpusubtype != mach_header->cpusubtype) {
+		    imgp->ip_origcpusubtype != mach_header->cpusubtype) {
 			error = EBADARCH;
 			goto bad;
 		}
@@ -916,19 +943,42 @@ exec_mach_imgact(struct image_params *imgp)
 		goto bad;
 	}
 grade:
-	if (!grade_binary(imgp->ip_origcputype, imgp->ip_origcpusubtype & ~CPU_SUBTYPE_MASK)) {
+	if (!grade_binary(imgp->ip_origcputype, imgp->ip_origcpusubtype & ~CPU_SUBTYPE_MASK, TRUE)) {
 		error = EBADARCH;
 		goto bad;
 	}
 
+	if (validate_potential_simulator_binary(imgp->ip_origcputype, imgp,
+	    imgp->ip_arch_offset, imgp->ip_arch_size) != LOAD_SUCCESS) {
+#if __x86_64__
+		const char *excpath;
+		error = exec_save_path(imgp, imgp->ip_user_fname, imgp->ip_seg, &excpath);
+		os_log_error(OS_LOG_DEFAULT, "Unsupported 32-bit executable: \"%s\"", (error) ? imgp->ip_vp->v_name : excpath);
+#endif
+		error = EBADARCH;
+		goto bad;
+	}
 
+#if defined(HAS_APPLE_PAC)
+	assert(mach_header->cputype == CPU_TYPE_ARM64
+	    );
+
+	if (((mach_header->cputype == CPU_TYPE_ARM64 &&
+	    (mach_header->cpusubtype & ~CPU_SUBTYPE_MASK) == CPU_SUBTYPE_ARM64E)
+	    ) && (CPU_SUBTYPE_ARM64_PTR_AUTH_VERSION(mach_header->cpusubtype) == 0)) {
+		imgp->ip_flags &= ~IMGPF_NOJOP;
+	} else {
+		imgp->ip_flags |= IMGPF_NOJOP;
+	}
+#endif
 
 	/* Copy in arguments/environment from the old process */
 	error = exec_extract_strings(imgp);
-	if (error)
+	if (error) {
 		goto bad;
+	}
 
-	AUDIT_ARG(argv, imgp->ip_startargv, imgp->ip_argc, 
+	AUDIT_ARG(argv, imgp->ip_startargv, imgp->ip_argc,
 	    imgp->ip_endargv - imgp->ip_startargv);
 	AUDIT_ARG(envv, imgp->ip_endargv, imgp->ip_envc,
 	    imgp->ip_endenvv - imgp->ip_endargv);
@@ -942,12 +992,12 @@ grade:
 	 */
 	if (vfexec) {
 		imgp->ip_new_thread = fork_create_child(task,
-												NULL,
-												p,
-												FALSE,
-												(imgp->ip_flags & IMGPF_IS_64BIT_ADDR),
-												(imgp->ip_flags & IMGPF_IS_64BIT_DATA),
-												FALSE);
+		    NULL,
+		    p,
+		    FALSE,
+		    (imgp->ip_flags & IMGPF_IS_64BIT_ADDR),
+		    (imgp->ip_flags & IMGPF_IS_64BIT_DATA),
+		    FALSE);
 		/* task and thread ref returned, will be released in __mac_execve */
 		if (imgp->ip_new_thread == NULL) {
 			error = ENOMEM;
@@ -981,24 +1031,21 @@ grade:
 		error = load_return_to_errno(lret);
 
 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
-						p->p_pid, OS_REASON_EXEC, EXEC_EXIT_REASON_BAD_MACHO, 0, 0);
+		    p->p_pid, OS_REASON_EXEC, EXEC_EXIT_REASON_BAD_MACHO, 0, 0);
 		if (lret == LOAD_BADMACHO_UPX) {
-			/* set anything that might be useful in the crash report */
 			set_proc_name(imgp, p);
-
 			exec_failure_reason = os_reason_create(OS_REASON_EXEC, EXEC_EXIT_REASON_UPX);
 			exec_failure_reason->osr_flags |= OS_REASON_FLAG_GENERATE_CRASH_REPORT;
-			exec_failure_reason->osr_flags |= OS_REASON_FLAG_CONSISTENT_FAILURE;
-		} else if (lret == LOAD_BADARCH_X86) {
-			/* set anything that might be useful in the crash report */
-			set_proc_name(imgp, p);
-
-			exec_failure_reason = os_reason_create(OS_REASON_EXEC, EXEC_EXIT_REASON_NO32EXEC);
-			exec_failure_reason->osr_flags |= OS_REASON_FLAG_GENERATE_CRASH_REPORT;
-			exec_failure_reason->osr_flags |= OS_REASON_FLAG_CONSISTENT_FAILURE;
 		} else {
 			exec_failure_reason = os_reason_create(OS_REASON_EXEC, EXEC_EXIT_REASON_BAD_MACHO);
+
+			if (bootarg_execfailurereports) {
+				set_proc_name(imgp, p);
+				exec_failure_reason->osr_flags |= OS_REASON_FLAG_GENERATE_CRASH_REPORT;
+			}
 		}
+
+		exec_failure_reason->osr_flags |= OS_REASON_FLAG_CONSISTENT_FAILURE;
 
 		goto badtoolate;
 	}
@@ -1006,38 +1053,46 @@ grade:
 	proc_lock(p);
 	p->p_cputype = imgp->ip_origcputype;
 	p->p_cpusubtype = imgp->ip_origcpusubtype;
+	p->p_platform = load_result.ip_platform;
+	p->p_sdk = load_result.lr_sdk;
 	proc_unlock(p);
 
 	vm_map_set_user_wire_limit(map, p->p_rlimit[RLIMIT_MEMLOCK].rlim_cur);
 
-	/* 
+	/*
 	 * Set code-signing flags if this binary is signed, or if parent has
 	 * requested them on exec.
 	 */
 	if (load_result.csflags & CS_VALID) {
-		imgp->ip_csflags |= load_result.csflags & 
-			(CS_VALID|CS_SIGNED|CS_DEV_CODE|
-			 CS_HARD|CS_KILL|CS_RESTRICT|CS_ENFORCEMENT|CS_REQUIRE_LV|
-			 CS_FORCED_LV|CS_ENTITLEMENTS_VALIDATED|CS_DYLD_PLATFORM|CS_RUNTIME|
-			 CS_ENTITLEMENT_FLAGS|
-			 CS_EXEC_SET_HARD|CS_EXEC_SET_KILL|CS_EXEC_SET_ENFORCEMENT);
+		imgp->ip_csflags |= load_result.csflags &
+		    (CS_VALID | CS_SIGNED | CS_DEV_CODE |
+		    CS_HARD | CS_KILL | CS_RESTRICT | CS_ENFORCEMENT | CS_REQUIRE_LV |
+		    CS_FORCED_LV | CS_ENTITLEMENTS_VALIDATED | CS_DYLD_PLATFORM | CS_RUNTIME |
+		    CS_ENTITLEMENT_FLAGS |
+		    CS_EXEC_SET_HARD | CS_EXEC_SET_KILL | CS_EXEC_SET_ENFORCEMENT);
 	} else {
 		imgp->ip_csflags &= ~CS_VALID;
 	}
 
-	if (p->p_csflags & CS_EXEC_SET_HARD)
+	if (p->p_csflags & CS_EXEC_SET_HARD) {
 		imgp->ip_csflags |= CS_HARD;
-	if (p->p_csflags & CS_EXEC_SET_KILL)
+	}
+	if (p->p_csflags & CS_EXEC_SET_KILL) {
 		imgp->ip_csflags |= CS_KILL;
-	if (p->p_csflags & CS_EXEC_SET_ENFORCEMENT)
+	}
+	if (p->p_csflags & CS_EXEC_SET_ENFORCEMENT) {
 		imgp->ip_csflags |= CS_ENFORCEMENT;
+	}
 	if (p->p_csflags & CS_EXEC_INHERIT_SIP) {
-		if (p->p_csflags & CS_INSTALLER)
+		if (p->p_csflags & CS_INSTALLER) {
 			imgp->ip_csflags |= CS_INSTALLER;
-		if (p->p_csflags & CS_DATAVAULT_CONTROLLER)
+		}
+		if (p->p_csflags & CS_DATAVAULT_CONTROLLER) {
 			imgp->ip_csflags |= CS_DATAVAULT_CONTROLLER;
-		if (p->p_csflags & CS_NVRAM_UNRESTRICTED)
+		}
+		if (p->p_csflags & CS_NVRAM_UNRESTRICTED) {
 			imgp->ip_csflags |= CS_NVRAM_UNRESTRICTED;
+		}
 	}
 
 	/*
@@ -1045,6 +1100,19 @@ grade:
 	 */
 	int cpu_subtype;
 	cpu_subtype = 0; /* all cpu_subtypes use the same shared region */
+#if defined(HAS_APPLE_PAC)
+	if (cpu_type() == CPU_TYPE_ARM64 &&
+	    (p->p_cpusubtype & ~CPU_SUBTYPE_MASK) == CPU_SUBTYPE_ARM64E) {
+		assertf(p->p_cputype == CPU_TYPE_ARM64,
+		    "p %p cpu_type() 0x%x p->p_cputype 0x%x p->p_cpusubtype 0x%x",
+		    p, cpu_type(), p->p_cputype, p->p_cpusubtype);
+		/*
+		 * arm64e uses pointer authentication, so request a separate
+		 * shared region for this CPU subtype.
+		 */
+		cpu_subtype = p->p_cpusubtype & ~CPU_SUBTYPE_MASK;
+	}
+#endif /* HAS_APPLE_PAC */
 	vm_map_exec(map, task, load_result.is_64bit_addr, (void *)p->p_fd->fd_rdir, cpu_type(), cpu_subtype);
 
 	/*
@@ -1060,8 +1128,14 @@ grade:
 		vm_map_deallocate(map);
 
 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
-						p->p_pid, OS_REASON_EXEC, EXEC_EXIT_REASON_SUGID_FAILURE, 0, 0);
+		    p->p_pid, OS_REASON_EXEC, EXEC_EXIT_REASON_SUGID_FAILURE, 0, 0);
+
 		exec_failure_reason = os_reason_create(OS_REASON_EXEC, EXEC_EXIT_REASON_SUGID_FAILURE);
+		if (bootarg_execfailurereports) {
+			set_proc_name(imgp, p);
+			exec_failure_reason->osr_flags |= OS_REASON_FLAG_GENERATE_CRASH_REPORT;
+		}
+
 		goto badtoolate;
 	}
 
@@ -1083,41 +1157,58 @@ grade:
 
 	lret = activate_exec_state(task, p, thread, &load_result);
 	if (lret != KERN_SUCCESS) {
-
 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
-						p->p_pid, OS_REASON_EXEC, EXEC_EXIT_REASON_ACTV_THREADSTATE, 0, 0);
+		    p->p_pid, OS_REASON_EXEC, EXEC_EXIT_REASON_ACTV_THREADSTATE, 0, 0);
+
 		exec_failure_reason = os_reason_create(OS_REASON_EXEC, EXEC_EXIT_REASON_ACTV_THREADSTATE);
+		if (bootarg_execfailurereports) {
+			set_proc_name(imgp, p);
+			exec_failure_reason->osr_flags |= OS_REASON_FLAG_GENERATE_CRASH_REPORT;
+		}
+
 		goto badtoolate;
 	}
 
 	/*
 	 * deal with voucher on exec-calling thread.
 	 */
-	if (imgp->ip_new_thread == NULL)
+	if (imgp->ip_new_thread == NULL) {
 		thread_set_mach_voucher(current_thread(), IPC_VOUCHER_NULL);
+	}
 
 	/* Make sure we won't interrupt ourself signalling a partial process */
-	if (!vfexec && !spawn && (p->p_lflag & P_LTRACED))
+	if (!vfexec && !spawn && (p->p_lflag & P_LTRACED)) {
 		psignal(p, SIGTRAP);
+	}
 
 	if (load_result.unixproc &&
-		create_unix_stack(get_task_map(task),
-				  &load_result,
-				  p) != KERN_SUCCESS) {
+	    create_unix_stack(get_task_map(task),
+	    &load_result,
+	    p) != KERN_SUCCESS) {
 		error = load_return_to_errno(LOAD_NOSPACE);
 
 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
-						p->p_pid, OS_REASON_EXEC, EXEC_EXIT_REASON_STACK_ALLOC, 0, 0);
+		    p->p_pid, OS_REASON_EXEC, EXEC_EXIT_REASON_STACK_ALLOC, 0, 0);
+
 		exec_failure_reason = os_reason_create(OS_REASON_EXEC, EXEC_EXIT_REASON_STACK_ALLOC);
+		if (bootarg_execfailurereports) {
+			set_proc_name(imgp, p);
+			exec_failure_reason->osr_flags |= OS_REASON_FLAG_GENERATE_CRASH_REPORT;
+		}
+
 		goto badtoolate;
 	}
 
 	error = exec_add_apple_strings(imgp, &load_result);
 	if (error) {
-
 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
-						p->p_pid, OS_REASON_EXEC, EXEC_EXIT_REASON_APPLE_STRING_INIT, 0, 0);
+		    p->p_pid, OS_REASON_EXEC, EXEC_EXIT_REASON_APPLE_STRING_INIT, 0, 0);
+
 		exec_failure_reason = os_reason_create(OS_REASON_EXEC, EXEC_EXIT_REASON_APPLE_STRING_INIT);
+		if (bootarg_execfailurereports) {
+			set_proc_name(imgp, p);
+			exec_failure_reason->osr_flags |= OS_REASON_FLAG_GENERATE_CRASH_REPORT;
+		}
 		goto badtoolate;
 	}
 
@@ -1125,7 +1216,7 @@ grade:
 	old_map = vm_map_switch(get_task_map(task));
 
 	if (load_result.unixproc) {
-		user_addr_t	ap;
+		user_addr_t     ap;
 
 		/*
 		 * Copy the strings area out into the new process address
@@ -1137,8 +1228,13 @@ grade:
 			vm_map_switch(old_map);
 
 			KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
-						p->p_pid, OS_REASON_EXEC, EXEC_EXIT_REASON_COPYOUT_STRINGS, 0, 0);
+			    p->p_pid, OS_REASON_EXEC, EXEC_EXIT_REASON_COPYOUT_STRINGS, 0, 0);
+
 			exec_failure_reason = os_reason_create(OS_REASON_EXEC, EXEC_EXIT_REASON_COPYOUT_STRINGS);
+			if (bootarg_execfailurereports) {
+				set_proc_name(imgp, p);
+				exec_failure_reason->osr_flags |= OS_REASON_FLAG_GENERATE_CRASH_REPORT;
+			}
 			goto badtoolate;
 		}
 		/* Set the stack */
@@ -1146,8 +1242,8 @@ grade:
 	}
 
 	if (load_result.dynlinker) {
-		uint64_t	ap;
-		int			new_ptr_size = (imgp->ip_flags & IMGPF_IS_64BIT_ADDR) ? 8 : 4;
+		uint64_t        ap;
+		int                     new_ptr_size = (imgp->ip_flags & IMGPF_IS_64BIT_ADDR) ? 8 : 4;
 
 		/* Adjust the stack */
 		ap = thread_adjuserstack(thread, -new_ptr_size);
@@ -1157,8 +1253,13 @@ grade:
 			vm_map_switch(old_map);
 
 			KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
-						p->p_pid, OS_REASON_EXEC, EXEC_EXIT_REASON_COPYOUT_DYNLINKER, 0, 0);
+			    p->p_pid, OS_REASON_EXEC, EXEC_EXIT_REASON_COPYOUT_DYNLINKER, 0, 0);
+
 			exec_failure_reason = os_reason_create(OS_REASON_EXEC, EXEC_EXIT_REASON_COPYOUT_DYNLINKER);
+			if (bootarg_execfailurereports) {
+				set_proc_name(imgp, p);
+				exec_failure_reason->osr_flags |= OS_REASON_FLAG_GENERATE_CRASH_REPORT;
+			}
 			goto badtoolate;
 		}
 		task_set_dyld_info(task, load_result.all_image_info_addr,
@@ -1169,9 +1270,6 @@ grade:
 	exec_prefault_data(p, imgp, &load_result);
 
 	vm_map_switch(old_map);
-
-	/* Stop profiling */
-	stopprofclock(p);
 
 	/*
 	 * Reset signal state.
@@ -1186,8 +1284,9 @@ grade:
 
 #if SYSV_SHM
 	/* FIXME: Till vmspace inherit is fixed: */
-	if (!vfexec && p->vm_shm)
+	if (!vfexec && p->vm_shm) {
 		shmexec(p);
+	}
 #endif
 #if SYSV_SEM
 	/* Clean up the semaphores */
@@ -1205,15 +1304,15 @@ grade:
 	if (secluded_for_apps &&
 	    load_result.platform_binary) {
 		if (strncmp(p->p_name,
-			    "Camera",
-			    sizeof (p->p_name)) == 0) {
+		    "Camera",
+		    sizeof(p->p_name)) == 0) {
 			task_set_could_use_secluded_mem(task, TRUE);
 		} else {
 			task_set_could_use_secluded_mem(task, FALSE);
 		}
 		if (strncmp(p->p_name,
-			    "mediaserverd",
-			    sizeof (p->p_name)) == 0) {
+		    "mediaserverd",
+		    sizeof(p->p_name)) == 0) {
 			task_set_could_also_use_secluded_mem(task, TRUE);
 		}
 	}
@@ -1221,7 +1320,7 @@ grade:
 
 #if __arm64__
 	if (load_result.legacy_footprint) {
-		task_set_legacy_footprint(task, TRUE);
+		task_set_legacy_footprint(task);
 	}
 #endif /* __arm64__ */
 
@@ -1269,7 +1368,7 @@ grade:
 
 		uintptr_t fsid = 0, fileid = 0;
 		if (imgp->ip_vattr) {
-			uint64_t fsid64 = get_va_fsid(imgp->ip_vattr);
+			uint64_t fsid64 = vnode_get_va_fsid(imgp->ip_vattr);
 			fsid   = fsid64;
 			fileid = imgp->ip_vattr->va_fileid;
 			// check for (unexpected) overflow and trace zero in that case
@@ -1278,14 +1377,14 @@ grade:
 			}
 		}
 		KERNEL_DEBUG_CONSTANT_IST1(TRACE_DATA_EXEC, p->p_pid, fsid, fileid, 0,
-				(uintptr_t)thread_tid(thread));
+		    (uintptr_t)thread_tid(thread));
 
 		/*
 		 * Collect the pathname for tracing
 		 */
 		kdbg_trace_string(p, &args[0], &args[1], &args[2], &args[3]);
 		KERNEL_DEBUG_CONSTANT_IST1(TRACE_STRING_EXEC, args[0], args[1],
-				args[2], args[3], (uintptr_t)thread_tid(thread));
+		    args[2], args[3], (uintptr_t)thread_tid(thread));
 	}
 
 	/*
@@ -1349,7 +1448,7 @@ badtoolate:
 		os_reason_free(exec_failure_reason);
 		exec_failure_reason = OS_REASON_NULL;
 	}
-	
+
 done:
 	if (load_result.threadstate) {
 		kfree(load_result.threadstate, load_result.threadstate_sz);
@@ -1359,7 +1458,7 @@ done:
 bad:
 	/* If we hit this, we likely would have leaked an exit reason */
 	assert(exec_failure_reason == OS_REASON_NULL);
-	return(error);
+	return error;
 }
 
 
@@ -1373,12 +1472,12 @@ bad:
  * XXX hardcoded, for now; should use linker sets
  */
 struct execsw {
-	int (*ex_imgact)(struct image_params *);
+	int(*const ex_imgact)(struct image_params *);
 	const char *ex_name;
-} execsw[] = {
-	{ exec_mach_imgact,		"Mach-o Binary" },
-	{ exec_fat_imgact,		"Fat Binary" },
-	{ exec_shell_imgact,		"Interpreter Script" },
+}const execsw[] = {
+	{ exec_mach_imgact, "Mach-o Binary" },
+	{ exec_fat_imgact, "Fat Binary" },
+	{ exec_shell_imgact, "Interpreter Script" },
 	{ NULL, NULL}
 };
 
@@ -1417,15 +1516,16 @@ exec_activate_image(struct image_params *imgp)
 	const char *excpath;
 	int error;
 	int resid;
-	int once = 1;	/* save SGUID-ness for interpreted files */
+	int once = 1;   /* save SGUID-ness for interpreted files */
 	int i;
 	int itercount = 0;
 	proc_t p = vfs_context_proc(imgp->ip_vfs_context);
 
 	error = execargs_alloc(imgp);
-	if (error)
+	if (error) {
 		goto bad_notrans;
-	
+	}
+
 	error = exec_save_path(imgp, imgp->ip_user_fname, imgp->ip_seg, &excpath);
 	if (error) {
 		goto bad_notrans;
@@ -1441,14 +1541,15 @@ exec_activate_image(struct image_params *imgp)
 	}
 
 	NDINIT(ndp, LOOKUP, OP_LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1,
-		   UIO_SYSSPACE, CAST_USER_ADDR_T(excpath), imgp->ip_vfs_context);
+	    UIO_SYSSPACE, CAST_USER_ADDR_T(excpath), imgp->ip_vfs_context);
 
 again:
 	error = namei(ndp);
-	if (error)
+	if (error) {
 		goto bad_notrans;
-	imgp->ip_ndp = ndp;	/* successful namei(); call nameidone() later */
-	imgp->ip_vp = ndp->ni_vp;	/* if set, need to vnode_put() at some point */
+	}
+	imgp->ip_ndp = ndp;     /* successful namei(); call nameidone() later */
+	imgp->ip_vp = ndp->ni_vp;       /* if set, need to vnode_put() at some point */
 
 	/*
 	 * Before we start the transition from binary A to binary B, make
@@ -1465,12 +1566,14 @@ again:
 	}
 	error = proc_transstart(p, 1, 0);
 	proc_unlock(p);
-	if (error)
+	if (error) {
 		goto bad_notrans;
+	}
 
 	error = exec_check_permissions(imgp);
-	if (error)
+	if (error) {
 		goto bad;
+	}
 
 	/* Copy; avoid invocation of an interpreter overwriting the original */
 	if (once) {
@@ -1479,11 +1582,12 @@ again:
 	}
 
 	error = vn_rdwr(UIO_READ, imgp->ip_vp, imgp->ip_vdata, PAGE_SIZE, 0,
-			UIO_SYSSPACE, IO_NODELOCKED,
-			vfs_context_ucred(imgp->ip_vfs_context),
-			&resid, vfs_context_proc(imgp->ip_vfs_context));
-	if (error)
+	    UIO_SYSSPACE, IO_NODELOCKED,
+	    vfs_context_ucred(imgp->ip_vfs_context),
+	    &resid, vfs_context_proc(imgp->ip_vfs_context));
+	if (error) {
 		goto bad;
+	}
 
 	if (resid) {
 		memset(imgp->ip_vdata + (PAGE_SIZE - resid), 0x0, resid);
@@ -1496,50 +1600,53 @@ encapsulated_binary:
 		goto bad;
 	}
 	error = -1;
-	for(i = 0; error == -1 && execsw[i].ex_imgact != NULL; i++) {
-
+	for (i = 0; error == -1 && execsw[i].ex_imgact != NULL; i++) {
 		error = (*execsw[i].ex_imgact)(imgp);
 
 		switch (error) {
 		/* case -1: not claimed: continue */
-		case -2:		/* Encapsulated binary, imgp->ip_XXX set for next iteration */
+		case -2:                /* Encapsulated binary, imgp->ip_XXX set for next iteration */
 			goto encapsulated_binary;
 
-		case -3:		/* Interpreter */
+		case -3:                /* Interpreter */
 #if CONFIG_MACF
 			/*
 			 * Copy the script label for later use. Note that
 			 * the label can be different when the script is
 			 * actually read by the interpreter.
 			 */
-			if (imgp->ip_scriptlabelp)
+			if (imgp->ip_scriptlabelp) {
 				mac_vnode_label_free(imgp->ip_scriptlabelp);
+			}
 			imgp->ip_scriptlabelp = mac_vnode_label_alloc();
 			if (imgp->ip_scriptlabelp == NULL) {
 				error = ENOMEM;
 				break;
 			}
 			mac_vnode_label_copy(imgp->ip_vp->v_label,
-					     imgp->ip_scriptlabelp);
+			    imgp->ip_scriptlabelp);
 
 			/*
 			 * Take a ref of the script vnode for later use.
 			 */
-			if (imgp->ip_scriptvp)
+			if (imgp->ip_scriptvp) {
 				vnode_put(imgp->ip_scriptvp);
-			if (vnode_getwithref(imgp->ip_vp) == 0)
+				imgp->ip_scriptvp = NULLVP;
+			}
+			if (vnode_getwithref(imgp->ip_vp) == 0) {
 				imgp->ip_scriptvp = imgp->ip_vp;
+			}
 #endif
 
 			nameidone(ndp);
 
 			vnode_put(imgp->ip_vp);
-			imgp->ip_vp = NULL;	/* already put */
+			imgp->ip_vp = NULL;     /* already put */
 			imgp->ip_ndp = NULL; /* already nameidone */
 
 			/* Use excpath, which exec_shell_imgact reset to the interpreter */
 			NDINIT(ndp, LOOKUP, OP_LOOKUP, FOLLOW | LOCKLEAF,
-				   UIO_SYSSPACE, CAST_USER_ADDR_T(excpath), imgp->ip_vfs_context);
+			    UIO_SYSSPACE, CAST_USER_ADDR_T(excpath), imgp->ip_vfs_context);
 
 			proc_transend(p, 0);
 			goto again;
@@ -1560,24 +1667,51 @@ encapsulated_binary:
 		 */
 		if (kauth_authorize_fileop_has_listeners()) {
 			kauth_authorize_fileop(vfs_context_ucred(imgp->ip_vfs_context),
-						KAUTH_FILEOP_EXEC,
-						(uintptr_t)ndp->ni_vp, 0);
+			    KAUTH_FILEOP_EXEC,
+			    (uintptr_t)ndp->ni_vp, 0);
 		}
 	}
 bad:
 	proc_transend(p, 0);
 
 bad_notrans:
-	if (imgp->ip_strings)
+	if (imgp->ip_strings) {
 		execargs_free(imgp);
-	if (imgp->ip_ndp)
+	}
+	if (imgp->ip_ndp) {
 		nameidone(imgp->ip_ndp);
-	if (ndp)
+	}
+	if (ndp) {
 		FREE(ndp, M_TEMP);
+	}
 
-	return (error);
+	return error;
 }
 
+/*
+ * exec_validate_spawnattr_policy
+ *
+ * Description: Validates the entitlements required to set the apptype.
+ *
+ * Parameters:  int psa_apptype         posix spawn attribute apptype
+ *
+ * Returns:     0                       Success
+ *              EPERM                   Failure
+ */
+static errno_t
+exec_validate_spawnattr_policy(int psa_apptype)
+{
+	if ((psa_apptype & POSIX_SPAWN_PROC_TYPE_MASK) != 0) {
+		int proctype = psa_apptype & POSIX_SPAWN_PROC_TYPE_MASK;
+		if (proctype == POSIX_SPAWN_PROC_TYPE_DRIVER) {
+			if (!IOTaskHasEntitlement(current_task(), POSIX_SPAWN_ENTITLEMENT_DRIVER)) {
+				return EPERM;
+			}
+		}
+	}
+
+	return 0;
+}
 
 /*
  * exec_handle_spawnattr_policy
@@ -1590,8 +1724,8 @@ bad_notrans:
  * Returns:     0                       Success
  */
 static errno_t
-exec_handle_spawnattr_policy(proc_t p, int psa_apptype, uint64_t psa_qos_clamp, uint64_t psa_darwin_role,
-                             ipc_port_t * portwatch_ports, int portwatch_count)
+exec_handle_spawnattr_policy(proc_t p, thread_t thread, int psa_apptype, uint64_t psa_qos_clamp,
+    uint64_t psa_darwin_role, struct exec_port_actions *port_actions)
 {
 	int apptype     = TASK_APPTYPE_NONE;
 	int qos_clamp   = THREAD_QOS_UNSPECIFIED;
@@ -1600,49 +1734,52 @@ exec_handle_spawnattr_policy(proc_t p, int psa_apptype, uint64_t psa_qos_clamp, 
 	if ((psa_apptype & POSIX_SPAWN_PROC_TYPE_MASK) != 0) {
 		int proctype = psa_apptype & POSIX_SPAWN_PROC_TYPE_MASK;
 
-		switch(proctype) {
-			case POSIX_SPAWN_PROC_TYPE_DAEMON_INTERACTIVE:
-				apptype = TASK_APPTYPE_DAEMON_INTERACTIVE;
-				break;
-			case POSIX_SPAWN_PROC_TYPE_DAEMON_STANDARD:
-				apptype = TASK_APPTYPE_DAEMON_STANDARD;
-				break;
-			case POSIX_SPAWN_PROC_TYPE_DAEMON_ADAPTIVE:
-				apptype = TASK_APPTYPE_DAEMON_ADAPTIVE;
-				break;
-			case POSIX_SPAWN_PROC_TYPE_DAEMON_BACKGROUND:
-				apptype = TASK_APPTYPE_DAEMON_BACKGROUND;
-				break;
-			case POSIX_SPAWN_PROC_TYPE_APP_DEFAULT:
-				apptype = TASK_APPTYPE_APP_DEFAULT;
-				break;
+		switch (proctype) {
+		case POSIX_SPAWN_PROC_TYPE_DAEMON_INTERACTIVE:
+			apptype = TASK_APPTYPE_DAEMON_INTERACTIVE;
+			break;
+		case POSIX_SPAWN_PROC_TYPE_DAEMON_STANDARD:
+			apptype = TASK_APPTYPE_DAEMON_STANDARD;
+			break;
+		case POSIX_SPAWN_PROC_TYPE_DAEMON_ADAPTIVE:
+			apptype = TASK_APPTYPE_DAEMON_ADAPTIVE;
+			break;
+		case POSIX_SPAWN_PROC_TYPE_DAEMON_BACKGROUND:
+			apptype = TASK_APPTYPE_DAEMON_BACKGROUND;
+			break;
+		case POSIX_SPAWN_PROC_TYPE_APP_DEFAULT:
+			apptype = TASK_APPTYPE_APP_DEFAULT;
+			break;
 #if !CONFIG_EMBEDDED
-			case POSIX_SPAWN_PROC_TYPE_APP_TAL:
-				apptype = TASK_APPTYPE_APP_TAL;
-				break;
+		case POSIX_SPAWN_PROC_TYPE_APP_TAL:
+			apptype = TASK_APPTYPE_APP_TAL;
+			break;
 #endif /* !CONFIG_EMBEDDED */
-			default:
-				apptype = TASK_APPTYPE_NONE;
-				/* TODO: Should an invalid value here fail the spawn? */
-				break;
+		case POSIX_SPAWN_PROC_TYPE_DRIVER:
+			apptype = TASK_APPTYPE_DRIVER;
+			break;
+		default:
+			apptype = TASK_APPTYPE_NONE;
+			/* TODO: Should an invalid value here fail the spawn? */
+			break;
 		}
 	}
 
 	if (psa_qos_clamp != POSIX_SPAWN_PROC_CLAMP_NONE) {
 		switch (psa_qos_clamp) {
-			case POSIX_SPAWN_PROC_CLAMP_UTILITY:
-				qos_clamp = THREAD_QOS_UTILITY;
-				break;
-			case POSIX_SPAWN_PROC_CLAMP_BACKGROUND:
-				qos_clamp = THREAD_QOS_BACKGROUND;
-				break;
-			case POSIX_SPAWN_PROC_CLAMP_MAINTENANCE:
-				qos_clamp = THREAD_QOS_MAINTENANCE;
-				break;
-			default:
-				qos_clamp = THREAD_QOS_UNSPECIFIED;
-				/* TODO: Should an invalid value here fail the spawn? */
-				break;
+		case POSIX_SPAWN_PROC_CLAMP_UTILITY:
+			qos_clamp = THREAD_QOS_UTILITY;
+			break;
+		case POSIX_SPAWN_PROC_CLAMP_BACKGROUND:
+			qos_clamp = THREAD_QOS_BACKGROUND;
+			break;
+		case POSIX_SPAWN_PROC_CLAMP_MAINTENANCE:
+			qos_clamp = THREAD_QOS_MAINTENANCE;
+			break;
+		default:
+			qos_clamp = THREAD_QOS_UNSPECIFIED;
+			/* TODO: Should an invalid value here fail the spawn? */
+			break;
 		}
 	}
 
@@ -1650,33 +1787,69 @@ exec_handle_spawnattr_policy(proc_t p, int psa_apptype, uint64_t psa_qos_clamp, 
 		proc_darwin_role_to_task_role(psa_darwin_role, &role);
 	}
 
-	if (apptype   != TASK_APPTYPE_NONE      ||
+	if (apptype != TASK_APPTYPE_NONE ||
 	    qos_clamp != THREAD_QOS_UNSPECIFIED ||
-	    role      != TASK_UNSPECIFIED) {
-		proc_set_task_spawnpolicy(p->task, apptype, qos_clamp, role,
-		                          portwatch_ports, portwatch_count);
+	    role != TASK_UNSPECIFIED ||
+	    port_actions->portwatch_count) {
+		proc_set_task_spawnpolicy(p->task, thread, apptype, qos_clamp, role,
+		    port_actions->portwatch_array, port_actions->portwatch_count);
 	}
 
-	return (0);
+	if (port_actions->registered_count) {
+		if (mach_ports_register(p->task, port_actions->registered_array,
+		    port_actions->registered_count)) {
+			return EINVAL;
+		}
+		/* mach_ports_register() consumed the array */
+		port_actions->registered_array = NULL;
+		port_actions->registered_count = 0;
+	}
+
+	return 0;
 }
 
+static void
+exec_port_actions_destroy(struct exec_port_actions *port_actions)
+{
+	if (port_actions->portwatch_array) {
+		for (uint32_t i = 0; i < port_actions->portwatch_count; i++) {
+			ipc_port_t port = NULL;
+			if ((port = port_actions->portwatch_array[i]) != NULL) {
+				ipc_port_release_send(port);
+			}
+		}
+		kfree(port_actions->portwatch_array,
+		    port_actions->portwatch_count * sizeof(ipc_port_t *));
+	}
+
+	if (port_actions->registered_array) {
+		for (uint32_t i = 0; i < port_actions->registered_count; i++) {
+			ipc_port_t port = NULL;
+			if ((port = port_actions->registered_array[i]) != NULL) {
+				ipc_port_release_send(port);
+			}
+		}
+		kfree(port_actions->registered_array,
+		    port_actions->registered_count * sizeof(ipc_port_t *));
+	}
+}
 
 /*
  * exec_handle_port_actions
  *
- * Description:	Go through the _posix_port_actions_t contents, 
- * 		calling task_set_special_port, task_set_exception_ports
- * 		and/or audit_session_spawnjoin for the current task.
+ * Description:	Go through the _posix_port_actions_t contents,
+ *              calling task_set_special_port, task_set_exception_ports
+ *              and/or audit_session_spawnjoin for the current task.
  *
  * Parameters:	struct image_params *	Image parameter block
  *
  * Returns:	0			Success
- * 		EINVAL			Failure
- * 		ENOTSUP			Illegal posix_spawn attr flag was set
+ *              EINVAL			Failure
+ *              ENOTSUP			Illegal posix_spawn attr flag was set
  */
 static errno_t
-exec_handle_port_actions(struct image_params *imgp, boolean_t * portwatch_present,
-                         ipc_port_t * portwatch_ports)
+exec_handle_port_actions(struct image_params *imgp,
+    struct exec_port_actions *actions)
 {
 	_posix_spawn_port_actions_t pacts = imgp->ip_px_spa;
 #if CONFIG_AUDIT
@@ -1686,18 +1859,83 @@ exec_handle_port_actions(struct image_params *imgp, boolean_t * portwatch_presen
 	task_t task = get_threadtask(imgp->ip_new_thread);
 	ipc_port_t port = NULL;
 	errno_t ret = 0;
-	int i;
+	int i, portwatch_i = 0, registered_i = 0;
 	kern_return_t kr;
+	boolean_t task_has_watchport_boost = task_has_watchports(current_task());
+	boolean_t in_exec = (imgp->ip_flags & IMGPF_EXEC);
+	boolean_t suid_cred_specified = FALSE;
 
-	*portwatch_present = FALSE;
+	for (i = 0; i < pacts->pspa_count; i++) {
+		act = &pacts->pspa_actions[i];
+
+		switch (act->port_type) {
+		case PSPA_SPECIAL:
+		case PSPA_EXCEPTION:
+#if CONFIG_AUDIT
+		case PSPA_AU_SESSION:
+#endif
+			break;
+		case PSPA_IMP_WATCHPORTS:
+			if (++actions->portwatch_count > TASK_MAX_WATCHPORT_COUNT) {
+				ret = EINVAL;
+				goto done;
+			}
+			break;
+		case PSPA_REGISTERED_PORTS:
+			if (++actions->registered_count > TASK_PORT_REGISTER_MAX) {
+				ret = EINVAL;
+				goto done;
+			}
+			break;
+
+		case PSPA_SUID_CRED:
+			/* Only a single suid credential can be specified. */
+			if (suid_cred_specified) {
+				ret = EINVAL;
+				goto done;
+			}
+			suid_cred_specified = TRUE;
+			break;
+
+		default:
+			ret = EINVAL;
+			goto done;
+		}
+	}
+
+	if (actions->portwatch_count) {
+		if (in_exec && task_has_watchport_boost) {
+			ret = EINVAL;
+			goto done;
+		}
+		actions->portwatch_array =
+		    kalloc(sizeof(ipc_port_t *) * actions->portwatch_count);
+		if (actions->portwatch_array == NULL) {
+			ret = ENOMEM;
+			goto done;
+		}
+		bzero(actions->portwatch_array,
+		    sizeof(ipc_port_t *) * actions->portwatch_count);
+	}
+
+	if (actions->registered_count) {
+		actions->registered_array =
+		    kalloc(sizeof(ipc_port_t *) * actions->registered_count);
+		if (actions->registered_array == NULL) {
+			ret = ENOMEM;
+			goto done;
+		}
+		bzero(actions->registered_array,
+		    sizeof(ipc_port_t *) * actions->registered_count);
+	}
 
 	for (i = 0; i < pacts->pspa_count; i++) {
 		act = &pacts->pspa_actions[i];
 
 		if (MACH_PORT_VALID(act->new_port)) {
 			kr = ipc_object_copyin(get_task_ipcspace(current_task()),
-			                       act->new_port, MACH_MSG_TYPE_COPY_SEND,
-			                       (ipc_object_t *) &port);
+			    act->new_port, MACH_MSG_TYPE_COPY_SEND,
+			    (ipc_object_t *) &port, 0, NULL, IPC_KMSG_FLAGS_ALLOW_IMMOVABLE_SEND);
 
 			if (kr != KERN_SUCCESS) {
 				ret = EINVAL;
@@ -1712,15 +1950,17 @@ exec_handle_port_actions(struct image_params *imgp, boolean_t * portwatch_presen
 		case PSPA_SPECIAL:
 			kr = task_set_special_port(task, act->which, port);
 
-			if (kr != KERN_SUCCESS)
+			if (kr != KERN_SUCCESS) {
 				ret = EINVAL;
+			}
 			break;
 
 		case PSPA_EXCEPTION:
 			kr = task_set_exception_ports(task, act->mask, port,
-			                              act->behavior, act->flavor);
-			if (kr != KERN_SUCCESS)
+			    act->behavior, act->flavor);
+			if (kr != KERN_SUCCESS) {
 				ret = EINVAL;
+			}
 			break;
 #if CONFIG_AUDIT
 		case PSPA_AU_SESSION:
@@ -1733,15 +1973,22 @@ exec_handle_port_actions(struct image_params *imgp, boolean_t * portwatch_presen
 			break;
 #endif
 		case PSPA_IMP_WATCHPORTS:
-			if (portwatch_ports != NULL && IPC_PORT_VALID(port)) {
-				*portwatch_present = TRUE;
+			if (actions->portwatch_array) {
 				/* hold on to this till end of spawn */
-				portwatch_ports[i] = port;
+				actions->portwatch_array[portwatch_i++] = port;
 			} else {
 				ipc_port_release_send(port);
 			}
-
 			break;
+		case PSPA_REGISTERED_PORTS:
+			/* hold on to this till end of spawn */
+			actions->registered_array[registered_i++] = port;
+			break;
+
+		case PSPA_SUID_CRED:
+			imgp->ip_sc_port = port;
+			break;
+
 		default:
 			ret = EINVAL;
 			break;
@@ -1755,9 +2002,10 @@ exec_handle_port_actions(struct image_params *imgp, boolean_t * portwatch_presen
 	}
 
 done:
-	if (0 != ret)
+	if (0 != ret) {
 		DTRACE_PROC1(spawn__port__failure, mach_port_name_t, act->new_port);
-	return (ret);
+	}
+	return ret;
 }
 
 /*
@@ -1785,12 +2033,15 @@ exec_handle_file_actions(struct image_params *imgp, short psa_flags)
 	int action;
 	proc_t p = vfs_context_proc(imgp->ip_vfs_context);
 	_posix_spawn_file_actions_t px_sfap = imgp->ip_px_sfa;
-	int ival[2];		/* dummy retval for system calls) */
+	int ival[2];            /* dummy retval for system calls) */
+#if CONFIG_AUDIT
+	struct uthread *uthread = get_bsdthread_info(current_thread());
+#endif
 
 	for (action = 0; action < px_sfap->psfa_act_count; action++) {
-		_psfa_action_t *psfa = &px_sfap->psfa_act_acts[ action];
+		_psfa_action_t *psfa = &px_sfap->psfa_act_acts[action];
 
-		switch(psfa->psfaa_type) {
+		switch (psfa->psfaa_type) {
 		case PSFA_OPEN: {
 			/*
 			 * Open is different, in that it requires the use of
@@ -1819,21 +2070,25 @@ exec_handle_file_actions(struct image_params *imgp, short psa_flags)
 
 			VATTR_INIT(vap);
 			/* Mask off all but regular access permissions */
-			mode = ((mode &~ p->p_fd->fd_cmask) & ALLPERMS) & ~S_ISTXT;
+			mode = ((mode & ~p->p_fd->fd_cmask) & ALLPERMS) & ~S_ISTXT;
 			VATTR_SET(vap, va_mode, mode & ACCESSPERMS);
 
-			NDINIT(ndp, LOOKUP, OP_OPEN, FOLLOW | AUDITVNPATH1, UIO_SYSSPACE,
-			       CAST_USER_ADDR_T(psfa->psfaa_openargs.psfao_path),
-			       imgp->ip_vfs_context);
+			AUDIT_SUBCALL_ENTER(OPEN, p, uthread);
 
-			error = open1(imgp->ip_vfs_context, 
-					ndp,
-					psfa->psfaa_openargs.psfao_oflag,
-					vap,
-					fileproc_alloc_init, NULL,
-					ival);
+			NDINIT(ndp, LOOKUP, OP_OPEN, FOLLOW | AUDITVNPATH1, UIO_SYSSPACE,
+			    CAST_USER_ADDR_T(psfa->psfaa_openargs.psfao_path),
+			    imgp->ip_vfs_context);
+
+			error = open1(imgp->ip_vfs_context,
+			    ndp,
+			    psfa->psfaa_openargs.psfao_oflag,
+			    vap,
+			    fileproc_alloc_init, NULL,
+			    ival);
 
 			FREE(bufp, M_TEMP);
+
+			AUDIT_SUBCALL_EXIT(uthread, error);
 
 			/*
 			 * If there's an error, or we get the right fd by
@@ -1841,8 +2096,9 @@ exec_handle_file_actions(struct image_params *imgp, short psa_flags)
 			 * reworking all the open code to preallocate fd
 			 * slots, and internally taking one as an argument.
 			 */
-			if (error || ival[0] == psfa->psfaa_filedes)
+			if (error || ival[0] == psfa->psfaa_filedes) {
 				break;
+			}
 
 			origfd = ival[0];
 			/*
@@ -1859,24 +2115,29 @@ exec_handle_file_actions(struct image_params *imgp, short psa_flags)
 			 * can ignore that, since if we didn't get the
 			 * fd we wanted, the error will stop us.
 			 */
+			AUDIT_SUBCALL_ENTER(DUP2, p, uthread);
 			error = dup2(p, &dup2a, ival);
-			if (error)
+			AUDIT_SUBCALL_EXIT(uthread, error);
+			if (error) {
 				break;
+			}
 
 			/*
 			 * Finally, close the original fd.
 			 */
 			ca.fd = origfd;
 
+			AUDIT_SUBCALL_ENTER(CLOSE, p, uthread);
 			error = close_nocancel(p, &ca, ival);
-			}
-			break;
+			AUDIT_SUBCALL_EXIT(uthread, error);
+		}
+		break;
 
 		case PSFA_DUP2: {
 			struct dup2_args dup2a;
 
 			dup2a.from = psfa->psfaa_filedes;
-			dup2a.to = psfa->psfaa_openargs.psfao_oflag;
+			dup2a.to = psfa->psfaa_dup2args.psfad_newfiledes;
 
 			/*
 			 * The dup2() system call implementation sets
@@ -1884,18 +2145,67 @@ exec_handle_file_actions(struct image_params *imgp, short psa_flags)
 			 * can ignore that, since if we didn't get the
 			 * fd we wanted, the error will stop us.
 			 */
+			AUDIT_SUBCALL_ENTER(DUP2, p, uthread);
 			error = dup2(p, &dup2a, ival);
+			AUDIT_SUBCALL_EXIT(uthread, error);
+		}
+		break;
+
+		case PSFA_FILEPORT_DUP2: {
+			ipc_port_t port;
+			kern_return_t kr;
+			struct dup2_args dup2a;
+			struct close_nocancel_args ca;
+
+			if (!MACH_PORT_VALID(psfa->psfaa_fileport)) {
+				error = EINVAL;
+				break;
 			}
-			break;
+
+			kr = ipc_object_copyin(get_task_ipcspace(current_task()),
+			    psfa->psfaa_fileport, MACH_MSG_TYPE_COPY_SEND,
+			    (ipc_object_t *) &port, 0, NULL, IPC_KMSG_FLAGS_ALLOW_IMMOVABLE_SEND);
+
+			if (kr != KERN_SUCCESS) {
+				error = EINVAL;
+				break;
+			}
+
+			error = fileport_makefd_internal(p, port, 0, ival);
+
+			if (IPC_PORT_NULL != port) {
+				ipc_port_release_send(port);
+			}
+
+			if (error || ival[0] == psfa->psfaa_dup2args.psfad_newfiledes) {
+				break;
+			}
+
+			dup2a.from = ca.fd = ival[0];
+			dup2a.to = psfa->psfaa_dup2args.psfad_newfiledes;
+			AUDIT_SUBCALL_ENTER(DUP2, p, uthread);
+			error = dup2(p, &dup2a, ival);
+			AUDIT_SUBCALL_EXIT(uthread, error);
+			if (error) {
+				break;
+			}
+
+			AUDIT_SUBCALL_ENTER(CLOSE, p, uthread);
+			error = close_nocancel(p, &ca, ival);
+			AUDIT_SUBCALL_EXIT(uthread, error);
+		}
+		break;
 
 		case PSFA_CLOSE: {
 			struct close_nocancel_args ca;
 
 			ca.fd = psfa->psfaa_filedes;
 
+			AUDIT_SUBCALL_ENTER(CLOSE, p, uthread);
 			error = close_nocancel(p, &ca, ival);
-			}
-			break;
+			AUDIT_SUBCALL_EXIT(uthread, error);
+		}
+		break;
 
 		case PSFA_INHERIT: {
 			struct fcntl_nocancel_args fcntla;
@@ -1909,8 +2219,9 @@ exec_handle_file_actions(struct image_params *imgp, short psa_flags)
 			 */
 			fcntla.fd = psfa->psfaa_filedes;
 			fcntla.cmd = F_GETFD;
-			if ((error = fcntl_nocancel(p, &fcntla, ival)) != 0)
+			if ((error = fcntl_nocancel(p, &fcntla, ival)) != 0) {
 				break;
+			}
 
 			if ((ival[0] & FD_CLOEXEC) == FD_CLOEXEC) {
 				fcntla.fd = psfa->psfaa_filedes;
@@ -1918,9 +2229,40 @@ exec_handle_file_actions(struct image_params *imgp, short psa_flags)
 				fcntla.arg = ival[0] & ~FD_CLOEXEC;
 				error = fcntl_nocancel(p, &fcntla, ival);
 			}
+		}
+		break;
 
-			}
-			break;
+		case PSFA_CHDIR: {
+			/*
+			 * Chdir is different, in that it requires the use of
+			 * a path argument, which is normally copied in from
+			 * user space; because of this, we have to support a
+			 * chdir from kernel space that passes an address space
+			 * context of UIO_SYSSPACE, and casts the address
+			 * argument to a user_addr_t.
+			 */
+			struct nameidata nd;
+
+			AUDIT_SUBCALL_ENTER(CHDIR, p, uthread);
+			NDINIT(&nd, LOOKUP, OP_CHDIR, FOLLOW | AUDITVNPATH1, UIO_SYSSPACE,
+			    CAST_USER_ADDR_T(psfa->psfaa_chdirargs.psfac_path),
+			    imgp->ip_vfs_context);
+
+			error = chdir_internal(p, imgp->ip_vfs_context, &nd, 0);
+			AUDIT_SUBCALL_EXIT(uthread, error);
+		}
+		break;
+
+		case PSFA_FCHDIR: {
+			struct fchdir_args fchdira;
+
+			fchdira.fd = psfa->psfaa_filedes;
+
+			AUDIT_SUBCALL_ENTER(FCHDIR, p, uthread);
+			error = fchdir(p, &fchdira, ival);
+			AUDIT_SUBCALL_EXIT(uthread, error);
+		}
+		break;
 
 		default:
 			error = EINVAL;
@@ -1932,7 +2274,7 @@ exec_handle_file_actions(struct image_params *imgp, short psa_flags)
 		if (error) {
 			if (PSFA_OPEN == psfa->psfaa_type) {
 				DTRACE_PROC1(spawn__open__failure, uintptr_t,
-			            psfa->psfaa_openargs.psfao_path);
+				    psfa->psfaa_openargs.psfao_path);
 			} else {
 				DTRACE_PROC1(spawn__fd__failure, int, psfa->psfaa_filedes);
 			}
@@ -1940,8 +2282,9 @@ exec_handle_file_actions(struct image_params *imgp, short psa_flags)
 		}
 	}
 
-	if (error != 0 || (psa_flags & POSIX_SPAWN_CLOEXEC_DEFAULT) == 0)
-		return (error);
+	if (error != 0 || (psa_flags & POSIX_SPAWN_CLOEXEC_DEFAULT) == 0) {
+		return error;
+	}
 
 	/*
 	 * If POSIX_SPAWN_CLOEXEC_DEFAULT is set, behave (during
@@ -1959,20 +2302,30 @@ exec_handle_file_actions(struct image_params *imgp, short psa_flags)
 
 		switch (psfa->psfaa_type) {
 		case PSFA_DUP2:
-			fd = psfa->psfaa_openargs.psfao_oflag;
-			/*FALLTHROUGH*/
+		case PSFA_FILEPORT_DUP2:
+			fd = psfa->psfaa_dup2args.psfad_newfiledes;
+		/*FALLTHROUGH*/
 		case PSFA_OPEN:
 		case PSFA_INHERIT:
 			*fdflags(p, fd) |= UF_INHERIT;
 			break;
 
 		case PSFA_CLOSE:
+		case PSFA_CHDIR:
+		case PSFA_FCHDIR:
+			/*
+			 * Although PSFA_FCHDIR does have a file descriptor, it is not
+			 * *creating* one, thus we do not automatically mark it for
+			 * inheritance under POSIX_SPAWN_CLOEXEC_DEFAULT. A client that
+			 * wishes it to be inherited should use the PSFA_INHERIT action
+			 * explicitly.
+			 */
 			break;
 		}
 	}
 	proc_fdunlock(p);
 
-	return (0);
+	return 0;
 }
 
 #if CONFIG_MACF
@@ -1985,20 +2338,23 @@ exec_spawnattr_getmacpolicyinfo(const void *macextensions, const char *policynam
 	const struct _posix_spawn_mac_policy_extensions *psmx = macextensions;
 	int i;
 
-	if (psmx == NULL)
+	if (psmx == NULL) {
 		return NULL;
+	}
 
 	for (i = 0; i < psmx->psmx_count; i++) {
 		const _ps_mac_policy_extension_t *extension = &psmx->psmx_extensions[i];
 		if (strncmp(extension->policyname, policyname, sizeof(extension->policyname)) == 0) {
-			if (lenp != NULL)
+			if (lenp != NULL) {
 				*lenp = extension->datalen;
+			}
 			return extension->datap;
 		}
 	}
 
-	if (lenp != NULL)
+	if (lenp != NULL) {
 		*lenp = 0;
+	}
 	return NULL;
 }
 
@@ -2019,8 +2375,9 @@ spawn_copyin_macpolicyinfo(const struct user__posix_spawn_args_desc *px_args, _p
 	}
 
 	MALLOC(psmx, _posix_spawn_mac_policy_extensions_t, px_args->mac_extensions_size, M_TEMP, M_WAITOK);
-	if ((error = copyin(px_args->mac_extensions, psmx, px_args->mac_extensions_size)) != 0)
+	if ((error = copyin(px_args->mac_extensions, psmx, px_args->mac_extensions_size)) != 0) {
 		goto bad;
+	}
 
 	size_t extsize = PS_MAC_EXTENSIONS_SIZE(psmx->psmx_count);
 	if (extsize == 0 || extsize > px_args->mac_extensions_size) {
@@ -2053,8 +2410,9 @@ spawn_copyin_macpolicyinfo(const struct user__posix_spawn_args_desc *px_args, _p
 
 bad:
 	if (psmx != NULL) {
-		for (i = 0; i < copycnt; i++)
+		for (i = 0; i < copycnt; i++) {
 			FREE(psmx->psmx_extensions[i].datap, M_TEMP);
+		}
 		FREE(psmx, M_TEMP);
 	}
 	return error;
@@ -2065,16 +2423,19 @@ spawn_free_macpolicyinfo(_posix_spawn_mac_policy_extensions_t psmx)
 {
 	int i;
 
-	if (psmx == NULL)
+	if (psmx == NULL) {
 		return;
-	for (i = 0; i < psmx->psmx_count; i++)
+	}
+	for (i = 0; i < psmx->psmx_count; i++) {
 		FREE(psmx->psmx_extensions[i].datap, M_TEMP);
+	}
 	FREE(psmx, M_TEMP);
 }
 #endif /* CONFIG_MACF */
 
 #if CONFIG_COALITIONS
-static inline void spawn_coalitions_release_all(coalition_t coal[COALITION_NUM_TYPES])
+static inline void
+spawn_coalitions_release_all(coalition_t coal[COALITION_NUM_TYPES])
 {
 	for (int c = 0; c < COALITION_NUM_TYPES; c++) {
 		if (coal[c]) {
@@ -2086,18 +2447,22 @@ static inline void spawn_coalitions_release_all(coalition_t coal[COALITION_NUM_T
 #endif
 
 #if CONFIG_PERSONAS
-static int spawn_validate_persona(struct _posix_spawn_persona_info *px_persona)
+static int
+spawn_validate_persona(struct _posix_spawn_persona_info *px_persona)
 {
 	int error = 0;
 	struct persona *persona = NULL;
 	int verify = px_persona->pspi_flags & POSIX_SPAWN_PERSONA_FLAGS_VERIFY;
 
-	/*
-	 * TODO: rdar://problem/19981151
-	 * Add entitlement check!
-	 */
-	if (!kauth_cred_issuser(kauth_cred_get()))
+	if (!IOTaskHasEntitlement(current_task(), PERSONA_MGMT_ENTITLEMENT)) {
 		return EPERM;
+	}
+
+	if (px_persona->pspi_flags & POSIX_SPAWN_PERSONA_GROUPS) {
+		if (px_persona->pspi_ngroups > NGROUPS_MAX) {
+			return EINVAL;
+		}
+	}
 
 	persona = persona_lookup(px_persona->pspi_id);
 	if (!persona) {
@@ -2123,7 +2488,7 @@ static int spawn_validate_persona(struct _posix_spawn_persona_info *px_persona)
 			gid_t groups[NGROUPS_MAX];
 
 			if (persona_get_groups(persona, &ngroups, groups,
-					       px_persona->pspi_ngroups) != 0) {
+			    px_persona->pspi_ngroups) != 0) {
 				error = EINVAL;
 				goto out;
 			}
@@ -2145,29 +2510,33 @@ static int spawn_validate_persona(struct _posix_spawn_persona_info *px_persona)
 	}
 
 out:
-	if (persona)
+	if (persona) {
 		persona_put(persona);
+	}
 
 	return error;
 }
 
-static int spawn_persona_adopt(proc_t p, struct _posix_spawn_persona_info *px_persona)
+static int
+spawn_persona_adopt(proc_t p, struct _posix_spawn_persona_info *px_persona)
 {
 	int ret;
 	kauth_cred_t cred;
 	struct persona *persona = NULL;
 	int override = !!(px_persona->pspi_flags & POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE);
 
-	if (!override)
+	if (!override) {
 		return persona_proc_adopt_id(p, px_persona->pspi_id, NULL);
+	}
 
 	/*
 	 * we want to spawn into the given persona, but we want to override
 	 * the kauth with a different UID/GID combo
 	 */
 	persona = persona_lookup(px_persona->pspi_id);
-	if (!persona)
+	if (!persona) {
 		return ESRCH;
+	}
 
 	cred = persona_get_cred(persona);
 	if (!cred) {
@@ -2177,24 +2546,24 @@ static int spawn_persona_adopt(proc_t p, struct _posix_spawn_persona_info *px_pe
 
 	if (px_persona->pspi_flags & POSIX_SPAWN_PERSONA_UID) {
 		cred = kauth_cred_setresuid(cred,
-					    px_persona->pspi_uid,
-					    px_persona->pspi_uid,
-					    px_persona->pspi_uid,
-					    KAUTH_UID_NONE);
+		    px_persona->pspi_uid,
+		    px_persona->pspi_uid,
+		    px_persona->pspi_uid,
+		    KAUTH_UID_NONE);
 	}
 
 	if (px_persona->pspi_flags & POSIX_SPAWN_PERSONA_GID) {
 		cred = kauth_cred_setresgid(cred,
-					    px_persona->pspi_gid,
-					    px_persona->pspi_gid,
-					    px_persona->pspi_gid);
+		    px_persona->pspi_gid,
+		    px_persona->pspi_gid,
+		    px_persona->pspi_gid);
 	}
 
 	if (px_persona->pspi_flags & POSIX_SPAWN_PERSONA_GROUPS) {
 		cred = kauth_cred_setgroups(cred,
-					    px_persona->pspi_groups,
-					    px_persona->pspi_ngroups,
-					    px_persona->pspi_gmuid);
+		    px_persona->pspi_groups,
+		    px_persona->pspi_ngroups,
+		    px_persona->pspi_gmuid);
 	}
 
 	ret = persona_proc_adopt(p, persona, cred);
@@ -2204,6 +2573,134 @@ out:
 	return ret;
 }
 #endif
+
+#if __arm64__
+extern int legacy_footprint_entitlement_mode;
+static inline void
+proc_legacy_footprint_entitled(proc_t p, task_t task, const char *caller)
+{
+#pragma unused(p, caller)
+	boolean_t legacy_footprint_entitled;
+
+	switch (legacy_footprint_entitlement_mode) {
+	case LEGACY_FOOTPRINT_ENTITLEMENT_IGNORE:
+		/* the entitlement is ignored */
+		break;
+	case LEGACY_FOOTPRINT_ENTITLEMENT_IOS11_ACCT:
+		/* the entitlement grants iOS11 legacy accounting */
+		legacy_footprint_entitled = IOTaskHasEntitlement(task,
+		    "com.apple.private.memory.legacy_footprint");
+		if (legacy_footprint_entitled) {
+			task_set_legacy_footprint(task);
+		}
+		break;
+	case LEGACY_FOOTPRINT_ENTITLEMENT_LIMIT_INCREASE:
+		/* the entitlement grants a footprint limit increase */
+		legacy_footprint_entitled = IOTaskHasEntitlement(task,
+		    "com.apple.private.memory.legacy_footprint");
+		if (legacy_footprint_entitled) {
+			task_set_extra_footprint_limit(task);
+		}
+		break;
+	default:
+		break;
+	}
+}
+
+static inline void
+proc_ios13extended_footprint_entitled(proc_t p, task_t task, const char *caller)
+{
+#pragma unused(p, caller)
+	boolean_t ios13extended_footprint_entitled;
+
+	/* the entitlement grants a footprint limit increase */
+	ios13extended_footprint_entitled = IOTaskHasEntitlement(task,
+	    "com.apple.developer.memory.ios13extended_footprint");
+	if (ios13extended_footprint_entitled) {
+		task_set_ios13extended_footprint_limit(task);
+	}
+}
+#endif /* __arm64__ */
+
+/*
+ * Apply a modification on the proc's kauth cred until it converges.
+ *
+ * `update` consumes its argument to return a new kauth cred.
+ */
+static void
+apply_kauth_cred_update(proc_t p,
+    kauth_cred_t (^update)(kauth_cred_t orig_cred))
+{
+	kauth_cred_t my_cred, my_new_cred;
+
+	my_cred = kauth_cred_proc_ref(p);
+	for (;;) {
+		my_new_cred = update(my_cred);
+		if (my_cred == my_new_cred) {
+			kauth_cred_unref(&my_new_cred);
+			break;
+		}
+
+		/* try update cred on proc */
+		proc_ucred_lock(p);
+
+		if (p->p_ucred == my_cred) {
+			/* base pointer didn't change, donate our ref */
+			p->p_ucred = my_new_cred;
+			PROC_UPDATE_CREDS_ONPROC(p);
+			proc_ucred_unlock(p);
+
+			/* drop p->p_ucred reference */
+			kauth_cred_unref(&my_cred);
+			break;
+		}
+
+		/* base pointer changed, retry */
+		my_cred = p->p_ucred;
+		kauth_cred_ref(my_cred);
+		proc_ucred_unlock(p);
+
+		kauth_cred_unref(&my_new_cred);
+	}
+}
+
+static int
+spawn_posix_cred_adopt(proc_t p,
+    struct _posix_spawn_posix_cred_info *px_pcred_info)
+{
+	int error = 0;
+
+	if (px_pcred_info->pspci_flags & POSIX_SPAWN_POSIX_CRED_GID) {
+		struct setgid_args args = {
+			.gid = px_pcred_info->pspci_gid,
+		};
+		error = setgid(p, &args, NULL);
+		if (error) {
+			return error;
+		}
+	}
+
+	if (px_pcred_info->pspci_flags & POSIX_SPAWN_POSIX_CRED_GROUPS) {
+		error = setgroups_internal(p,
+		    px_pcred_info->pspci_ngroups,
+		    px_pcred_info->pspci_groups,
+		    px_pcred_info->pspci_gmuid);
+		if (error) {
+			return error;
+		}
+	}
+
+	if (px_pcred_info->pspci_flags & POSIX_SPAWN_POSIX_CRED_UID) {
+		struct setuid_args args = {
+			.uid = px_pcred_info->pspci_uid,
+		};
+		error = setuid(p, &args, NULL);
+		if (error) {
+			return error;
+		}
+	}
+	return 0;
+}
 
 /*
  * posix_spawn
@@ -2225,6 +2722,7 @@ out:
  *	exec_activate_image:ENAMETOOLONG	Filename too long
  *	exec_activate_image:ENOEXEC	Executable file format error
  *	exec_activate_image:ETXTBSY	Text file busy [misuse of error code]
+ *	exec_activate_image:EAUTH	Image decryption failed
  *	exec_activate_image:EBADEXEC	The executable is corrupt/unknown
  *	exec_activate_image:???
  *	mac_execve_enter:???
@@ -2236,14 +2734,14 @@ out:
 int
 posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 {
-	proc_t p = ap;		/* quiet bogus GCC vfork() warning */
+	proc_t p = ap;          /* quiet bogus GCC vfork() warning */
 	user_addr_t pid = uap->pid;
-	int ival[2];		/* dummy retval for setpgid() */
-	char *bufp = NULL; 
+	int ival[2];            /* dummy retval for setpgid() */
+	char *bufp = NULL;
 	struct image_params *imgp;
 	struct vnode_attr *vap;
 	struct vnode_attr *origvap;
-	struct uthread	*uthread = 0;	/* compiler complains if not set to 0*/
+	struct uthread  *uthread = 0;   /* compiler complains if not set to 0*/
 	int error, sig;
 	int is_64 = IS_64BIT_PROCESS(p);
 	struct vfs_context context;
@@ -2255,8 +2753,7 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 	boolean_t spawn_no_exec = FALSE;
 	boolean_t proc_transit_set = TRUE;
 	boolean_t exec_done = FALSE;
-	int portwatch_count = 0;
-	ipc_port_t * portwatch_ports = NULL;
+	struct exec_port_actions port_actions = { };
 	vm_size_t px_sa_offset = offsetof(struct _posix_spawnattr, psa_ports);
 	task_t old_task = current_task();
 	task_t new_task = NULL;
@@ -2265,9 +2762,10 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 #if CONFIG_PERSONAS
 	struct _posix_spawn_persona_info *px_persona = NULL;
 #endif
+	struct _posix_spawn_posix_cred_info *px_pcred_info = NULL;
 
 	/*
-	 * Allocate a big chunk for locals instead of using stack since these  
+	 * Allocate a big chunk for locals instead of using stack since these
 	 * structures are pretty big.
 	 */
 	MALLOC(bufp, char *, (sizeof(*imgp) + sizeof(*vap) + sizeof(*origvap)), M_TEMP, M_WAITOK | M_ZERO);
@@ -2290,10 +2788,12 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 	imgp->ip_seg = (is_64 ? UIO_USERSPACE64 : UIO_USERSPACE32);
 	imgp->ip_mac_return = 0;
 	imgp->ip_px_persona = NULL;
+	imgp->ip_px_pcred_info = NULL;
 	imgp->ip_cs_error = OS_REASON_NULL;
+	imgp->ip_simulator_binary = IMGPF_SB_DEFAULT;
 
 	if (uap->adesc != USER_ADDR_NULL) {
-		if(is_64) {
+		if (is_64) {
 			error = copyin(uap->adesc, &px_args, sizeof(px_args));
 		} else {
 			struct user32__posix_spawn_args_desc px_args32;
@@ -2316,14 +2816,17 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 			px_args.coal_info = CAST_USER_ADDR_T(px_args32.coal_info);
 			px_args.persona_info_size = px_args32.persona_info_size;
 			px_args.persona_info = CAST_USER_ADDR_T(px_args32.persona_info);
+			px_args.posix_cred_info_size = px_args32.posix_cred_info_size;
+			px_args.posix_cred_info = CAST_USER_ADDR_T(px_args32.posix_cred_info);
 		}
-		if (error)
+		if (error) {
 			goto bad;
+		}
 
 		if (px_args.attr_size != 0) {
-			/* 
-			 * We are not copying the port_actions pointer, 
-			 * because we already have it from px_args. 
+			/*
+			 * We are not copying the port_actions pointer,
+			 * because we already have it from px_args.
 			 * This is a bit fragile: <rdar://problem/16427422>
 			 */
 
@@ -2331,7 +2834,7 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 				goto bad;
 			}
 
-			bzero( (void *)( (unsigned long) &px_sa + px_sa_offset), sizeof(px_sa) - px_sa_offset );  	
+			bzero((void *)((unsigned long) &px_sa + px_sa_offset), sizeof(px_sa) - px_sa_offset );
 
 			imgp->ip_px_sa = &px_sa;
 		}
@@ -2351,9 +2854,10 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 			}
 			imgp->ip_px_sfa = px_sfap;
 
-			if ((error = copyin(px_args.file_actions, px_sfap, 
-							px_args.file_actions_size)) != 0)
+			if ((error = copyin(px_args.file_actions, px_sfap,
+			    px_args.file_actions_size)) != 0) {
 				goto bad;
+			}
 
 			/* Verify that the action count matches the struct size */
 			size_t psfsize = PSF_ACTIONS_SIZE(px_sfap->psfa_act_count);
@@ -2365,22 +2869,23 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 		if (px_args.port_actions_size != 0) {
 			/* Limit port_actions to one page of data */
 			if (px_args.port_actions_size < PS_PORT_ACTIONS_SIZE(1) ||
-				px_args.port_actions_size > PAGE_SIZE) {
+			    px_args.port_actions_size > PAGE_SIZE) {
 				error = EINVAL;
 				goto bad;
 			}
 
-			MALLOC(px_spap, _posix_spawn_port_actions_t, 
-					px_args.port_actions_size, M_TEMP, M_WAITOK);
+			MALLOC(px_spap, _posix_spawn_port_actions_t,
+			    px_args.port_actions_size, M_TEMP, M_WAITOK);
 			if (px_spap == NULL) {
 				error = ENOMEM;
 				goto bad;
 			}
 			imgp->ip_px_spa = px_spap;
 
-			if ((error = copyin(px_args.port_actions, px_spap, 
-							px_args.port_actions_size)) != 0)
+			if ((error = copyin(px_args.port_actions, px_spap,
+			    px_args.port_actions_size)) != 0) {
 				goto bad;
+			}
 
 			/* Verify that the action count matches the struct size */
 			size_t pasize = PS_PORT_ACTIONS_SIZE(px_spap->pspa_count);
@@ -2398,7 +2903,7 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 				goto bad;
 			}
 
-			MALLOC(px_persona, struct _posix_spawn_persona_info *, px_args.persona_info_size, M_TEMP, M_WAITOK|M_ZERO);
+			MALLOC(px_persona, struct _posix_spawn_persona_info *, px_args.persona_info_size, M_TEMP, M_WAITOK | M_ZERO);
 			if (px_persona == NULL) {
 				error = ENOMEM;
 				goto bad;
@@ -2406,16 +2911,52 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 			imgp->ip_px_persona = px_persona;
 
 			if ((error = copyin(px_args.persona_info, px_persona,
-					    px_args.persona_info_size)) != 0)
+			    px_args.persona_info_size)) != 0) {
 				goto bad;
-			if ((error = spawn_validate_persona(px_persona)) != 0)
+			}
+			if ((error = spawn_validate_persona(px_persona)) != 0) {
 				goto bad;
+			}
 		}
 #endif
+		/* copy in the posix cred info */
+		if (px_args.posix_cred_info_size != 0 && px_args.posix_cred_info != 0) {
+			/* for now, we need the exact same struct in user space */
+			if (px_args.posix_cred_info_size != sizeof(*px_pcred_info)) {
+				error = ERANGE;
+				goto bad;
+			}
+
+			if (!kauth_cred_issuser(kauth_cred_get())) {
+				error = EPERM;
+				goto bad;
+			}
+
+			MALLOC(px_pcred_info, struct _posix_spawn_posix_cred_info *,
+			    px_args.posix_cred_info_size, M_TEMP, M_WAITOK | M_ZERO);
+			if (px_pcred_info == NULL) {
+				error = ENOMEM;
+				goto bad;
+			}
+			imgp->ip_px_pcred_info = px_pcred_info;
+
+			if ((error = copyin(px_args.posix_cred_info, px_pcred_info,
+			    px_args.posix_cred_info_size)) != 0) {
+				goto bad;
+			}
+
+			if (px_pcred_info->pspci_flags & POSIX_SPAWN_POSIX_CRED_GROUPS) {
+				if (px_pcred_info->pspci_ngroups > NGROUPS_MAX) {
+					error = EINVAL;
+					goto bad;
+				}
+			}
+		}
 #if CONFIG_MACF
 		if (px_args.mac_extensions_size != 0) {
-			if ((error = spawn_copyin_macpolicyinfo(&px_args, (_posix_spawn_mac_policy_extensions_t *)&imgp->ip_px_smpx)) != 0)
+			if ((error = spawn_copyin_macpolicyinfo(&px_args, (_posix_spawn_mac_policy_extensions_t *)&imgp->ip_px_smpx)) != 0) {
 				goto bad;
+			}
 		}
 #endif /* CONFIG_MACF */
 	}
@@ -2429,8 +2970,15 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 	 * which depends on it.
 	 */
 	if (uthread->uu_flag & UT_VFORK) {
-	    error = EINVAL;
-	    goto bad;
+		error = EINVAL;
+		goto bad;
+	}
+
+	if (imgp->ip_px_sa != NULL) {
+		struct _posix_spawnattr *psa = (struct _posix_spawnattr *) imgp->ip_px_sa;
+		if ((error = exec_validate_spawnattr_policy(psa->psa_apptype)) != 0) {
+			goto bad;
+		}
 	}
 
 	/*
@@ -2440,8 +2988,7 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 	 * which is one of the most expensive things about using fork()
 	 * and execve().
 	 */
-	if (imgp->ip_px_sa == NULL || !(px_sa.psa_flags & POSIX_SPAWN_SETEXEC)){
-
+	if (imgp->ip_px_sa == NULL || !(px_sa.psa_flags & POSIX_SPAWN_SETEXEC)) {
 		/* Set the new task's coalition, if it is requested.  */
 		coalition_t coal[COALITION_NUM_TYPES] = { COALITION_NULL };
 #if CONFIG_COALITIONS
@@ -2450,17 +2997,20 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 		struct _posix_spawn_coalition_info coal_info;
 		int coal_role[COALITION_NUM_TYPES];
 
-		if (imgp->ip_px_sa == NULL || !px_args.coal_info)
+		if (imgp->ip_px_sa == NULL || !px_args.coal_info) {
 			goto do_fork1;
+		}
 
 		memset(&coal_info, 0, sizeof(coal_info));
 
-		if (px_args.coal_info_size > sizeof(coal_info))
+		if (px_args.coal_info_size > sizeof(coal_info)) {
 			px_args.coal_info_size = sizeof(coal_info);
+		}
 		error = copyin(px_args.coal_info,
-			       &coal_info, px_args.coal_info_size);
-		if (error != 0)
+		    &coal_info, px_args.coal_info_size);
+		if (error != 0) {
 			goto bad;
+		}
 
 		ncoals = 0;
 		for (i = 0; i < COALITION_NUM_TYPES; i++) {
@@ -2473,8 +3023,8 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 				 */
 				if (!task_is_in_privileged_coalition(p->task, i)) {
 					coal_dbg("ERROR: %d not in privilegd "
-						 "coalition of type %d",
-						 p->p_pid, i);
+					    "coalition of type %d",
+					    p->p_pid, i);
 					spawn_coalitions_release_all(coal);
 					error = EPERM;
 					goto bad;
@@ -2489,7 +3039,7 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 				coal[i] = coalition_find_and_activate_by_id(cid);
 				if (coal[i] == COALITION_NULL) {
 					coal_dbg("could not find coalition id:%llu "
-						 "(perhaps it has been terminated or reaped)", cid);
+					    "(perhaps it has been terminated or reaped)", cid);
 					/*
 					 * release any other coalition's we
 					 * may have a reference to
@@ -2500,7 +3050,7 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 				}
 				if (coalition_type(coal[i]) != i) {
 					coal_dbg("coalition with id:%lld is not of type:%d"
-						 " (it's type:%d)", cid, i, coalition_type(coal[i]));
+					    " (it's type:%d)", cid, i, coalition_type(coal[i]));
 					error = ESRCH;
 					goto bad;
 				}
@@ -2541,10 +3091,11 @@ do_fork1:
 		/* set the roles of this task within each given coalition */
 		if (error == 0) {
 			kr = coalitions_set_roles(coal, new_task, coal_role);
-			if (kr != KERN_SUCCESS)
+			if (kr != KERN_SUCCESS) {
 				error = EINVAL;
+			}
 			if (kdebug_debugid_enabled(MACHDBG_CODE(DBG_MACH_COALITION,
-				MACH_COALITION_ADOPT))) {
+			    MACH_COALITION_ADOPT))) {
 				for (i = 0; i < COALITION_NUM_TYPES; i++) {
 					if (coal[i] != COALITION_NULL) {
 						/*
@@ -2552,10 +3103,10 @@ do_fork1:
 						 * will get truncated to 32 bits
 						 */
 						KDBG_RELEASE(MACHDBG_CODE(
-							DBG_MACH_COALITION,
-							MACH_COALITION_ADOPT),
-							coalition_id(coal[i]),
-							get_task_uniqueid(new_task));
+							    DBG_MACH_COALITION,
+							    MACH_COALITION_ADOPT),
+						    coalition_id(coal[i]),
+						    get_task_uniqueid(new_task));
 					}
 				}
 			}
@@ -2567,33 +3118,8 @@ do_fork1:
 		if (error != 0) {
 			goto bad;
 		}
-		imgp->ip_flags |= IMGPF_SPAWN;	/* spawn w/o exec */
-		spawn_no_exec = TRUE;		/* used in later tests */
-
-#if CONFIG_PERSONAS
-		/*
-		 * If the parent isn't in a persona (launchd), and
-		 * hasn't specified a new persona for the process,
-		 * then we'll put the process into the system persona
-		 *
-		 * TODO: this will have to be re-worked because as of
-		 *       now, without any launchd adoption, the resulting
-		 *       xpcproxy process will not have sufficient
-		 *       privileges to setuid/gid.
-		 */
-#if 0
-		if (!proc_has_persona(p) && imgp->ip_px_persona == NULL) {
-			MALLOC(px_persona, struct _posix_spawn_persona_info *,
-			       sizeof(*px_persona), M_TEMP, M_WAITOK|M_ZERO);
-			if (px_persona == NULL) {
-				error = ENOMEM;
-				goto bad;
-			}
-			px_persona->pspi_id = persona_get_id(g_system_persona);
-			imgp->ip_px_persona = px_persona;
-		}
-#endif /* 0 */
-#endif /* CONFIG_PERSONAS */
+		imgp->ip_flags |= IMGPF_SPAWN;  /* spawn w/o exec */
+		spawn_no_exec = TRUE;           /* used in later tests */
 	} else {
 		/*
 		 * For execve case, create a new task and thread
@@ -2621,12 +3147,12 @@ do_fork1:
 		 * transition from proc->task, since it will modify old_task.
 		 */
 		imgp->ip_new_thread = fork_create_child(old_task,
-												NULL,
-												p,
-												FALSE,
-												p->p_flag & P_LP64,
-												task_get_64bit_data(old_task),
-												TRUE);
+		    NULL,
+		    p,
+		    FALSE,
+		    p->p_flag & P_LP64,
+		    task_get_64bit_data(old_task),
+		    TRUE);
 		/* task and thread ref returned by fork_create_child */
 		if (imgp->ip_new_thread == NULL) {
 			error = ENOMEM;
@@ -2639,7 +3165,7 @@ do_fork1:
 
 	if (spawn_no_exec) {
 		p = (proc_t)get_bsdthreadtask_info(imgp->ip_new_thread);
-		
+
 		/*
 		 * We had to wait until this point before firing the
 		 * proc:::create probe, otherwise p would not point to the
@@ -2650,7 +3176,7 @@ do_fork1:
 	assert(p != NULL);
 
 	context.vc_thread = imgp->ip_new_thread;
-	context.vc_ucred = p->p_ucred;	/* XXX must NOT be kauth_cred_get() */
+	context.vc_ucred = p->p_ucred;  /* XXX must NOT be kauth_cred_get() */
 
 	/*
 	 * Post fdcopy(), pre exec_handle_sugid() - this is where we want
@@ -2665,60 +3191,47 @@ do_fork1:
 		 * The POSIX_SPAWN_CLOEXEC_DEFAULT flag
 		 * is handled in exec_handle_file_actions().
 		 */
-		if ((error = exec_handle_file_actions(imgp,
-		    imgp->ip_px_sa != NULL ? px_sa.psa_flags : 0)) != 0)
+#if CONFIG_AUDIT
+		/*
+		 * The file actions auditing can overwrite the upath of
+		 * AUE_POSIX_SPAWN audit record.  Save the audit record.
+		 */
+		struct kaudit_record *save_uu_ar = uthread->uu_ar;
+		uthread->uu_ar = NULL;
+#endif
+		error = exec_handle_file_actions(imgp,
+		    imgp->ip_px_sa != NULL ? px_sa.psa_flags : 0);
+#if CONFIG_AUDIT
+		/* Restore the AUE_POSIX_SPAWN audit record. */
+		uthread->uu_ar = save_uu_ar;
+#endif
+		if (error != 0) {
 			goto bad;
+		}
 	}
 
 	/* Has spawn port actions? */
 	if (imgp->ip_px_spa != NULL) {
-		boolean_t is_adaptive = FALSE;
-		boolean_t portwatch_present = FALSE;
-
-		/* Will this process become adaptive? The apptype isn't ready yet, so we can't look there. */
-		if (imgp->ip_px_sa != NULL && px_sa.psa_apptype == POSIX_SPAWN_PROC_TYPE_DAEMON_ADAPTIVE)
-			is_adaptive = TRUE;
-
+#if CONFIG_AUDIT
 		/*
-		 * portwatch only:
-		 * Allocate a place to store the ports we want to bind to the new task
-		 * We can't bind them until after the apptype is set.
+		 * Do the same for the port actions as we did for the file
+		 * actions.  Save the AUE_POSIX_SPAWN audit record.
 		 */
-		if (px_spap->pspa_count != 0 && is_adaptive) {
-			portwatch_count = px_spap->pspa_count;
-			MALLOC(portwatch_ports, ipc_port_t *, (sizeof(ipc_port_t) * portwatch_count), M_TEMP, M_WAITOK | M_ZERO);
-		} else {
-			portwatch_ports = NULL;
-		}
-
-		if ((error = exec_handle_port_actions(imgp, &portwatch_present, portwatch_ports)) != 0)
+		struct kaudit_record *save_uu_ar = uthread->uu_ar;
+		uthread->uu_ar = NULL;
+#endif
+		error = exec_handle_port_actions(imgp, &port_actions);
+#if CONFIG_AUDIT
+		/* Restore the AUE_POSIX_SPAWN audit record. */
+		uthread->uu_ar = save_uu_ar;
+#endif
+		if (error != 0) {
 			goto bad;
-
-		if (portwatch_present == FALSE && portwatch_ports != NULL) {
-			FREE(portwatch_ports, M_TEMP);
-			portwatch_ports = NULL;
-			portwatch_count = 0;
 		}
 	}
 
 	/* Has spawn attr? */
 	if (imgp->ip_px_sa != NULL) {
-		/*
-		 * Set the process group ID of the child process; this has
-		 * to happen before the image activation.
-		 */
-		if (px_sa.psa_flags & POSIX_SPAWN_SETPGROUP) {
-			struct setpgid_args spga;
-			spga.pid = p->p_pid;
-			spga.pgid = px_sa.psa_pgroup;
-			/*
-			 * Effectively, call setpgid() system call; works
-			 * because there are no pointer arguments.
-			 */
-			if((error = setpgid(p, &spga, ival)) != 0)
-				goto bad;
-		}
-
 		/*
 		 * Reset UID/GID to parent's RUID/RGID; This works only
 		 * because the operation occurs *after* the vfork() and
@@ -2732,35 +3245,33 @@ do_fork1:
 		 * proc's ucred lock. This prevents others from accessing
 		 * a garbage credential.
 		 */
-		while (px_sa.psa_flags & POSIX_SPAWN_RESETIDS) {
-			kauth_cred_t my_cred = kauth_cred_proc_ref(p);
-			kauth_cred_t my_new_cred = kauth_cred_setuidgid(my_cred, kauth_cred_getruid(my_cred), kauth_cred_getrgid(my_cred));
+		if (px_sa.psa_flags & POSIX_SPAWN_RESETIDS) {
+			apply_kauth_cred_update(p, ^kauth_cred_t (kauth_cred_t my_cred){
+				return kauth_cred_setuidgid(my_cred,
+				kauth_cred_getruid(my_cred),
+				kauth_cred_getrgid(my_cred));
+			});
+		}
 
-			if (my_cred == my_new_cred) {
-				kauth_cred_unref(&my_cred);
-				break;
+		if (imgp->ip_px_pcred_info) {
+			if (!spawn_no_exec) {
+				error = ENOTSUP;
+				goto bad;
 			}
 
-			/* update cred on proc */
-			proc_ucred_lock(p);
-
-			if (p->p_ucred != my_cred) {
-				proc_ucred_unlock(p);
-				kauth_cred_unref(&my_new_cred);
-				continue;
+			error = spawn_posix_cred_adopt(p, imgp->ip_px_pcred_info);
+			if (error != 0) {
+				goto bad;
 			}
-
-			/* donate cred reference on my_new_cred to p->p_ucred */
-			p->p_ucred = my_new_cred;
-			PROC_UPDATE_CREDS_ONPROC(p);
-			proc_ucred_unlock(p);
-
-			/* drop additional reference that was taken on the previous cred */
-			kauth_cred_unref(&my_cred);
 		}
 
 #if CONFIG_PERSONAS
-		if (spawn_no_exec && imgp->ip_px_persona != NULL) {
+		if (imgp->ip_px_persona != NULL) {
+			if (!spawn_no_exec) {
+				error = ENOTSUP;
+				goto bad;
+			}
+
 			/*
 			 * If we were asked to spawn a process into a new persona,
 			 * do the credential switch now (which may override the UID/GID
@@ -2770,8 +3281,9 @@ do_fork1:
 			 * being executed.
 			 */
 			error = spawn_persona_adopt(p, imgp->ip_px_persona);
-			if (error != 0)
+			if (error != 0) {
 				goto bad;
+			}
 		}
 #endif /* CONFIG_PERSONAS */
 #if !SECURE_KERNEL
@@ -2785,20 +3297,30 @@ do_fork1:
 		 * useful or necessary to disable ASLR on a per-process
 		 * basis for unit testing and debugging.
 		 */
-		if (px_sa.psa_flags & _POSIX_SPAWN_DISABLE_ASLR)
+		if (px_sa.psa_flags & _POSIX_SPAWN_DISABLE_ASLR) {
 			OSBitOrAtomic(P_DISABLE_ASLR, &p->p_flag);
+		}
 #endif /* !SECURE_KERNEL */
 
 		/* Randomize high bits of ASLR slide */
-		if (px_sa.psa_flags & _POSIX_SPAWN_HIGH_BITS_ASLR)
+		if (px_sa.psa_flags & _POSIX_SPAWN_HIGH_BITS_ASLR) {
 			imgp->ip_flags |= IMGPF_HIGH_BITS_ASLR;
+		}
 
+#if !SECURE_KERNEL
 		/*
 		 * Forcibly disallow execution from data pages for the spawned process
 		 * even if it would otherwise be permitted by the architecture default.
 		 */
-		if (px_sa.psa_flags & _POSIX_SPAWN_ALLOW_DATA_EXEC)
+		if (px_sa.psa_flags & _POSIX_SPAWN_ALLOW_DATA_EXEC) {
 			imgp->ip_flags |= IMGPF_ALLOW_DATA_EXEC;
+		}
+#endif /* !SECURE_KERNEL */
+
+		if ((px_sa.psa_apptype & POSIX_SPAWN_PROC_TYPE_MASK) ==
+		    POSIX_SPAWN_PROC_TYPE_DRIVER) {
+			imgp->ip_flags |= IMGPF_DRIVER;
+		}
 	}
 
 	/*
@@ -2806,10 +3328,11 @@ do_fork1:
 	 * _POSIX_SPAWN_DISABLE_ASLR attribute was found above or if
 	 * P_DISABLE_ASLR was inherited from the parent process.
 	 */
-	if (p->p_flag & P_DISABLE_ASLR)
+	if (p->p_flag & P_DISABLE_ASLR) {
 		imgp->ip_flags |= IMGPF_DISABLE_ASLR;
+	}
 
-	/* 
+	/*
 	 * Clear transition flag so we won't hang if exec_activate_image() causes
 	 * an automount (and launchd does a proc sysctl to service it).
 	 *
@@ -2820,11 +3343,12 @@ do_fork1:
 		proc_transit_set = 0;
 	}
 
-#if MAC_SPAWN	/* XXX */
+#if MAC_SPAWN   /* XXX */
 	if (uap->mac_p != USER_ADDR_NULL) {
 		error = mac_execve_enter(uap->mac_p, imgp);
-		if (error)
+		if (error) {
 			goto bad;
+		}
 	}
 #endif
 
@@ -2832,7 +3356,11 @@ do_fork1:
 	 * Activate the image
 	 */
 	error = exec_activate_image(imgp);
-	
+#if defined(HAS_APPLE_PAC)
+	ml_task_set_disable_user_jop(new_task, imgp->ip_flags & IMGPF_NOJOP ? TRUE : FALSE);
+	ml_thread_set_disable_user_jop(imgp->ip_new_thread, imgp->ip_flags & IMGPF_NOJOP ? TRUE : FALSE);
+#endif
+
 	if (error == 0 && !spawn_no_exec) {
 		p = proc_exec_switch_task(p, old_task, new_task, imgp->ip_new_thread);
 		/* proc ref returned */
@@ -2856,26 +3384,53 @@ do_fork1:
 		error = ENOEXEC;
 	}
 
-	/*
-	 * If we have a spawn attr, and it contains signal related flags,
-	 * the we need to process them in the "context" of the new child
-	 * process, so we have to process it following image activation,
-	 * prior to making the thread runnable in user space.  This is
-	 * necessitated by some signal information being per-thread rather
-	 * than per-process, and we don't have the new allocation in hand
-	 * until after the image is activated.
-	 */
 	if (!error && imgp->ip_px_sa != NULL) {
 		thread_t child_thread = imgp->ip_new_thread;
 		uthread_t child_uthread = get_bsdthread_info(child_thread);
+
+		/*
+		 * Because of POSIX_SPAWN_SETEXEC, we need to handle this after image
+		 * activation, else when image activation fails (before the point of no
+		 * return) would leave the parent process in a modified state.
+		 */
+		if (px_sa.psa_flags & POSIX_SPAWN_SETPGROUP) {
+			struct setpgid_args spga;
+			spga.pid = p->p_pid;
+			spga.pgid = px_sa.psa_pgroup;
+			/*
+			 * Effectively, call setpgid() system call; works
+			 * because there are no pointer arguments.
+			 */
+			if ((error = setpgid(p, &spga, ival)) != 0) {
+				goto bad;
+			}
+		}
+
+		if (px_sa.psa_flags & POSIX_SPAWN_SETSID) {
+			error = setsid_internal(p);
+			if (error != 0) {
+				goto bad;
+			}
+		}
+
+		/*
+		 * If we have a spawn attr, and it contains signal related flags,
+		 * the we need to process them in the "context" of the new child
+		 * process, so we have to process it following image activation,
+		 * prior to making the thread runnable in user space.  This is
+		 * necessitated by some signal information being per-thread rather
+		 * than per-process, and we don't have the new allocation in hand
+		 * until after the image is activated.
+		 */
 
 		/*
 		 * Mask a list of signals, instead of them being unmasked, if
 		 * they were unmasked in the parent; note that some signals
 		 * are not maskable.
 		 */
-		if (px_sa.psa_flags & POSIX_SPAWN_SETSIGMASK)
+		if (px_sa.psa_flags & POSIX_SPAWN_SETSIGMASK) {
 			child_uthread->uu_sigmask = (px_sa.psa_sigmask & ~sigcantmask);
+		}
 		/*
 		 * Default a list of signals instead of ignoring them, if
 		 * they were ignored in the parent.  Note that we pass
@@ -2888,9 +3443,10 @@ do_fork1:
 			vec.sa_tramp = 0;
 			vec.sa_mask = 0;
 			vec.sa_flags = 0;
-			for (sig = 1; sig < NSIG; sig++)
-				if (px_sa.psa_sigdefault & (1 << (sig-1))) {
+			for (sig = 1; sig < NSIG; sig++) {
+				if (px_sa.psa_sigdefault & (1 << (sig - 1))) {
 					error = setsigvec(p, child_thread, sig, &vec, spawn_no_exec);
+				}
 			}
 		}
 
@@ -2908,10 +3464,19 @@ do_fork1:
 			 * whomever is turning it on could just as easily choose not to do so.
 			 */
 			error = proc_set_task_ruse_cpu(p->task,
-					TASK_POLICY_RESOURCE_ATTRIBUTE_NOTIFY_EXC,
-					px_sa.psa_cpumonitor_percent,
-					px_sa.psa_cpumonitor_interval * NSEC_PER_SEC,
-					0, TRUE);
+			    TASK_POLICY_RESOURCE_ATTRIBUTE_NOTIFY_EXC,
+			    px_sa.psa_cpumonitor_percent,
+			    px_sa.psa_cpumonitor_interval * NSEC_PER_SEC,
+			    0, TRUE);
+		}
+
+
+		if (px_pcred_info &&
+		    (px_pcred_info->pspci_flags & POSIX_SPAWN_POSIX_CRED_LOGIN)) {
+			/*
+			 * setlogin() must happen after setsid()
+			 */
+			setlogin_internal(p, px_pcred_info->pspci_login);
 		}
 	}
 
@@ -2920,30 +3485,37 @@ bad:
 	if (error == 0) {
 		/* reset delay idle sleep status if set */
 #if !CONFIG_EMBEDDED
-		if ((p->p_flag & P_DELAYIDLESLEEP) == P_DELAYIDLESLEEP)
+		if ((p->p_flag & P_DELAYIDLESLEEP) == P_DELAYIDLESLEEP) {
 			OSBitAndAtomic(~((uint32_t)P_DELAYIDLESLEEP), &p->p_flag);
+		}
 #endif /* !CONFIG_EMBEDDED */
 		/* upon  successful spawn, re/set the proc control state */
 		if (imgp->ip_px_sa != NULL) {
 			switch (px_sa.psa_pcontrol) {
-				case POSIX_SPAWN_PCONTROL_THROTTLE:
-					p->p_pcaction = P_PCTHROTTLE;
-					break;
-				case POSIX_SPAWN_PCONTROL_SUSPEND:
-					p->p_pcaction = P_PCSUSP;
-					break;
-				case POSIX_SPAWN_PCONTROL_KILL:
-					p->p_pcaction = P_PCKILL;
-					break;
-				case POSIX_SPAWN_PCONTROL_NONE:
-				default:
-					p->p_pcaction = 0;
-					break;
-			};
+			case POSIX_SPAWN_PCONTROL_THROTTLE:
+				p->p_pcaction = P_PCTHROTTLE;
+				break;
+			case POSIX_SPAWN_PCONTROL_SUSPEND:
+				p->p_pcaction = P_PCSUSP;
+				break;
+			case POSIX_SPAWN_PCONTROL_KILL:
+				p->p_pcaction = P_PCKILL;
+				break;
+			case POSIX_SPAWN_PCONTROL_NONE:
+			default:
+				p->p_pcaction = 0;
+				break;
+			}
+			;
 		}
 		exec_resettextvp(p, imgp);
-		
+
 #if CONFIG_MEMORYSTATUS
+		/* Set jetsam priority for DriverKit processes */
+		if (px_sa.psa_apptype == POSIX_SPAWN_PROC_TYPE_DRIVER) {
+			px_sa.psa_priority = JETSAM_PRIORITY_DRIVER_APPLE;
+		}
+
 		/* Has jetsam attributes? */
 		if (imgp->ip_px_sa != NULL && (px_sa.psa_jetsam_flags & POSIX_SPAWN_JETSAM_SET)) {
 			/*
@@ -2954,23 +3526,48 @@ bad:
 			 * we attempt to mimic previous behavior by forcing the BG limit data into the
 			 * inactive/non-fatal mode and force the active slots to hold system_wide/fatal mode.
 			 */
-			if (px_sa.psa_jetsam_flags & POSIX_SPAWN_JETSAM_HIWATER_BACKGROUND) {
-				memorystatus_update(p, px_sa.psa_priority, 0,
-					    (px_sa.psa_jetsam_flags & POSIX_SPAWN_JETSAM_USE_EFFECTIVE_PRIORITY),
-					    TRUE,
-					    -1, TRUE,
-					    px_sa.psa_memlimit_inactive, FALSE);
-			} else {
-				memorystatus_update(p, px_sa.psa_priority, 0,
-					    (px_sa.psa_jetsam_flags & POSIX_SPAWN_JETSAM_USE_EFFECTIVE_PRIORITY),
-					    TRUE,
-					    px_sa.psa_memlimit_active,
-					    (px_sa.psa_jetsam_flags & POSIX_SPAWN_JETSAM_MEMLIMIT_ACTIVE_FATAL),
-					    px_sa.psa_memlimit_inactive,
-					    (px_sa.psa_jetsam_flags & POSIX_SPAWN_JETSAM_MEMLIMIT_INACTIVE_FATAL));
-			}
 
+			if (px_sa.psa_jetsam_flags & POSIX_SPAWN_JETSAM_HIWATER_BACKGROUND) {
+				memorystatus_update(p, px_sa.psa_priority, 0, FALSE, /* assertion priority */
+				    (px_sa.psa_jetsam_flags & POSIX_SPAWN_JETSAM_USE_EFFECTIVE_PRIORITY),
+				    TRUE,
+				    -1, TRUE,
+				    px_sa.psa_memlimit_inactive, FALSE);
+			} else {
+				memorystatus_update(p, px_sa.psa_priority, 0, FALSE, /* assertion priority */
+				    (px_sa.psa_jetsam_flags & POSIX_SPAWN_JETSAM_USE_EFFECTIVE_PRIORITY),
+				    TRUE,
+				    px_sa.psa_memlimit_active,
+				    (px_sa.psa_jetsam_flags & POSIX_SPAWN_JETSAM_MEMLIMIT_ACTIVE_FATAL),
+				    px_sa.psa_memlimit_inactive,
+				    (px_sa.psa_jetsam_flags & POSIX_SPAWN_JETSAM_MEMLIMIT_INACTIVE_FATAL));
+			}
 		}
+
+		/* Has jetsam relaunch behavior? */
+		if (imgp->ip_px_sa != NULL && (px_sa.psa_jetsam_flags & POSIX_SPAWN_JETSAM_RELAUNCH_BEHAVIOR_MASK)) {
+			/*
+			 * Launchd has passed in data indicating the behavior of this process in response to jetsam.
+			 * This data would be used by the jetsam subsystem to determine the position and protection
+			 * offered to this process on dirty -> clean transitions.
+			 */
+			int relaunch_flags = P_MEMSTAT_RELAUNCH_UNKNOWN;
+			switch (px_sa.psa_jetsam_flags & POSIX_SPAWN_JETSAM_RELAUNCH_BEHAVIOR_MASK) {
+			case POSIX_SPAWN_JETSAM_RELAUNCH_BEHAVIOR_LOW:
+				relaunch_flags = P_MEMSTAT_RELAUNCH_LOW;
+				break;
+			case POSIX_SPAWN_JETSAM_RELAUNCH_BEHAVIOR_MED:
+				relaunch_flags = P_MEMSTAT_RELAUNCH_MED;
+				break;
+			case POSIX_SPAWN_JETSAM_RELAUNCH_BEHAVIOR_HIGH:
+				relaunch_flags = P_MEMSTAT_RELAUNCH_HIGH;
+				break;
+			default:
+				break;
+			}
+			memorystatus_relaunch_flags_update(p, relaunch_flags);
+		}
+
 #endif /* CONFIG_MEMORYSTATUS */
 		if (imgp->ip_px_sa != NULL && px_sa.psa_thread_limit > 0) {
 			task_set_thread_limit(new_task, (uint16_t)px_sa.psa_thread_limit);
@@ -2986,8 +3583,9 @@ bad:
 	 * before check_for_signature(), which uses psignal.
 	 */
 	if (spawn_no_exec) {
-		if (proc_transit_set)
+		if (proc_transit_set) {
 			proc_transend(p, 0);
+		}
 
 		/*
 		 * Drop the signal lock on the child which was taken on our
@@ -3001,8 +3599,9 @@ bad:
 	}
 
 	/* flag exec has occurred, notify only if it has not failed due to FP Key error */
-	if (!error && ((p->p_lflag & P_LTERM_DECRYPTFAIL) == 0))
+	if (!error && ((p->p_lflag & P_LTERM_DECRYPTFAIL) == 0)) {
 		proc_knote(p, NOTE_EXEC);
+	}
 
 
 	if (error == 0) {
@@ -3018,11 +3617,35 @@ bad:
 			task_bank_init(new_task);
 			proc_transend(p, 0);
 		}
+
+#if __arm64__
+		proc_legacy_footprint_entitled(p, new_task, __FUNCTION__);
+		proc_ios13extended_footprint_entitled(p, new_task, __FUNCTION__);
+#endif /* __arm64__ */
+
+#if __has_feature(ptrauth_calls)
+		task_set_pac_exception_fatal_flag(new_task);
+#endif /* __has_feature(ptrauth_calls) */
 	}
 
 	/* Inherit task role from old task to new task for exec */
 	if (error == 0 && !spawn_no_exec) {
 		proc_inherit_task_role(new_task, old_task);
+	}
+
+#if CONFIG_ARCADE
+	if (error == 0) {
+		/*
+		 * Check to see if we need to trigger an arcade upcall AST now
+		 * that the vnode has been reset on the task.
+		 */
+		arcade_prepare(new_task, imgp->ip_new_thread);
+	}
+#endif /* CONFIG_ARCADE */
+
+	/* Clear the initial wait on the thread before handling spawn policy */
+	if (imgp && imgp->ip_new_thread) {
+		task_clear_return_wait(get_threadtask(imgp->ip_new_thread), TCRW_CLEAR_INITIAL_WAIT);
 	}
 
 	/*
@@ -3037,8 +3660,13 @@ bad:
 	if (error == 0 && imgp->ip_px_sa != NULL) {
 		struct _posix_spawnattr *psa = (struct _posix_spawnattr *) imgp->ip_px_sa;
 
-		exec_handle_spawnattr_policy(p, psa->psa_apptype, psa->psa_qos_clamp, psa->psa_darwin_role,
-		                              portwatch_ports, portwatch_count);
+		error = exec_handle_spawnattr_policy(p, imgp->ip_new_thread, psa->psa_apptype, psa->psa_qos_clamp,
+		    psa->psa_darwin_role, &port_actions);
+	}
+
+	/* Transfer the turnstile watchport boost to new task if in exec */
+	if (error == 0 && !spawn_no_exec) {
+		task_transfer_turnstile_watchports(old_task, new_task, imgp->ip_new_thread);
 	}
 
 	/*
@@ -3064,6 +3692,7 @@ bad:
 		 */
 		if (mac_proc_check_map_anon(p, 0, 0, 0, MAP_JIT, NULL) == 0) {
 			vm_map_set_jumbo(get_task_map(new_task));
+			vm_map_set_jit_entitled(get_task_map(new_task));
 		}
 #endif /* CONFIG_MACF */
 	}
@@ -3072,16 +3701,8 @@ bad:
 	 * Release any ports we kept around for binding to the new task
 	 * We need to release the rights even if the posix_spawn has failed.
 	 */
-	if (portwatch_ports != NULL) {
-		for (int i = 0; i < portwatch_count; i++) {
-			ipc_port_t port = NULL;
-			if ((port = portwatch_ports[i]) != NULL) {
-				ipc_port_release_send(port);
-			}
-		}
-		FREE(portwatch_ports, M_TEMP);
-		portwatch_ports = NULL;
-		portwatch_count = 0;
+	if (imgp->ip_px_spa != NULL) {
+		exec_port_actions_destroy(&port_actions);
 	}
 
 	/*
@@ -3101,39 +3722,56 @@ bad:
 			psignal_vfork(p, p->task, imgp->ip_new_thread, SIGTRAP);
 		}
 
-		if (error == 0 && !spawn_no_exec)
-			KDBG(BSDDBG_CODE(DBG_BSD_PROC,BSD_PROC_EXEC),
-			     p->p_pid);
+		if (error == 0 && !spawn_no_exec) {
+			KDBG(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXEC),
+			    p->p_pid);
+		}
 	}
 
 
 	if (imgp != NULL) {
-		if (imgp->ip_vp)
+		if (imgp->ip_vp) {
 			vnode_put(imgp->ip_vp);
-		if (imgp->ip_scriptvp)
+		}
+		if (imgp->ip_scriptvp) {
 			vnode_put(imgp->ip_scriptvp);
-		if (imgp->ip_strings)
+		}
+		if (imgp->ip_strings) {
 			execargs_free(imgp);
-		if (imgp->ip_px_sfa != NULL)
+		}
+		if (imgp->ip_px_sfa != NULL) {
 			FREE(imgp->ip_px_sfa, M_TEMP);
-		if (imgp->ip_px_spa != NULL)
+		}
+		if (imgp->ip_px_spa != NULL) {
 			FREE(imgp->ip_px_spa, M_TEMP);
+		}
 #if CONFIG_PERSONAS
-		if (imgp->ip_px_persona != NULL)
+		if (imgp->ip_px_persona != NULL) {
 			FREE(imgp->ip_px_persona, M_TEMP);
+		}
 #endif
+		if (imgp->ip_px_pcred_info != NULL) {
+			FREE(imgp->ip_px_pcred_info, M_TEMP);
+		}
 #if CONFIG_MACF
-		if (imgp->ip_px_smpx != NULL)
+		if (imgp->ip_px_smpx != NULL) {
 			spawn_free_macpolicyinfo(imgp->ip_px_smpx);
-		if (imgp->ip_execlabelp)
+		}
+		if (imgp->ip_execlabelp) {
 			mac_cred_label_free(imgp->ip_execlabelp);
-		if (imgp->ip_scriptlabelp)
+		}
+		if (imgp->ip_scriptlabelp) {
 			mac_vnode_label_free(imgp->ip_scriptlabelp);
+		}
 		if (imgp->ip_cs_error != OS_REASON_NULL) {
 			os_reason_free(imgp->ip_cs_error);
 			imgp->ip_cs_error = OS_REASON_NULL;
 		}
 #endif
+		if (imgp->ip_sc_port != NULL) {
+			ipc_port_release_send(imgp->ip_sc_port);
+			imgp->ip_sc_port = NULL;
+		}
 	}
 
 #if CONFIG_DTRACE
@@ -3207,8 +3845,15 @@ bad:
 		/*
 		 * If the parent wants the pid, copy it out
 		 */
-		if (pid != USER_ADDR_NULL)
-			(void)suword(pid, p->p_pid);
+		if (pid != USER_ADDR_NULL) {
+			_Static_assert(sizeof(p->p_pid) == 4, "posix_spawn() assumes a 32-bit pid_t");
+			bool aligned = (pid & 3) == 0;
+			if (aligned) {
+				(void)copyout_atomic32(p->p_pid, pid);
+			} else {
+				(void)suword(pid, p->p_pid);
+			}
+		}
 		retval[0] = error;
 
 		/*
@@ -3245,7 +3890,7 @@ bad:
 	/* Release the thread ref returned by fork_create_child/fork1 */
 	if (imgp != NULL && imgp->ip_new_thread) {
 		/* wake up the new thread */
-		task_clear_return_wait(get_threadtask(imgp->ip_new_thread));
+		task_clear_return_wait(get_threadtask(imgp->ip_new_thread), TCRW_CLEAR_FINAL_WAIT);
 		thread_deallocate(imgp->ip_new_thread);
 		imgp->ip_new_thread = NULL;
 	}
@@ -3267,8 +3912,8 @@ bad:
 	if (inherit != NULL) {
 		ipc_importance_release(inherit);
 	}
-	
-	return(error);
+
+	return error;
 }
 
 /*
@@ -3344,6 +3989,7 @@ proc_exec_switch_task(proc_t p, task_t old_task, task_t new_task, thread_t new_t
 			/* Clear dispatchqueue and workloop ast offset */
 			p->p_dispatchqueue_offset = 0;
 			p->p_dispatchqueue_serialno_offset = 0;
+			p->p_dispatchqueue_label_offset = 0;
 			p->p_return_to_kernel_offset = 0;
 
 			/* Copy the signal state, dtrace state and set bsd ast on new thread */
@@ -3433,7 +4079,7 @@ execve(proc_t p, struct execve_args *uap, int32_t *retval)
 	muap.mac_p = USER_ADDR_NULL;
 	err = __mac_execve(p, &muap, retval);
 
-	return(err);
+	return err;
 }
 
 /*
@@ -3465,14 +4111,14 @@ execve(proc_t p, struct execve_args *uap, int32_t *retval)
 int
 __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 {
-	char *bufp = NULL; 
+	char *bufp = NULL;
 	struct image_params *imgp;
 	struct vnode_attr *vap;
 	struct vnode_attr *origvap;
 	int error;
 	int is_64 = IS_64BIT_PROCESS(p);
 	struct vfs_context context;
-	struct uthread	*uthread;
+	struct uthread  *uthread;
 	task_t old_task = current_task();
 	task_t new_task = NULL;
 	boolean_t should_release_proc_ref = FALSE;
@@ -3481,9 +4127,9 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 	void *inherit = NULL;
 
 	context.vc_thread = current_thread();
-	context.vc_ucred = kauth_cred_proc_ref(p);	/* XXX must NOT be kauth_cred_get() */
+	context.vc_ucred = kauth_cred_proc_ref(p);      /* XXX must NOT be kauth_cred_get() */
 
-	/* Allocate a big chunk for locals instead of using stack since these  
+	/* Allocate a big chunk for locals instead of using stack since these
 	 * structures a pretty big.
 	 */
 	MALLOC(bufp, char *, (sizeof(*imgp) + sizeof(*vap) + sizeof(*origvap)), M_TEMP, M_WAITOK | M_ZERO);
@@ -3494,7 +4140,7 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 	}
 	vap = (struct vnode_attr *) (bufp + sizeof(*imgp));
 	origvap = (struct vnode_attr *) (bufp + sizeof(*imgp) + sizeof(*vap));
-	
+
 	/* Initialize the common data in the image_params structure */
 	imgp->ip_user_fname = uap->fname;
 	imgp->ip_user_argv = uap->argp;
@@ -3506,6 +4152,7 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 	imgp->ip_seg = (is_64 ? UIO_USERSPACE64 : UIO_USERSPACE32);
 	imgp->ip_mac_return = 0;
 	imgp->ip_cs_error = OS_REASON_NULL;
+	imgp->ip_simulator_binary = IMGPF_SB_DEFAULT;
 
 #if CONFIG_MACF
 	if (uap->mac_p != USER_ADDR_NULL) {
@@ -3549,12 +4196,12 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 		 * transition from proc->task, since it will modify old_task.
 		 */
 		imgp->ip_new_thread = fork_create_child(old_task,
-												NULL,
-												p,
-												FALSE,
-												p->p_flag & P_LP64,
-												task_get_64bit_data(old_task),
-												TRUE);
+		    NULL,
+		    p,
+		    FALSE,
+		    p->p_flag & P_LP64,
+		    task_get_64bit_data(old_task),
+		    TRUE);
 		/* task and thread ref returned by fork_create_child */
 		if (imgp->ip_new_thread == NULL) {
 			error = ENOMEM;
@@ -3574,6 +4221,10 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 		 * for vfexec.
 		 */
 		new_task = get_threadtask(imgp->ip_new_thread);
+#if defined(HAS_APPLE_PAC)
+		ml_task_set_disable_user_jop(new_task, imgp->ip_flags & IMGPF_NOJOP ? TRUE : FALSE);
+		ml_thread_set_disable_user_jop(imgp->ip_new_thread, imgp->ip_flags & IMGPF_NOJOP ? TRUE : FALSE);
+#endif
 	}
 
 	if (!error && !in_vfexec) {
@@ -3592,10 +4243,11 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 	}
 
 	kauth_cred_unref(&context.vc_ucred);
-	
+
 	/* Image not claimed by any activator? */
-	if (error == -1)
+	if (error == -1) {
 		error = ENOEXEC;
+	}
 
 	if (!error) {
 		exec_done = TRUE;
@@ -3606,20 +4258,26 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 	}
 
 	/* flag exec has occurred, notify only if it has not failed due to FP Key error */
-	if (exec_done && ((p->p_lflag & P_LTERM_DECRYPTFAIL) == 0))
+	if (exec_done && ((p->p_lflag & P_LTERM_DECRYPTFAIL) == 0)) {
 		proc_knote(p, NOTE_EXEC);
+	}
 
-	if (imgp->ip_vp != NULLVP)
+	if (imgp->ip_vp != NULLVP) {
 		vnode_put(imgp->ip_vp);
-	if (imgp->ip_scriptvp != NULLVP)
+	}
+	if (imgp->ip_scriptvp != NULLVP) {
 		vnode_put(imgp->ip_scriptvp);
-	if (imgp->ip_strings)
+	}
+	if (imgp->ip_strings) {
 		execargs_free(imgp);
+	}
 #if CONFIG_MACF
-	if (imgp->ip_execlabelp)
+	if (imgp->ip_execlabelp) {
 		mac_cred_label_free(imgp->ip_execlabelp);
-	if (imgp->ip_scriptlabelp)
+	}
+	if (imgp->ip_scriptlabelp) {
 		mac_vnode_label_free(imgp->ip_scriptlabelp);
+	}
 #endif
 	if (imgp->ip_cs_error != OS_REASON_NULL) {
 		os_reason_free(imgp->ip_cs_error);
@@ -3640,6 +4298,11 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 		task_bank_init(new_task);
 		proc_transend(p, 0);
 
+#if __arm64__
+		proc_legacy_footprint_entitled(p, new_task, __FUNCTION__);
+		proc_ios13extended_footprint_entitled(p, new_task, __FUNCTION__);
+#endif /* __arm64__ */
+
 		/* Sever any extant thread affinity */
 		thread_affinity_exec(current_thread());
 
@@ -3652,6 +4315,18 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 
 		task_set_main_thread_qos(new_task, main_thread);
 
+#if __has_feature(ptrauth_calls)
+		task_set_pac_exception_fatal_flag(new_task);
+#endif /* __has_feature(ptrauth_calls) */
+
+#if CONFIG_ARCADE
+		/*
+		 * Check to see if we need to trigger an arcade upcall AST now
+		 * that the vnode has been reset on the task.
+		 */
+		arcade_prepare(new_task, imgp->ip_new_thread);
+#endif /* CONFIG_ARCADE */
+
 #if CONFIG_MACF
 		/*
 		 * Processes with the MAP_JIT entitlement are permitted to have
@@ -3659,6 +4334,7 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 		 */
 		if (mac_proc_check_map_anon(p, 0, 0, 0, MAP_JIT, NULL) == 0) {
 			vm_map_set_jumbo(get_task_map(new_task));
+			vm_map_set_jit_entitled(get_task_map(new_task));
 		}
 #endif /* CONFIG_MACF */
 
@@ -3674,8 +4350,9 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 #if CONFIG_DTRACE
 		dtrace_thread_didexec(imgp->ip_new_thread);
 
-		if ((dtrace_proc_waitfor_hook = dtrace_proc_waitfor_exec_ptr) != NULL)
+		if ((dtrace_proc_waitfor_hook = dtrace_proc_waitfor_exec_ptr) != NULL) {
 			(*dtrace_proc_waitfor_hook)(p);
+		}
 #endif
 
 #if CONFIG_AUDIT
@@ -3711,6 +4388,16 @@ exit_with_error:
 	}
 
 	if (imgp != NULL) {
+		/* Clear the initial wait on the thread transferring watchports */
+		if (imgp->ip_new_thread) {
+			task_clear_return_wait(get_threadtask(imgp->ip_new_thread), TCRW_CLEAR_INITIAL_WAIT);
+		}
+
+		/* Transfer the watchport boost to new task */
+		if (!error && !in_vfexec) {
+			task_transfer_turnstile_watchports(old_task,
+			    new_task, imgp->ip_new_thread);
+		}
 		/*
 		 * Do not terminate the current task, if proc_exec_switch_task did not
 		 * switch the tasks, terminating the current task without the switch would
@@ -3724,7 +4411,7 @@ exit_with_error:
 		/* Release the thread ref returned by fork_create_child */
 		if (imgp->ip_new_thread) {
 			/* wake up the new exec thread */
-			task_clear_return_wait(get_threadtask(imgp->ip_new_thread));
+			task_clear_return_wait(get_threadtask(imgp->ip_new_thread), TCRW_CLEAR_FINAL_WAIT);
 			thread_deallocate(imgp->ip_new_thread);
 			imgp->ip_new_thread = NULL;
 		}
@@ -3747,8 +4434,8 @@ exit_with_error:
 	if (inherit != NULL) {
 		ipc_importance_release(inherit);
 	}
-	
-	return(error);
+
+	return error;
 }
 
 
@@ -3775,14 +4462,14 @@ copyinptr(user_addr_t froma, user_addr_t *toptr, int ptr_size)
 
 	if (ptr_size == 4) {
 		/* 64 bit value containing 32 bit address */
-		unsigned int i;
+		unsigned int i = 0;
 
 		error = copyin(froma, &i, 4);
-		*toptr = CAST_USER_ADDR_T(i);	/* SAFE */
+		*toptr = CAST_USER_ADDR_T(i);   /* SAFE */
 	} else {
 		error = copyin(froma, toptr, 8);
 	}
-	return (error);
+	return error;
 }
 
 
@@ -3807,13 +4494,13 @@ copyoutptr(user_addr_t ua, user_addr_t ptr, int ptr_size)
 
 	if (ptr_size == 4) {
 		/* 64 bit value containing 32 bit address */
-		unsigned int i = CAST_DOWN_EXPLICIT(unsigned int,ua);	/* SAFE */
+		unsigned int i = CAST_DOWN_EXPLICIT(unsigned int, ua);   /* SAFE */
 
 		error = copyout(&i, ptr, 4);
 	} else {
 		error = copyout(&ua, ptr, 8);
 	}
-	return (error);
+	return error;
 }
 
 
@@ -3895,25 +4582,25 @@ static int
 exec_copyout_strings(struct image_params *imgp, user_addr_t *stackp)
 {
 	proc_t p = vfs_context_proc(imgp->ip_vfs_context);
-	int	ptr_size = (imgp->ip_flags & IMGPF_IS_64BIT_ADDR) ? 8 : 4;
-	int	ptr_area_size;
+	int     ptr_size = (imgp->ip_flags & IMGPF_IS_64BIT_ADDR) ? 8 : 4;
+	int     ptr_area_size;
 	void *ptr_buffer_start, *ptr_buffer;
 	int string_size;
 
-	user_addr_t	string_area;	/* *argv[], *env[] */
-	user_addr_t	ptr_area;	/* argv[], env[], applev[] */
-	user_addr_t argc_area;	/* argc */
-	user_addr_t	stack;
+	user_addr_t     string_area;    /* *argv[], *env[] */
+	user_addr_t     ptr_area;       /* argv[], env[], applev[] */
+	user_addr_t argc_area;  /* argc */
+	user_addr_t     stack;
 	int error;
 
 	unsigned i;
 	struct copyout_desc {
-		char	*start_string;
-		int		count;
+		char    *start_string;
+		int             count;
 #if CONFIG_DTRACE
-		user_addr_t	*dtrace_cookie;
+		user_addr_t     *dtrace_cookie;
 #endif
-		boolean_t	null_term;
+		boolean_t       null_term;
 	} descriptors[] = {
 		{
 			.start_string = imgp->ip_startargv,
@@ -4001,11 +4688,12 @@ exec_copyout_strings(struct image_params *imgp, user_addr_t *stackp)
 	 * Copy out the entire strings area.
 	 */
 	error = copyout(imgp->ip_strings, string_area,
-						   string_size);
-	if (error)
+	    string_size);
+	if (error) {
 		goto bad;
+	}
 
-	for (i = 0; i < sizeof(descriptors)/sizeof(descriptors[0]); i++) {
+	for (i = 0; i < sizeof(descriptors) / sizeof(descriptors[0]); i++) {
 		char *cur_string = descriptors[i].start_string;
 		int j;
 
@@ -4023,14 +4711,14 @@ exec_copyout_strings(struct image_params *imgp, user_addr_t *stackp)
 		 */
 		for (j = 0; j < descriptors[i].count; j++) {
 			user_addr_t cur_address = string_area + (cur_string - imgp->ip_strings);
-			
+
 			/* Copy out the pointer to the current string. Alignment has been verified  */
 			if (ptr_size == 8) {
 				*(uint64_t *)ptr_buffer = (uint64_t)cur_address;
 			} else {
 				*(uint32_t *)ptr_buffer = (uint32_t)cur_address;
 			}
-			
+
 			ptr_buffer = (void *)((uintptr_t)ptr_buffer + ptr_size);
 			cur_string += strlen(cur_string) + 1; /* Only a NUL between strings in the same area */
 		}
@@ -4041,7 +4729,7 @@ exec_copyout_strings(struct image_params *imgp, user_addr_t *stackp)
 			} else {
 				*(uint32_t *)ptr_buffer = 0;
 			}
-			
+
 			ptr_buffer = (void *)((uintptr_t)ptr_buffer + ptr_size);
 		}
 	}
@@ -4050,17 +4738,19 @@ exec_copyout_strings(struct image_params *imgp, user_addr_t *stackp)
 	 * Copy out all our pointer arrays in bulk.
 	 */
 	error = copyout(ptr_buffer_start, ptr_area,
-					ptr_area_size);
-	if (error)
+	    ptr_area_size);
+	if (error) {
 		goto bad;
+	}
 
 	/* argc (int32, stored in a ptr_size area) */
 	error = copyoutptr((user_addr_t)imgp->ip_argc, argc_area, ptr_size);
-	if (error)
+	if (error) {
 		goto bad;
+	}
 
 bad:
-	return(error);
+	return error;
 }
 
 
@@ -4095,14 +4785,14 @@ static int
 exec_extract_strings(struct image_params *imgp)
 {
 	int error = 0;
-	int	ptr_size = (imgp->ip_flags & IMGPF_WAS_64BIT_ADDR) ? 8 : 4;
+	int     ptr_size = (imgp->ip_flags & IMGPF_WAS_64BIT_ADDR) ? 8 : 4;
 	int new_ptr_size = (imgp->ip_flags & IMGPF_IS_64BIT_ADDR) ? 8 : 4;
-	user_addr_t	argv = imgp->ip_user_argv;
-	user_addr_t	envv = imgp->ip_user_envv;
+	user_addr_t     argv = imgp->ip_user_argv;
+	user_addr_t     envv = imgp->ip_user_envv;
 
 	/*
 	 * Adjust space reserved for the path name by however much padding it
-	 * needs. Doing this here since we didn't know if this would be a 32- 
+	 * needs. Doing this here since we didn't know if this would be a 32-
 	 * or 64-bit process back in exec_save_path.
 	 */
 	while (imgp->ip_strspace % new_ptr_size != 0) {
@@ -4117,8 +4807,8 @@ exec_extract_strings(struct image_params *imgp)
 	imgp->ip_startargv = imgp->ip_strendp;
 	imgp->ip_argc = 0;
 
-	if((imgp->ip_flags & IMGPF_INTERPRET) != 0) {
-		user_addr_t	arg;
+	if ((imgp->ip_flags & IMGPF_INTERPRET) != 0) {
+		user_addr_t     arg;
 		char *argstart, *ch;
 
 		/* First, the arguments in the "#!" string are tokenized and extracted. */
@@ -4149,8 +4839,9 @@ exec_extract_strings(struct image_params *imgp)
 			}
 
 			/* Error-check, regardless of whether this is the last interpreter arg or not */
-			if (error)
+			if (error) {
 				goto bad;
+			}
 			if (imgp->ip_argspace < new_ptr_size) {
 				error = E2BIG;
 				goto bad;
@@ -4167,8 +4858,9 @@ exec_extract_strings(struct image_params *imgp)
 			 * to locate their script arguments.
 			 */
 			error = copyinptr(argv, &arg, ptr_size);
-			if (error)
+			if (error) {
 				goto bad;
+			}
 			if (arg != 0LL) {
 				argv += ptr_size; /* consume without using */
 			}
@@ -4181,9 +4873,10 @@ exec_extract_strings(struct image_params *imgp)
 		} else {
 			error = exec_add_user_string(imgp, imgp->ip_user_fname, imgp->ip_seg, TRUE);
 		}
-		
-		if (error)
+
+		if (error) {
 			goto bad;
+		}
 		if (imgp->ip_argspace < new_ptr_size) {
 			error = E2BIG;
 			goto bad;
@@ -4193,11 +4886,12 @@ exec_extract_strings(struct image_params *imgp)
 	}
 
 	while (argv != 0LL) {
-		user_addr_t	arg;
+		user_addr_t     arg;
 
 		error = copyinptr(argv, &arg, ptr_size);
-		if (error)
+		if (error) {
 			goto bad;
+		}
 
 		if (arg == 0LL) {
 			break;
@@ -4206,18 +4900,19 @@ exec_extract_strings(struct image_params *imgp)
 		argv += ptr_size;
 
 		/*
-		* av[n...] = arg[n]
-		*/
+		 * av[n...] = arg[n]
+		 */
 		error = exec_add_user_string(imgp, arg, imgp->ip_seg, TRUE);
-		if (error)
+		if (error) {
 			goto bad;
+		}
 		if (imgp->ip_argspace < new_ptr_size) {
 			error = E2BIG;
 			goto bad;
 		}
 		imgp->ip_argspace -= new_ptr_size; /* to hold argv[] entry */
 		imgp->ip_argc++;
-	}	 
+	}
 
 	/* Save space for argv[] NULL terminator */
 	if (imgp->ip_argspace < new_ptr_size) {
@@ -4225,29 +4920,31 @@ exec_extract_strings(struct image_params *imgp)
 		goto bad;
 	}
 	imgp->ip_argspace -= new_ptr_size;
-	
+
 	/* Note where the args ends and env begins. */
 	imgp->ip_endargv = imgp->ip_strendp;
 	imgp->ip_envc = 0;
 
 	/* Now, get the environment */
 	while (envv != 0LL) {
-		user_addr_t	env;
+		user_addr_t     env;
 
 		error = copyinptr(envv, &env, ptr_size);
-		if (error)
+		if (error) {
 			goto bad;
+		}
 
 		envv += ptr_size;
 		if (env == 0LL) {
 			break;
 		}
 		/*
-		* av[n...] = env[n]
-		*/
+		 * av[n...] = env[n]
+		 */
 		error = exec_add_user_string(imgp, env, imgp->ip_seg, TRUE);
-		if (error)
+		if (error) {
 			goto bad;
+		}
 		if (imgp->ip_argspace < new_ptr_size) {
 			error = E2BIG;
 			goto bad;
@@ -4273,7 +4970,7 @@ exec_extract_strings(struct image_params *imgp)
 		imgp->ip_strspace--;
 		imgp->ip_argspace--;
 	}
-	
+
 	/* Note where the envv ends and applev begins. */
 	imgp->ip_endenvv = imgp->ip_strendp;
 
@@ -4292,13 +4989,13 @@ bad:
  * 8-byte guard.  Until somebody needs more than an 8-byte guard value, don't
  * do the work to construct them.
  */
-#define	GUARD_VALUES 1
-#define	GUARD_KEY "stack_guard="
+#define GUARD_VALUES 1
+#define GUARD_KEY "stack_guard="
 
 /*
  * System malloc needs some entropy when it is initialized.
  */
-#define	ENTROPY_VALUES 2
+#define ENTROPY_VALUES 2
 #define ENTROPY_KEY "malloc_entropy="
 
 /*
@@ -4322,6 +5019,7 @@ extern user64_addr_t commpage_text64_location;
 #define FSID_KEY "executable_file="
 #define DYLD_FSID_KEY "dyld_file="
 #define CDHASH_KEY "executable_cdhash="
+#define DYLD_FLAGS_KEY "dyld_flags="
 
 #define FSID_MAX_STRING "0x1234567890abcdef,0x1234567890abcdef"
 
@@ -4329,9 +5027,9 @@ extern user64_addr_t commpage_text64_location;
 
 static int
 exec_add_entropy_key(struct image_params *imgp,
-		     const char *key,
-		     int values,
-		     boolean_t embedNUL)
+    const char *key,
+    int values,
+    boolean_t embedNUL)
 {
 	const int limit = 8;
 	uint64_t entropy[limit];
@@ -4340,17 +5038,17 @@ exec_add_entropy_key(struct image_params *imgp,
 		values = limit;
 	}
 
-    read_random(entropy, sizeof(entropy[0]) * values);
+	read_random(entropy, sizeof(entropy[0]) * values);
 
 	if (embedNUL) {
 		entropy[0] &= ~(0xffull << 8);
 	}
 
-	int len = snprintf(str, sizeof(str), "%s0x%llx", key, entropy[0]);
+	int len = scnprintf(str, sizeof(str), "%s0x%llx", key, entropy[0]);
 	int remaining = sizeof(str) - len;
 	for (int i = 1; i < values && remaining > 0; ++i) {
 		int start = sizeof(str) - remaining;
-		len = snprintf(&str[start], remaining, ",0x%llx", entropy[i]);
+		len = scnprintf(&str[start], remaining, ",0x%llx", entropy[i]);
 		remaining -= len;
 	}
 
@@ -4360,9 +5058,13 @@ exec_add_entropy_key(struct image_params *imgp,
 /*
  * Build up the contents of the apple[] string vector
  */
+#if (DEVELOPMENT || DEBUG)
+uint64_t dyld_flags = 0;
+#endif
+
 static int
 exec_add_apple_strings(struct image_params *imgp,
-		       const load_result_t *load_result)
+    const load_result_t *load_result)
 {
 	int error;
 	int img_ptr_size = (imgp->ip_flags & IMGPF_IS_64BIT_ADDR) ? 8 : 4;
@@ -4393,7 +5095,7 @@ exec_add_apple_strings(struct image_params *imgp,
 		if ((proc_flags & _POSIX_SPAWN_NANO_ALLOCATOR) == _POSIX_SPAWN_NANO_ALLOCATOR) {
 			const char *nano_string = NANO_ENGAGE_KEY;
 			error = exec_add_user_string(imgp, CAST_USER_ADDR_T(nano_string), UIO_SYSSPACE, FALSE);
-			if (error){
+			if (error) {
 				goto bad;
 			}
 			imgp->ip_applec++;
@@ -4432,7 +5134,7 @@ exec_add_apple_strings(struct image_params *imgp,
 	}
 	imgp->ip_applec++;
 
-	/* 
+	/*
 	 * Add MAIN_STACK_KEY: Supplies the address and size of the main thread's
 	 * stack if it was allocated by the kernel.
 	 *
@@ -4442,11 +5144,11 @@ exec_add_apple_strings(struct image_params *imgp,
 	if (load_result->unixproc) {
 		char stack_string[strlen(MAIN_STACK_KEY) + (HEX_STR_LEN + 1) * MAIN_STACK_VALUES + 1];
 		snprintf(stack_string, sizeof(stack_string),
-			 MAIN_STACK_KEY "0x%llx,0x%llx,0x%llx,0x%llx",
-			 (uint64_t)load_result->user_stack,
-			 (uint64_t)load_result->user_stack_size,
-			 (uint64_t)load_result->user_stack_alloc,
-			 (uint64_t)load_result->user_stack_alloc_size);
+		    MAIN_STACK_KEY "0x%llx,0x%llx,0x%llx,0x%llx",
+		    (uint64_t)load_result->user_stack,
+		    (uint64_t)load_result->user_stack_size,
+		    (uint64_t)load_result->user_stack_alloc,
+		    (uint64_t)load_result->user_stack_alloc_size);
 		error = exec_add_user_string(imgp, CAST_USER_ADDR_T(stack_string), UIO_SYSSPACE, FALSE);
 		if (error) {
 			goto bad;
@@ -4455,12 +5157,12 @@ exec_add_apple_strings(struct image_params *imgp,
 	}
 
 	if (imgp->ip_vattr) {
-		uint64_t fsid    = get_va_fsid(imgp->ip_vattr);
+		uint64_t fsid    = vnode_get_va_fsid(imgp->ip_vattr);
 		uint64_t fsobjid = imgp->ip_vattr->va_fileid;
 
 		char fsid_string[strlen(FSID_KEY) + strlen(FSID_MAX_STRING) + 1];
 		snprintf(fsid_string, sizeof(fsid_string),
-				 FSID_KEY "0x%llx,0x%llx", fsid, fsobjid);
+		    FSID_KEY "0x%llx,0x%llx", fsid, fsobjid);
 		error = exec_add_user_string(imgp, CAST_USER_ADDR_T(fsid_string), UIO_SYSSPACE, FALSE);
 		if (error) {
 			goto bad;
@@ -4468,26 +5170,26 @@ exec_add_apple_strings(struct image_params *imgp,
 		imgp->ip_applec++;
 	}
 
-	if (imgp->ip_dyld_fsid || imgp->ip_dyld_fsobjid ) {
+	if (imgp->ip_dyld_fsid || imgp->ip_dyld_fsobjid) {
 		char fsid_string[strlen(DYLD_FSID_KEY) + strlen(FSID_MAX_STRING) + 1];
 		snprintf(fsid_string, sizeof(fsid_string),
-				 DYLD_FSID_KEY "0x%llx,0x%llx", imgp->ip_dyld_fsid, imgp->ip_dyld_fsobjid);
+		    DYLD_FSID_KEY "0x%llx,0x%llx", imgp->ip_dyld_fsid, imgp->ip_dyld_fsobjid);
 		error = exec_add_user_string(imgp, CAST_USER_ADDR_T(fsid_string), UIO_SYSSPACE, FALSE);
 		if (error) {
 			goto bad;
 		}
 		imgp->ip_applec++;
 	}
-	
- 	uint8_t cdhash[SHA1_RESULTLEN];
+
+	uint8_t cdhash[SHA1_RESULTLEN];
 	int cdhash_errror = ubc_cs_getcdhash(imgp->ip_vp, imgp->ip_arch_offset, cdhash);
 	if (cdhash_errror == 0) {
-		char hash_string[strlen(CDHASH_KEY) + 2*SHA1_RESULTLEN + 1]; 
+		char hash_string[strlen(CDHASH_KEY) + 2 * SHA1_RESULTLEN + 1];
 		strncpy(hash_string, CDHASH_KEY, sizeof(hash_string));
-		char *p = hash_string + sizeof(CDHASH_KEY) - 1; 
-		for (int i = 0; i < SHA1_RESULTLEN; i++) { 
+		char *p = hash_string + sizeof(CDHASH_KEY) - 1;
+		for (int i = 0; i < SHA1_RESULTLEN; i++) {
 			snprintf(p, 3, "%02x", (int) cdhash[i]);
-			p += 2; 
+			p += 2;
 		}
 		error = exec_add_user_string(imgp, CAST_USER_ADDR_T(hash_string), UIO_SYSSPACE, FALSE);
 		if (error) {
@@ -4495,6 +5197,17 @@ exec_add_apple_strings(struct image_params *imgp,
 		}
 		imgp->ip_applec++;
 	}
+#if (DEVELOPMENT || DEBUG)
+	if (dyld_flags) {
+		char dyld_flags_string[strlen(DYLD_FLAGS_KEY) + HEX_STR_LEN + 1];
+		snprintf(dyld_flags_string, sizeof(dyld_flags_string), DYLD_FLAGS_KEY "0x%llx", dyld_flags);
+		error = exec_add_user_string(imgp, CAST_USER_ADDR_T(dyld_flags_string), UIO_SYSSPACE, FALSE);
+		if (error) {
+			goto bad;
+		}
+		imgp->ip_applec++;
+	}
+#endif
 
 	/* Align the tail of the combined applev area */
 	while (imgp->ip_strspace % img_ptr_size != 0) {
@@ -4506,7 +5219,7 @@ bad:
 	return error;
 }
 
-#define	unix_stack_size(p)	(p->p_rlimit[RLIMIT_STACK].rlim_cur)
+#define unix_stack_size(p)      (p->p_rlimit[RLIMIT_STACK].rlim_cur)
 
 /*
  * exec_check_permissions
@@ -4534,9 +5247,10 @@ exec_check_permissions(struct image_params *imgp)
 	kauth_action_t action;
 
 	/* Only allow execution of regular files */
-	if (!vnode_isreg(vp))
-		return (EACCES);
-	
+	if (!vnode_isreg(vp)) {
+		return EACCES;
+	}
+
 	/* Get the file attributes that we will be using here and elsewhere */
 	VATTR_INIT(vap);
 	VATTR_WANTED(vap, va_uid);
@@ -4546,48 +5260,56 @@ exec_check_permissions(struct image_params *imgp)
 	VATTR_WANTED(vap, va_fsid64);
 	VATTR_WANTED(vap, va_fileid);
 	VATTR_WANTED(vap, va_data_size);
-	if ((error = vnode_getattr(vp, vap, imgp->ip_vfs_context)) != 0)
-		return (error);
+	if ((error = vnode_getattr(vp, vap, imgp->ip_vfs_context)) != 0) {
+		return error;
+	}
 
 	/*
 	 * Ensure that at least one execute bit is on - otherwise root
 	 * will always succeed, and we don't want to happen unless the
 	 * file really is executable.
 	 */
-	if (!vfs_authopaque(vnode_mount(vp)) && ((vap->va_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) == 0))
-		return (EACCES);
+	if (!vfs_authopaque(vnode_mount(vp)) && ((vap->va_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) == 0)) {
+		return EACCES;
+	}
 
 	/* Disallow zero length files */
-	if (vap->va_data_size == 0)
-		return (ENOEXEC);
+	if (vap->va_data_size == 0) {
+		return ENOEXEC;
+	}
 
 	imgp->ip_arch_offset = (user_size_t)0;
 	imgp->ip_arch_size = vap->va_data_size;
 
 	/* Disable setuid-ness for traced programs or if MNT_NOSUID */
-	if ((vp->v_mount->mnt_flag & MNT_NOSUID) || (p->p_lflag & P_LTRACED))
+	if ((vp->v_mount->mnt_flag & MNT_NOSUID) || (p->p_lflag & P_LTRACED)) {
 		vap->va_mode &= ~(VSUID | VSGID);
+	}
 
 	/*
 	 * Disable _POSIX_SPAWN_ALLOW_DATA_EXEC and _POSIX_SPAWN_DISABLE_ASLR
 	 * flags for setuid/setgid binaries.
 	 */
-	if (vap->va_mode & (VSUID | VSGID))
+	if (vap->va_mode & (VSUID | VSGID)) {
 		imgp->ip_flags &= ~(IMGPF_ALLOW_DATA_EXEC | IMGPF_DISABLE_ASLR);
+	}
 
 #if CONFIG_MACF
 	error = mac_vnode_check_exec(imgp->ip_vfs_context, vp, imgp);
-	if (error)
-		return (error);
+	if (error) {
+		return error;
+	}
 #endif
 
-  	/* Check for execute permission */
- 	action = KAUTH_VNODE_EXECUTE;
-  	/* Traced images must also be readable */
- 	if (p->p_lflag & P_LTRACED)
- 		action |= KAUTH_VNODE_READ_DATA;
- 	if ((error = vnode_authorize(vp, NULL, action, imgp->ip_vfs_context)) != 0)
-		return (error);
+	/* Check for execute permission */
+	action = KAUTH_VNODE_EXECUTE;
+	/* Traced images must also be readable */
+	if (p->p_lflag & P_LTRACED) {
+		action |= KAUTH_VNODE_READ_DATA;
+	}
+	if ((error = vnode_authorize(vp, NULL, action, imgp->ip_vfs_context)) != 0) {
+		return error;
+	}
 
 #if 0
 	/* Don't let it run if anyone had it open for writing */
@@ -4595,7 +5317,7 @@ exec_check_permissions(struct image_params *imgp)
 	if (vp->v_writecount) {
 		panic("going to return ETXTBSY %x", vp);
 		vnode_unlock(vp);
-		return (ETXTBSY);
+		return ETXTBSY;
 	}
 	vnode_unlock(vp);
 #endif
@@ -4603,7 +5325,7 @@ exec_check_permissions(struct image_params *imgp)
 
 	/* XXX May want to indicate to underlying FS that vnode is open */
 
-	return (error);
+	return error;
 }
 
 
@@ -4636,17 +5358,16 @@ exec_check_permissions(struct image_params *imgp)
 static int
 exec_handle_sugid(struct image_params *imgp)
 {
-	proc_t			p = vfs_context_proc(imgp->ip_vfs_context);
-	kauth_cred_t		cred = vfs_context_ucred(imgp->ip_vfs_context);
-	kauth_cred_t		my_cred, my_new_cred;
-	int			i;
-	int			leave_sugid_clear = 0;
-	int			mac_reset_ipc = 0;
-	int			error = 0;
-	task_t			task = NULL;
+	proc_t                  p = vfs_context_proc(imgp->ip_vfs_context);
+	kauth_cred_t            cred = vfs_context_ucred(imgp->ip_vfs_context);
+	int                     i;
+	int                     leave_sugid_clear = 0;
+	int                     mac_reset_ipc = 0;
+	int                     error = 0;
+	task_t                  task = NULL;
 #if CONFIG_MACF
-	int			mac_transition, disjoint_cred = 0;
-	int 		label_update_return = 0;
+	int                     mac_transition, disjoint_cred = 0;
+	int             label_update_return = 0;
 
 	/*
 	 * Determine whether a call to update the MAC label will result in the
@@ -4658,14 +5379,14 @@ exec_handle_sugid(struct image_params *imgp)
 	 *		slow down the exec fast path for normal binaries.
 	 */
 	mac_transition = mac_cred_check_label_update_execve(
-							imgp->ip_vfs_context,
-							imgp->ip_vp,
-							imgp->ip_arch_offset,
-							imgp->ip_scriptvp,
-							imgp->ip_scriptlabelp,
-							imgp->ip_execlabelp,
-							p,
-							imgp->ip_px_smpx);
+		imgp->ip_vfs_context,
+		imgp->ip_vp,
+		imgp->ip_arch_offset,
+		imgp->ip_scriptvp,
+		imgp->ip_scriptlabelp,
+		imgp->ip_execlabelp,
+		p,
+		imgp->ip_px_smpx);
 #endif
 
 	OSBitAndAtomic(~((uint32_t)P_SUGID), &p->p_flag);
@@ -4685,11 +5406,11 @@ exec_handle_sugid(struct image_params *imgp)
 	 *		such a call.
 	 */
 	if (((imgp->ip_origvattr->va_mode & VSUID) != 0 &&
-	     kauth_cred_getuid(cred) != imgp->ip_origvattr->va_uid) ||
+	    kauth_cred_getuid(cred) != imgp->ip_origvattr->va_uid) ||
 	    ((imgp->ip_origvattr->va_mode & VSGID) != 0 &&
-		 ((kauth_cred_ismember_gid(cred, imgp->ip_origvattr->va_gid, &leave_sugid_clear) || !leave_sugid_clear) ||
-		 (kauth_cred_getgid(cred) != imgp->ip_origvattr->va_gid)))) {
-
+	    ((kauth_cred_ismember_gid(cred, imgp->ip_origvattr->va_gid, &leave_sugid_clear) || !leave_sugid_clear) ||
+	    (kauth_cred_getgid(cred) != imgp->ip_origvattr->va_gid))) ||
+	    (imgp->ip_sc_port != NULL)) {
 #if CONFIG_MACF
 /* label for MAC transition and neither VSUID nor VSGID */
 handle_mac_transition:
@@ -4716,73 +5437,61 @@ handle_mac_transition:
 		 * proc's ucred lock. This prevents others from accessing
 		 * a garbage credential.
 		 */
-		while (imgp->ip_origvattr->va_mode & VSUID) {
-			my_cred = kauth_cred_proc_ref(p);
-			my_new_cred = kauth_cred_setresuid(my_cred, KAUTH_UID_NONE, imgp->ip_origvattr->va_uid, imgp->ip_origvattr->va_uid, KAUTH_UID_NONE);
 
-			if (my_new_cred == my_cred) {
-				kauth_cred_unref(&my_cred);
-				break;
+		if (imgp->ip_sc_port != NULL) {
+			extern int suid_cred_verify(ipc_port_t, vnode_t, uint32_t *);
+			int ret = -1;
+			uid_t uid = UINT32_MAX;
+
+			/*
+			 * Check that the vnodes match. If a script is being
+			 * executed check the script's vnode rather than the
+			 * interpreter's.
+			 */
+			struct vnode *vp = imgp->ip_scriptvp != NULL ? imgp->ip_scriptvp : imgp->ip_vp;
+
+			ret = suid_cred_verify(imgp->ip_sc_port, vp, &uid);
+			if (ret == 0) {
+				apply_kauth_cred_update(p, ^kauth_cred_t (kauth_cred_t my_cred) {
+					return kauth_cred_setresuid(my_cred,
+					KAUTH_UID_NONE,
+					uid,
+					uid,
+					KAUTH_UID_NONE);
+				});
+			} else {
+				error = EPERM;
 			}
-
-			/* update cred on proc */
-			proc_ucred_lock(p);
-
-			if (p->p_ucred != my_cred) {
-				proc_ucred_unlock(p);
-				kauth_cred_unref(&my_new_cred);
-				continue;
-			}
-
-			/* donate cred reference on my_new_cred to p->p_ucred */
-			p->p_ucred = my_new_cred;
-			PROC_UPDATE_CREDS_ONPROC(p);
-			proc_ucred_unlock(p);
-
-			/* drop additional reference that was taken on the previous cred */
-			kauth_cred_unref(&my_cred);
-
-			break;
 		}
 
-		while (imgp->ip_origvattr->va_mode & VSGID) {
-			my_cred = kauth_cred_proc_ref(p);
-			my_new_cred = kauth_cred_setresgid(my_cred, KAUTH_GID_NONE, imgp->ip_origvattr->va_gid, imgp->ip_origvattr->va_gid);
+		if (imgp->ip_origvattr->va_mode & VSUID) {
+			apply_kauth_cred_update(p, ^kauth_cred_t (kauth_cred_t my_cred) {
+				return kauth_cred_setresuid(my_cred,
+				KAUTH_UID_NONE,
+				imgp->ip_origvattr->va_uid,
+				imgp->ip_origvattr->va_uid,
+				KAUTH_UID_NONE);
+			});
+		}
 
-			if (my_new_cred == my_cred) {
-				kauth_cred_unref(&my_cred);
-				break;
-			}
-
-			/* update cred on proc */
-			proc_ucred_lock(p);
-
-			if (p->p_ucred != my_cred) {
-				proc_ucred_unlock(p);
-				kauth_cred_unref(&my_new_cred);
-				continue;
-			}
-
-			/* donate cred reference on my_new_cred to p->p_ucred */
-			p->p_ucred = my_new_cred;
-			PROC_UPDATE_CREDS_ONPROC(p);
-			proc_ucred_unlock(p);
-
-			/* drop additional reference that was taken on the previous cred */
-			kauth_cred_unref(&my_cred);
-
-			break;
+		if (imgp->ip_origvattr->va_mode & VSGID) {
+			apply_kauth_cred_update(p, ^kauth_cred_t (kauth_cred_t my_cred) {
+				return kauth_cred_setresgid(my_cred,
+				KAUTH_GID_NONE,
+				imgp->ip_origvattr->va_gid,
+				imgp->ip_origvattr->va_gid);
+			});
 		}
 #endif /* !SECURE_KERNEL */
 
 #if CONFIG_MACF
-		/* 
+		/*
 		 * If a policy has indicated that it will transition the label,
 		 * before making the call into the MAC policies, get a new
 		 * duplicate credential, so they can modify it without
 		 * modifying any others sharing it.
 		 */
-		if (mac_transition) { 
+		if (mac_transition) {
 			/*
 			 * This hook may generate upcalls that require
 			 * importance donation from the kernel.
@@ -4791,16 +5500,16 @@ handle_mac_transition:
 			thread_t thread = current_thread();
 			thread_enable_send_importance(thread, TRUE);
 			kauth_proc_label_update_execve(p,
-						imgp->ip_vfs_context,
-						imgp->ip_vp, 
-						imgp->ip_arch_offset,
-						imgp->ip_scriptvp,
-						imgp->ip_scriptlabelp,
-						imgp->ip_execlabelp,
-						&imgp->ip_csflags,
-						imgp->ip_px_smpx,
-						&disjoint_cred, /* will be non zero if disjoint */
-						&label_update_return);
+			    imgp->ip_vfs_context,
+			    imgp->ip_vp,
+			    imgp->ip_arch_offset,
+			    imgp->ip_scriptvp,
+			    imgp->ip_scriptlabelp,
+			    imgp->ip_execlabelp,
+			    &imgp->ip_csflags,
+			    imgp->ip_px_smpx,
+			    &disjoint_cred,                     /* will be non zero if disjoint */
+			    &label_update_return);
 			thread_enable_send_importance(thread, FALSE);
 
 			if (disjoint_cred) {
@@ -4815,13 +5524,13 @@ handle_mac_transition:
 				 */
 				leave_sugid_clear = 0;
 			}
-			
+
 			imgp->ip_mac_return = label_update_return;
 		}
-		
+
 		mac_reset_ipc = mac_proc_check_inherit_ipc_ports(p, p->p_textvp, p->p_textoff, imgp->ip_vp, imgp->ip_arch_offset, imgp->ip_scriptvp);
 
-#endif	/* CONFIG_MACF */
+#endif  /* CONFIG_MACF */
 
 		/*
 		 * If 'leave_sugid_clear' is non-zero, then we passed the
@@ -4829,7 +5538,7 @@ handle_mac_transition:
 		 * the previous cred was a member of the VSGID group, but
 		 * that it was not the default at the time of the execve,
 		 * and that the post-labelling credential was not disjoint.
-		 * So we don't set the P_SUGID or reset mach ports and fds 
+		 * So we don't set the P_SUGID or reset mach ports and fds
 		 * on the basis of simply running this code.
 		 */
 		if (mac_reset_ipc || !leave_sugid_clear) {
@@ -4840,9 +5549,9 @@ handle_mac_transition:
 			 * task/thread after.
 			 */
 			ipc_task_reset((imgp->ip_new_thread != NULL) ?
-					get_threadtask(imgp->ip_new_thread) : p->task);
+			    get_threadtask(imgp->ip_new_thread) : p->task);
 			ipc_thread_reset((imgp->ip_new_thread != NULL) ?
-				 	 imgp->ip_new_thread : current_thread());
+			    imgp->ip_new_thread : current_thread());
 		}
 
 		if (!leave_sugid_clear) {
@@ -4860,17 +5569,17 @@ handle_mac_transition:
 			 * to libc.
 			 */
 			for (i = 0; i < 3; i++) {
-
-				if (p->p_fd->fd_ofiles[i] != NULL)
+				if (p->p_fd->fd_ofiles[i] != NULL) {
 					continue;
+				}
 
 				/*
 				 * Do the kernel equivalent of
 				 *
-				 * 	if i == 0
-				 * 		(void) open("/dev/null", O_RDONLY);
-				 * 	else 
-				 * 		(void) open("/dev/null", O_WRONLY);
+				 *      if i == 0
+				 *              (void) open("/dev/null", O_RDONLY);
+				 *      else
+				 *              (void) open("/dev/null", O_WRONLY);
 				 */
 
 				struct fileproc *fp;
@@ -4878,14 +5587,16 @@ handle_mac_transition:
 				int flag;
 				struct nameidata *ndp = NULL;
 
-				if (i == 0)
+				if (i == 0) {
 					flag = FREAD;
-				else 
+				} else {
 					flag = FWRITE;
+				}
 
 				if ((error = falloc(p,
-				    &fp, &indx, imgp->ip_vfs_context)) != 0)
+				    &fp, &indx, imgp->ip_vfs_context)) != 0) {
 					continue;
+				}
 
 				MALLOC(ndp, struct nameidata *, sizeof(*ndp), M_TEMP, M_WAITOK | M_ZERO);
 				if (ndp == NULL) {
@@ -4936,7 +5647,7 @@ handle_mac_transition:
 		}
 	}
 
-#endif	/* CONFIG_MACF */
+#endif  /* CONFIG_MACF */
 
 	/*
 	 * Implement the semantic where the effective user and group become
@@ -4946,38 +5657,14 @@ handle_mac_transition:
 	 * proc's ucred lock. This prevents others from accessing
 	 * a garbage credential.
 	 */
-	for (;;) {
-		my_cred = kauth_cred_proc_ref(p);
-		my_new_cred = kauth_cred_setsvuidgid(my_cred, kauth_cred_getuid(my_cred),  kauth_cred_getgid(my_cred));
-
-		if (my_new_cred == my_cred) {
-			kauth_cred_unref(&my_cred);
-			break;
-		}
-
-		/* update cred on proc */
-		proc_ucred_lock(p);
-
-		if (p->p_ucred != my_cred) {
-			proc_ucred_unlock(p);
-			kauth_cred_unref(&my_new_cred);
-			continue;
-		}
-
-		/* donate cred reference on my_new_cred to p->p_ucred */
-		p->p_ucred = my_new_cred;
-		PROC_UPDATE_CREDS_ONPROC(p);
-		proc_ucred_unlock(p);
-
-		/* drop additional reference that was taken on the previous cred */
-		kauth_cred_unref(&my_cred);
-
-		break;
-	}
-
+	apply_kauth_cred_update(p, ^kauth_cred_t (kauth_cred_t my_cred) {
+		return kauth_cred_setsvuidgid(my_cred,
+		kauth_cred_getuid(my_cred),
+		kauth_cred_getgid(my_cred));
+	});
 
 	/* Update the process' identity version and set the security token */
-	p->p_idversion++;
+	p->p_idversion = OSIncrementAtomic(&nextpidversion);
 
 	if (imgp->ip_new_thread != NULL) {
 		task = get_threadtask(imgp->ip_new_thread);
@@ -4986,7 +5673,7 @@ handle_mac_transition:
 	}
 	set_security_token_task_internal(p, task);
 
-	return(error);
+	return error;
 }
 
 
@@ -5008,17 +5695,20 @@ handle_mac_transition:
  *		!KERN_SUCCESS		Mach failure code
  */
 static kern_return_t
-create_unix_stack(vm_map_t map, load_result_t* load_result, 
-			proc_t p)
+create_unix_stack(vm_map_t map, load_result_t* load_result,
+    proc_t p)
 {
-	mach_vm_size_t		size, prot_size;
-	mach_vm_offset_t	addr, prot_addr;
-	kern_return_t		kr;
+	mach_vm_size_t          size, prot_size;
+	mach_vm_offset_t        addr, prot_addr;
+	kern_return_t           kr;
 
-	mach_vm_address_t	user_stack = load_result->user_stack;
-	
+	mach_vm_address_t       user_stack = load_result->user_stack;
+
 	proc_lock(p);
 	p->user_stack = user_stack;
+	if (load_result->custom_stack) {
+		p->p_lflag |= P_LCUSTOM_STACK;
+	}
 	proc_unlock(p);
 
 	if (load_result->user_stack_alloc_size > 0) {
@@ -5034,12 +5724,12 @@ create_unix_stack(vm_map_t map, load_result_t* load_result,
 		}
 		addr = mach_vm_trunc_page(load_result->user_stack - size);
 		kr = mach_vm_allocate_kernel(map, &addr, size,
-				      VM_FLAGS_FIXED, VM_MEMORY_STACK);
+		    VM_FLAGS_FIXED, VM_MEMORY_STACK);
 		if (kr != KERN_SUCCESS) {
 			// Can't allocate at default location, try anywhere
 			addr = 0;
 			kr = mach_vm_allocate_kernel(map, &addr, size,
-					      VM_FLAGS_ANYWHERE, VM_MEMORY_STACK);
+			    VM_FLAGS_ANYWHERE, VM_MEMORY_STACK);
 			if (kr != KERN_SUCCESS) {
 				return kr;
 			}
@@ -5059,7 +5749,9 @@ create_unix_stack(vm_map_t map, load_result_t* load_result,
 		 * size limit for this process.
 		 */
 		if (load_result->user_stack_size == 0) {
+			proc_list_lock();
 			load_result->user_stack_size = unix_stack_size(p);
+			proc_list_unlock();
 			prot_size = mach_vm_trunc_page(size - load_result->user_stack_size);
 		} else {
 			prot_size = PAGE_SIZE;
@@ -5067,10 +5759,10 @@ create_unix_stack(vm_map_t map, load_result_t* load_result,
 
 		prot_addr = addr;
 		kr = mach_vm_protect(map,
-				     prot_addr,
-				     prot_size,
-				     FALSE,
-				     VM_PROT_NONE);
+		    prot_addr,
+		    prot_size,
+		    FALSE,
+		    VM_PROT_NONE);
 		if (kr != KERN_SUCCESS) {
 			(void)mach_vm_deallocate(map, addr, size);
 			return kr;
@@ -5093,7 +5785,7 @@ create_unix_stack(vm_map_t map, load_result_t* load_result,
  *		path			NULL terminated path
  *
  * Returns:	KERN_SUCCESS		Success
- *		!KERN_SUCCESS 		See execve/mac_execve for error codes
+ *		!KERN_SUCCESS           See execve/mac_execve for error codes
  *
  * Notes:	The process that is passed in is the first manufactured
  *		process on the system, and gets here via bsd_ast() firing
@@ -5125,8 +5817,9 @@ load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path)
 	size_t path_length = strlen(path) + 1;
 	argv0 = scratch_addr;
 	error = copyout(path, argv0, path_length);
-	if (error)
+	if (error) {
 		return error;
+	}
 
 	scratch_addr = USER_ADDR_ALIGN(scratch_addr + path_length, sizeof(user_addr_t));
 
@@ -5136,12 +5829,13 @@ load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path)
 	 */
 	if (boothowto & RB_SINGLE) {
 		const char *init_args = "-s";
-		size_t init_args_length = strlen(init_args)+1;
+		size_t init_args_length = strlen(init_args) + 1;
 
 		argv1 = scratch_addr;
 		error = copyout(init_args, argv1, init_args_length);
-		if (error)
+		if (error) {
 			return error;
+		}
 
 		scratch_addr = USER_ADDR_ALIGN(scratch_addr + init_args_length, sizeof(user_addr_t));
 	}
@@ -5154,8 +5848,9 @@ load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path)
 		argv64bit[2] = USER_ADDR_NULL;
 
 		error = copyout(argv64bit, scratch_addr, sizeof(argv64bit));
-		if (error)
+		if (error) {
 			return error;
+		}
 	} else {
 		user32_addr_t argv32bit[3] = {};
 
@@ -5164,8 +5859,9 @@ load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path)
 		argv32bit[2] = USER_ADDR_NULL;
 
 		error = copyout(argv32bit, scratch_addr, sizeof(argv32bit));
-		if (error)
+		if (error) {
 			return error;
+		}
 	}
 
 	/*
@@ -5242,13 +5938,14 @@ load_init_program(proc_t p)
 	if (PE_parse_boot_argn("launchdsuffix", launchd_suffix, sizeof(launchd_suffix))) {
 		char launchd_path[128];
 		boolean_t is_release_suffix = ((launchd_suffix[0] == 0) ||
-					       (strcmp(launchd_suffix, "release") == 0));
+		    (strcmp(launchd_suffix, "release") == 0));
 
 		if (is_release_suffix) {
 			printf("load_init_program: attempting to load /sbin/launchd\n");
 			error = load_init_program_at_path(p, (user_addr_t)scratch_addr, "/sbin/launchd");
-			if (!error)
+			if (!error) {
 				return;
+			}
 
 			panic("Process 1 exec of launchd.release failed, errno %d", error);
 		} else {
@@ -5267,7 +5964,7 @@ load_init_program(proc_t p)
 #endif
 
 	error = ENOENT;
-	for (i = 0; i < sizeof(init_programs)/sizeof(init_programs[0]); i++) {
+	for (i = 0; i < sizeof(init_programs) / sizeof(init_programs[0]); i++) {
 		printf("load_init_program: attempting to load %s\n", init_programs[i]);
 		error = load_init_program_at_path(p, (user_addr_t)scratch_addr, init_programs[i]);
 		if (!error) {
@@ -5277,7 +5974,7 @@ load_init_program(proc_t p)
 		}
 	}
 
-	panic("Process 1 exec of %s failed, errno %d", ((i == 0) ? "<null>" : init_programs[i-1]), error);
+	panic("Process 1 exec of %s failed, errno %d", ((i == 0) ? "<null>" : init_programs[i - 1]), error);
 }
 
 /*
@@ -5306,7 +6003,6 @@ load_return_to_errno(load_return_t lrtn)
 	case LOAD_SUCCESS:
 		return 0;
 	case LOAD_BADARCH:
-	case LOAD_BADARCH_X86:
 		return EBADARCH;
 	case LOAD_BADMACHO:
 	case LOAD_BADMACHO_UPX:
@@ -5322,8 +6018,9 @@ load_return_to_errno(load_return_t lrtn)
 		return ENOENT;
 	case LOAD_IOERROR:
 		return EIO;
-	case LOAD_FAILURE:
 	case LOAD_DECRYPTFAIL:
+		return EAUTH;
+	case LOAD_FAILURE:
 	default:
 		return EBADEXEC;
 	}
@@ -5374,29 +6071,34 @@ static int execargs_waiters = 0;
 lck_mtx_t *execargs_cache_lock;
 
 static void
-execargs_lock_lock(void) {
+execargs_lock_lock(void)
+{
 	lck_mtx_lock_spin(execargs_cache_lock);
 }
 
 static void
-execargs_lock_unlock(void) {
+execargs_lock_unlock(void)
+{
 	lck_mtx_unlock(execargs_cache_lock);
 }
 
 static wait_result_t
-execargs_lock_sleep(void) {
-	return(lck_mtx_sleep(execargs_cache_lock, LCK_SLEEP_DEFAULT, &execargs_free_count, THREAD_INTERRUPTIBLE));
+execargs_lock_sleep(void)
+{
+	return lck_mtx_sleep(execargs_cache_lock, LCK_SLEEP_DEFAULT, &execargs_free_count, THREAD_INTERRUPTIBLE);
 }
 
 static kern_return_t
-execargs_purgeable_allocate(char **execarg_address) {
+execargs_purgeable_allocate(char **execarg_address)
+{
 	kern_return_t kr = vm_allocate_kernel(bsd_pageable_map, (vm_offset_t *)execarg_address, BSD_PAGEABLE_SIZE_PER_EXEC, VM_FLAGS_ANYWHERE | VM_FLAGS_PURGABLE, VM_KERN_MEMORY_NONE);
 	assert(kr == KERN_SUCCESS);
 	return kr;
 }
 
 static kern_return_t
-execargs_purgeable_reference(void *execarg_address) {
+execargs_purgeable_reference(void *execarg_address)
+{
 	int state = VM_PURGABLE_NONVOLATILE;
 	kern_return_t kr = vm_purgable_control(bsd_pageable_map, (vm_offset_t) execarg_address, VM_PURGABLE_SET_STATE, &state);
 
@@ -5405,7 +6107,8 @@ execargs_purgeable_reference(void *execarg_address) {
 }
 
 static kern_return_t
-execargs_purgeable_volatilize(void *execarg_address) {
+execargs_purgeable_volatilize(void *execarg_address)
+{
 	int state = VM_PURGABLE_VOLATILE | VM_PURGABLE_ORDERING_OBSOLETE;
 	kern_return_t kr;
 	kr = vm_purgable_control(bsd_pageable_map, (vm_offset_t) execarg_address, VM_PURGABLE_SET_STATE, &state);
@@ -5416,7 +6119,8 @@ execargs_purgeable_volatilize(void *execarg_address) {
 }
 
 static void
-execargs_wakeup_waiters(void) {
+execargs_wakeup_waiters(void)
+{
 	thread_wakeup(&execargs_free_count);
 }
 
@@ -5435,7 +6139,7 @@ execargs_alloc(struct image_params *imgp)
 		execargs_waiters--;
 		if (res != THREAD_AWAKENED) {
 			execargs_lock_unlock();
-			return (EINTR);
+			return EINTR;
 		}
 	}
 
@@ -5454,25 +6158,25 @@ execargs_alloc(struct image_params *imgp)
 	assert(execargs_free_count >= 0);
 
 	execargs_lock_unlock();
-	
+
 	if (cache_index == -1) {
 		kret = execargs_purgeable_allocate(&imgp->ip_strings);
-	}
-	else
+	} else {
 		kret = execargs_purgeable_reference(imgp->ip_strings);
+	}
 
 	assert(kret == KERN_SUCCESS);
 	if (kret != KERN_SUCCESS) {
-		return (ENOMEM);
+		return ENOMEM;
 	}
 
 	/* last page used to read in file headers */
-	imgp->ip_vdata = imgp->ip_strings + ( NCARGS + PAGE_SIZE );
+	imgp->ip_vdata = imgp->ip_strings + (NCARGS + PAGE_SIZE);
 	imgp->ip_strendp = imgp->ip_strings;
 	imgp->ip_argspace = NCARGS;
-	imgp->ip_strspace = ( NCARGS + PAGE_SIZE );
+	imgp->ip_strspace = (NCARGS + PAGE_SIZE);
 
-	return (0);
+	return 0;
 }
 
 /*
@@ -5494,7 +6198,7 @@ execargs_free(struct image_params *imgp)
 	kern_return_t kret;
 	int i;
 	boolean_t needs_wakeup = FALSE;
-	
+
 	kret = execargs_purgeable_volatilize(imgp->ip_strings);
 
 	execargs_lock_lock();
@@ -5511,15 +6215,17 @@ execargs_free(struct image_params *imgp)
 
 	assert(imgp->ip_strings == NULL);
 
-	if (execargs_waiters > 0)
+	if (execargs_waiters > 0) {
 		needs_wakeup = TRUE;
-	
+	}
+
 	execargs_lock_unlock();
 
-	if (needs_wakeup == TRUE)
+	if (needs_wakeup == TRUE) {
 		execargs_wakeup_waiters();
+	}
 
-	return ((kret == KERN_SUCCESS ? 0 : EINVAL));
+	return kret == KERN_SUCCESS ? 0 : EINVAL;
 }
 
 static void
@@ -5533,8 +6239,9 @@ exec_resettextvp(proc_t p, struct image_params *imgp)
 	vp = imgp->ip_vp;
 	offset = imgp->ip_arch_offset;
 
-	if (vp == NULLVP)
+	if (vp == NULLVP) {
 		panic("exec_resettextvp: expected valid vp");
+	}
 
 	ret = vnode_ref(vp);
 	proc_lock(p);
@@ -5542,46 +6249,47 @@ exec_resettextvp(proc_t p, struct image_params *imgp)
 		p->p_textvp = vp;
 		p->p_textoff = offset;
 	} else {
-		p->p_textvp = NULLVP;	/* this is paranoia */
+		p->p_textvp = NULLVP;   /* this is paranoia */
 		p->p_textoff = 0;
 	}
 	proc_unlock(p);
 
-	if ( tvp != NULLVP) {
+	if (tvp != NULLVP) {
 		if (vnode_getwithref(tvp) == 0) {
 			vnode_rele(tvp);
 			vnode_put(tvp);
 		}
-	}	
-
+	}
 }
 
 // Includes the 0-byte (therefore "SIZE" instead of "LEN").
 static const size_t CS_CDHASH_STRING_SIZE = CS_CDHASH_LEN * 2 + 1;
 
-static void cdhash_to_string(char str[CS_CDHASH_STRING_SIZE], uint8_t const * const cdhash) {
-	   static char const nibble[] = "0123456789abcdef";
+static void
+cdhash_to_string(char str[CS_CDHASH_STRING_SIZE], uint8_t const * const cdhash)
+{
+	static char const nibble[] = "0123456789abcdef";
 
-	   /* Apparently still the safest way to get a hex representation
-		* of binary data.
-		* xnu's printf routines have %*D/%20D in theory, but "not really", see:
-		* <rdar://problem/33328859> confusion around %*D/%nD in printf
-		*/
-	   for (int i = 0; i < CS_CDHASH_LEN; ++i) {
-			   str[i*2] = nibble[(cdhash[i] & 0xf0) >> 4];
-			   str[i*2+1] = nibble[cdhash[i] & 0x0f];
-	   }
-	   str[CS_CDHASH_STRING_SIZE - 1] = 0;
+	/* Apparently still the safest way to get a hex representation
+	 * of binary data.
+	 * xnu's printf routines have %*D/%20D in theory, but "not really", see:
+	 * <rdar://problem/33328859> confusion around %*D/%nD in printf
+	 */
+	for (int i = 0; i < CS_CDHASH_LEN; ++i) {
+		str[i * 2] = nibble[(cdhash[i] & 0xf0) >> 4];
+		str[i * 2 + 1] = nibble[cdhash[i] & 0x0f];
+	}
+	str[CS_CDHASH_STRING_SIZE - 1] = 0;
 }
 
 /*
  * __EXEC_WAITING_ON_TASKGATED_CODE_SIGNATURE_UPCALL__
- * 
+ *
  * Description: Waits for the userspace daemon to respond to the request
- * 		we made. Function declared non inline to be visible in
+ *              we made. Function declared non inline to be visible in
  *		stackshots and spindumps as well as debugging.
  */
-__attribute__((noinline)) int 
+__attribute__((noinline)) int
 __EXEC_WAITING_ON_TASKGATED_CODE_SIGNATURE_UPCALL__(mach_port_t task_access_port, int32_t new_pid)
 {
 	return find_code_signature(task_access_port, new_pid);
@@ -5590,7 +6298,7 @@ __EXEC_WAITING_ON_TASKGATED_CODE_SIGNATURE_UPCALL__(mach_port_t task_access_port
 static int
 check_for_signature(proc_t p, struct image_params *imgp)
 {
-	mach_port_t port = NULL;
+	mach_port_t port = IPC_PORT_NULL;
 	kern_return_t kr = KERN_FAILURE;
 	int error = EACCES;
 	boolean_t unexpected_failure = FALSE;
@@ -5610,7 +6318,7 @@ check_for_signature(proc_t p, struct image_params *imgp)
 	proc_unlock(p);
 
 	/* Set the switch_protect flag on the map */
-	if(p->p_csflags & (CS_HARD|CS_KILL)) {
+	if (p->p_csflags & (CS_HARD | CS_KILL)) {
 		vm_map_switch_protect(get_task_map(p->task), TRUE);
 	}
 
@@ -5620,9 +6328,8 @@ check_for_signature(proc_t p, struct image_params *imgp)
 	 * approve of exec, kill and return immediately.
 	 */
 	if (imgp->ip_mac_return != 0) {
-
 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
-						p->p_pid, OS_REASON_EXEC, EXEC_EXIT_REASON_SECURITY_POLICY, 0, 0);
+		    p->p_pid, OS_REASON_EXEC, EXEC_EXIT_REASON_SECURITY_POLICY, 0, 0);
 		signature_failure_reason = os_reason_create(OS_REASON_EXEC, EXEC_EXIT_REASON_SECURITY_POLICY);
 		error = imgp->ip_mac_return;
 		unexpected_failure = TRUE;
@@ -5637,22 +6344,22 @@ check_for_signature(proc_t p, struct image_params *imgp)
 	}
 
 	/* If the code signature came through the image activation path, we skip the
-     * taskgated / externally attached path. */
+	 * taskgated / externally attached path. */
 	if (imgp->ip_csflags & CS_SIGNED) {
 		error = 0;
 		goto done;
 	}
 
-    /* The rest of the code is for signatures that either already have been externally
-     * attached (likely, but not necessarily by a previous run through the taskgated
-     * path), or that will now be attached by taskgated. */
-    
+	/* The rest of the code is for signatures that either already have been externally
+	 * attached (likely, but not necessarily by a previous run through the taskgated
+	 * path), or that will now be attached by taskgated. */
+
 	kr = task_get_task_access_port(p->task, &port);
 	if (KERN_SUCCESS != kr || !IPC_PORT_VALID(port)) {
 		error = 0;
 		if (require_success) {
 			KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
-							p->p_pid, OS_REASON_CODESIGNING, CODESIGNING_EXIT_REASON_TASK_ACCESS_PORT, 0, 0);
+			    p->p_pid, OS_REASON_CODESIGNING, CODESIGNING_EXIT_REASON_TASK_ACCESS_PORT, 0, 0);
 			signature_failure_reason = os_reason_create(OS_REASON_CODESIGNING, CODESIGNING_EXIT_REASON_TASK_ACCESS_PORT);
 			error = EACCES;
 		}
@@ -5661,9 +6368,9 @@ check_for_signature(proc_t p, struct image_params *imgp)
 
 	/*
 	 * taskgated returns KERN_SUCCESS if it has completed its work
-	 * and the exec should continue, KERN_FAILURE if the exec should 
-	 * fail, or it may error out with different error code in an 
-	 * event of mig failure (e.g. process was signalled during the 
+	 * and the exec should continue, KERN_FAILURE if the exec should
+	 * fail, or it may error out with different error code in an
+	 * event of mig failure (e.g. process was signalled during the
 	 * rpc call, taskgated died, mig server died etc.).
 	 */
 
@@ -5676,14 +6383,14 @@ check_for_signature(proc_t p, struct image_params *imgp)
 		error = EACCES;
 
 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
-						p->p_pid, OS_REASON_CODESIGNING, CODESIGNING_EXIT_REASON_TASKGATED_INVALID_SIG, 0, 0);
+		    p->p_pid, OS_REASON_CODESIGNING, CODESIGNING_EXIT_REASON_TASKGATED_INVALID_SIG, 0, 0);
 		signature_failure_reason = os_reason_create(OS_REASON_CODESIGNING, CODESIGNING_EXIT_REASON_TASKGATED_INVALID_SIG);
 		goto done;
 	default:
 		error = EACCES;
 
 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
-						p->p_pid, OS_REASON_EXEC, EXEC_EXIT_REASON_TASKGATED_OTHER, 0, 0);
+		    p->p_pid, OS_REASON_EXEC, EXEC_EXIT_REASON_TASKGATED_OTHER, 0, 0);
 		signature_failure_reason = os_reason_create(OS_REASON_EXEC, EXEC_EXIT_REASON_TASKGATED_OTHER);
 		unexpected_failure = TRUE;
 		goto done;
@@ -5699,34 +6406,31 @@ check_for_signature(proc_t p, struct image_params *imgp)
 			 * Adhoc signed non-platform binaries without special cs_flags and without any
 			 * entitlements (unrestricted ones still pass AMFI). */
 			if (
-                /* Revalidate the blob if necessary through bumped generation count. */
-                (ubc_cs_generation_check(p->p_textvp) == 0 ||
-                 ubc_cs_blob_revalidate(p->p_textvp, csb, imgp, 0) == 0) &&
-                /* Only CS_ADHOC, no CS_KILL, CS_HARD etc. */
+				/* Revalidate the blob if necessary through bumped generation count. */
+				(ubc_cs_generation_check(p->p_textvp) == 0 ||
+				ubc_cs_blob_revalidate(p->p_textvp, csb, imgp, 0) == 0) &&
+				/* Only CS_ADHOC, no CS_KILL, CS_HARD etc. */
 				(csb->csb_flags & CS_ALLOWED_MACHO) == CS_ADHOC &&
 				/* If it has a CMS blob, it's not adhoc. The CS_ADHOC flag can lie. */
 				csblob_find_blob_bytes((const uint8_t *)csb->csb_mem_kaddr, csb->csb_mem_size,
-									   CSSLOT_SIGNATURESLOT,
-									   CSMAGIC_BLOBWRAPPER) == NULL &&
+				CSSLOT_SIGNATURESLOT,
+				CSMAGIC_BLOBWRAPPER) == NULL &&
 				/* It could still be in a trust cache (unlikely with CS_ADHOC), or a magic path. */
 				csb->csb_platform_binary == 0 &&
 				/* No entitlements, not even unrestricted ones. */
-                csb->csb_entitlements_blob == NULL) {
-
+				csb->csb_entitlements_blob == NULL) {
 				proc_lock(p);
 				p->p_csflags |= CS_SIGNED | CS_VALID;
 				proc_unlock(p);
-
 			} else {
 				uint8_t cdhash[CS_CDHASH_LEN];
 				char cdhash_string[CS_CDHASH_STRING_SIZE];
 				proc_getcdhash(p, cdhash);
 				cdhash_to_string(cdhash_string, cdhash);
 				printf("ignoring detached code signature on '%s' with cdhash '%s' "
-					   "because it is invalid, or not a simple adhoc signature.\n", 
-					   p->p_name, cdhash_string);
+				    "because it is invalid, or not a simple adhoc signature.\n",
+				    p->p_name, cdhash_string);
 			}
-
 		}
 	}
 
@@ -5742,16 +6446,17 @@ done:
 			cdhash_to_string(cdhash_string, cdhash);
 
 			os_log(peLog, "CS Platform Exec Logging: Executing platform signed binary "
-				   "'%s' with cdhash %s\n", p->p_name, cdhash_string);
+			    "'%s' with cdhash %s\n", p->p_name, cdhash_string);
 		}
 	} else {
-		if (!unexpected_failure)
+		if (!unexpected_failure) {
 			p->p_csflags |= CS_KILLED;
+		}
 		/* make very sure execution fails */
 		if (vfexec || spawn) {
 			assert(signature_failure_reason != OS_REASON_NULL);
 			psignal_vfork_with_reason(p, p->task, imgp->ip_new_thread,
-					SIGKILL, signature_failure_reason);
+			    SIGKILL, signature_failure_reason);
 			signature_failure_reason = OS_REASON_NULL;
 			error = 0;
 		} else {
@@ -5759,6 +6464,10 @@ done:
 			psignal_with_reason(p, SIGKILL, signature_failure_reason);
 			signature_failure_reason = OS_REASON_NULL;
 		}
+	}
+
+	if (port != IPC_PORT_NULL) {
+		ipc_port_release_send(port);
 	}
 
 	/* If we hit this, we likely would have leaked an exit reason */
@@ -5776,7 +6485,8 @@ done:
  * in the process' page tables, we prefault some pages if
  * possible. Errors are non-fatal.
  */
-static void exec_prefault_data(proc_t p __unused, struct image_params *imgp, load_result_t *load_result)
+static void
+exec_prefault_data(proc_t p __unused, struct image_params *imgp, load_result_t *load_result)
 {
 	int ret;
 	size_t expected_all_image_infos_size;
@@ -5785,12 +6495,12 @@ static void exec_prefault_data(proc_t p __unused, struct image_params *imgp, loa
 	 * Prefault executable or dyld entry point.
 	 */
 	vm_fault(current_map(),
-		 vm_map_trunc_page(load_result->entry_point,
-				   vm_map_page_mask(current_map())),
-		 VM_PROT_READ | VM_PROT_EXECUTE,
-		 FALSE, VM_KERN_MEMORY_NONE,
-		 THREAD_UNINT, NULL, 0);
-	
+	    vm_map_trunc_page(load_result->entry_point,
+	    vm_map_page_mask(current_map())),
+	    VM_PROT_READ | VM_PROT_EXECUTE,
+	    FALSE, VM_KERN_MEMORY_NONE,
+	    THREAD_UNINT, NULL, 0);
+
 	if (imgp->ip_flags & IMGPF_IS_64BIT_ADDR) {
 		expected_all_image_infos_size = sizeof(struct user64_dyld_all_image_infos);
 	} else {
@@ -5799,11 +6509,11 @@ static void exec_prefault_data(proc_t p __unused, struct image_params *imgp, loa
 
 	/* Decode dyld anchor structure from <mach-o/dyld_images.h> */
 	if (load_result->dynlinker &&
-		load_result->all_image_info_addr &&
-		load_result->all_image_info_size >= expected_all_image_infos_size) {
+	    load_result->all_image_info_addr &&
+	    load_result->all_image_info_size >= expected_all_image_infos_size) {
 		union {
-			struct user64_dyld_all_image_infos	infos64;
-			struct user32_dyld_all_image_infos	infos32;
+			struct user64_dyld_all_image_infos      infos64;
+			struct user32_dyld_all_image_infos      infos32;
 		} all_image_infos;
 
 		/*
@@ -5811,26 +6521,25 @@ static void exec_prefault_data(proc_t p __unused, struct image_params *imgp, loa
 		 * and recovery path.
 		 */
 		vm_fault(current_map(),
-			 vm_map_trunc_page(load_result->all_image_info_addr,
-					   vm_map_page_mask(current_map())),
-			 VM_PROT_READ | VM_PROT_WRITE,
-			 FALSE, VM_KERN_MEMORY_NONE,
-			 THREAD_UNINT, NULL, 0);
+		    vm_map_trunc_page(load_result->all_image_info_addr,
+		    vm_map_page_mask(current_map())),
+		    VM_PROT_READ | VM_PROT_WRITE,
+		    FALSE, VM_KERN_MEMORY_NONE,
+		    THREAD_UNINT, NULL, 0);
 		if ((load_result->all_image_info_addr & PAGE_MASK) + expected_all_image_infos_size > PAGE_SIZE) {
 			/* all_image_infos straddles a page */
 			vm_fault(current_map(),
-				 vm_map_trunc_page(load_result->all_image_info_addr + expected_all_image_infos_size - 1,
-						   vm_map_page_mask(current_map())),
-				 VM_PROT_READ | VM_PROT_WRITE,
-				 FALSE, VM_KERN_MEMORY_NONE,
-				 THREAD_UNINT, NULL, 0);
+			    vm_map_trunc_page(load_result->all_image_info_addr + expected_all_image_infos_size - 1,
+			    vm_map_page_mask(current_map())),
+			    VM_PROT_READ | VM_PROT_WRITE,
+			    FALSE, VM_KERN_MEMORY_NONE,
+			    THREAD_UNINT, NULL, 0);
 		}
 
 		ret = copyin(load_result->all_image_info_addr,
-					 &all_image_infos,
-					 expected_all_image_infos_size);
+		    &all_image_infos,
+		    expected_all_image_infos_size);
 		if (ret == 0 && all_image_infos.infos32.version >= DYLD_ALL_IMAGE_INFOS_ADDRESS_MINIMUM_VERSION) {
-
 			user_addr_t notification_address;
 			user_addr_t dyld_image_address;
 			user_addr_t dyld_version_address;
@@ -5866,38 +6575,38 @@ static void exec_prefault_data(proc_t p __unused, struct image_params *imgp, loa
 
 #if 0
 			kprintf("exec_prefault: 0x%016llx 0x%08x 0x%016llx 0x%016llx 0x%016llx 0x%016llx\n",
-					(uint64_t)load_result->all_image_info_addr,
-					all_image_infos.infos32.version,
-					(uint64_t)notification_address,
-					(uint64_t)dyld_image_address,
-					(uint64_t)dyld_version_address,
-					(uint64_t)dyld_all_image_infos_address);
+			    (uint64_t)load_result->all_image_info_addr,
+			    all_image_infos.infos32.version,
+			    (uint64_t)notification_address,
+			    (uint64_t)dyld_image_address,
+			    (uint64_t)dyld_version_address,
+			    (uint64_t)dyld_all_image_infos_address);
 #endif
 
 			vm_fault(current_map(),
-				 vm_map_trunc_page(notification_address + dyld_slide_amount,
-						   vm_map_page_mask(current_map())),
-				 VM_PROT_READ | VM_PROT_EXECUTE,
-				 FALSE, VM_KERN_MEMORY_NONE,
-				 THREAD_UNINT, NULL, 0);
+			    vm_map_trunc_page(notification_address + dyld_slide_amount,
+			    vm_map_page_mask(current_map())),
+			    VM_PROT_READ | VM_PROT_EXECUTE,
+			    FALSE, VM_KERN_MEMORY_NONE,
+			    THREAD_UNINT, NULL, 0);
 			vm_fault(current_map(),
-				 vm_map_trunc_page(dyld_image_address + dyld_slide_amount,
-						   vm_map_page_mask(current_map())),
-				 VM_PROT_READ | VM_PROT_EXECUTE,
-				 FALSE, VM_KERN_MEMORY_NONE,
-				 THREAD_UNINT, NULL, 0);
+			    vm_map_trunc_page(dyld_image_address + dyld_slide_amount,
+			    vm_map_page_mask(current_map())),
+			    VM_PROT_READ | VM_PROT_EXECUTE,
+			    FALSE, VM_KERN_MEMORY_NONE,
+			    THREAD_UNINT, NULL, 0);
 			vm_fault(current_map(),
-				 vm_map_trunc_page(dyld_version_address + dyld_slide_amount,
-						   vm_map_page_mask(current_map())),
-				 VM_PROT_READ,
-				 FALSE, VM_KERN_MEMORY_NONE,
-				 THREAD_UNINT, NULL, 0);
+			    vm_map_trunc_page(dyld_version_address + dyld_slide_amount,
+			    vm_map_page_mask(current_map())),
+			    VM_PROT_READ,
+			    FALSE, VM_KERN_MEMORY_NONE,
+			    THREAD_UNINT, NULL, 0);
 			vm_fault(current_map(),
-				 vm_map_trunc_page(dyld_all_image_infos_address + dyld_slide_amount,
-						   vm_map_page_mask(current_map())),
-				 VM_PROT_READ | VM_PROT_WRITE,
-				 FALSE, VM_KERN_MEMORY_NONE,
-				 THREAD_UNINT, NULL, 0);
+			    vm_map_trunc_page(dyld_all_image_infos_address + dyld_slide_amount,
+			    vm_map_page_mask(current_map())),
+			    VM_PROT_READ | VM_PROT_WRITE,
+			    FALSE, VM_KERN_MEMORY_NONE,
+			    THREAD_UNINT, NULL, 0);
 		}
 	}
 }

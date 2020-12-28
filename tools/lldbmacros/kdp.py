@@ -2,6 +2,8 @@ from xnu import *
 from utils import *
 import sys
 
+current_KDP_mode = "swhosted"
+
 def GetKDPPacketHeaderInt(request=0, is_reply=False, seq=0, length=0, key=0):
     """ create a 64 bit number that could be saved as pkt_hdr_t
         params:
@@ -282,4 +284,27 @@ def KDPSetDumpInfo(cmd_args=None):
     else:
         print "Failed to save the dumpinfo."
     return retval
+
+@lldb_command('kdpmode')
+def KDPMode(cmd_args=None):
+    """
+    Change KDP mode between software hosted and hardware probe.
+    When lldb is connected to a KDP server backed by a hardware debug tool
+    setting this to 'hwprobe' enables physical memory access.
+    
+    swhosted: LLDB is connected to the target using a serial or socket connection.
+    hwprobe: LLDB is connected to the target using a hardware probe.
+
+    usage: kdpmode <mode>
+    mode: 'swhosted' or 'hwprobe'
+    """
+    global current_KDP_mode
+
+    if cmd_args == None or len(cmd_args) == 0:
+        return current_KDP_mode
+    if len(cmd_args) > 1 or cmd_args[0] not in {'swhosted', 'hwprobe'}:
+        print "Invalid Arguments", KDPMode.__doc__
+    else:
+        current_KDP_mode = cmd_args[0]
+    return
 

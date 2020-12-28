@@ -222,6 +222,26 @@ L_post_initial_offset:
 1:
 
 /*
+ *		if ((uintptr_t)data & 4) {
+ *			if (mlen < 4)
+ *				goto L2_bytes;
+ *			partial += *(uint32_t *)(void *)data;
+ *			data += 4;
+ *			mlen -= 4;
+ *		}
+ */
+	// align on 8-bytes boundary if applicable
+	tst	data, #4
+	b.eq	1f
+	cmp	mlen, #4
+	b.lt	L2_bytes
+	ldr	w9, [data], #4
+	sub	mlen, mlen, #4
+	adds	w7, w7, w9
+	adc	x7, x7, x10 // assumes x10 still is #0 as set above
+1:
+
+/*
  *		while (mlen >= 64) {
  *			__builtin_prefetch(data + 32);
  *			__builtin_prefetch(data + 64);

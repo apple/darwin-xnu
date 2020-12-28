@@ -58,7 +58,7 @@ work_interval_create(work_interval_t *interval_handle, uint32_t create_flags)
 	};
 
 	ret = __work_interval_ctl(WORK_INTERVAL_OPERATION_CREATE2, 0,
-	                          &create_params, sizeof(create_params));
+	    &create_params, sizeof(create_params));
 	if (ret == -1) {
 		return ret;
 	}
@@ -80,8 +80,8 @@ work_interval_create(work_interval_t *interval_handle, uint32_t create_flags)
 
 int
 work_interval_notify(work_interval_t interval_handle, uint64_t start,
-                     uint64_t finish, uint64_t deadline, uint64_t next_start,
-                     uint32_t notify_flags)
+    uint64_t finish, uint64_t deadline, uint64_t next_start,
+    uint32_t notify_flags)
 {
 	int ret;
 	uint64_t work_interval_id;
@@ -102,16 +102,16 @@ work_interval_notify(work_interval_t interval_handle, uint64_t start,
 	work_interval_id = interval_handle->work_interval_id;
 
 	ret = __work_interval_ctl(WORK_INTERVAL_OPERATION_NOTIFY, work_interval_id,
-	                          &notification, sizeof(notification));
+	    &notification, sizeof(notification));
 	return ret;
 }
 
 int
 work_interval_notify_simple(work_interval_t interval_handle, uint64_t start,
-                            uint64_t deadline, uint64_t next_start)
+    uint64_t deadline, uint64_t next_start)
 {
 	return work_interval_notify(interval_handle, start, mach_absolute_time(),
-	                            deadline, next_start, 0);
+	           deadline, next_start, 0);
 }
 
 
@@ -160,7 +160,7 @@ work_interval_destroy(work_interval_t interval_handle)
 		uint64_t work_interval_id = interval_handle->work_interval_id;
 
 		int ret = __work_interval_ctl(WORK_INTERVAL_OPERATION_DESTROY,
-		                              work_interval_id, NULL, 0);
+		    work_interval_id, NULL, 0);
 
 		interval_handle->work_interval_id = 0;
 
@@ -203,14 +203,14 @@ work_interval_join_port(mach_port_t port)
 	}
 
 	return __work_interval_ctl(WORK_INTERVAL_OPERATION_JOIN,
-	                           (uint64_t)port, NULL, 0);
+	           (uint64_t)port, NULL, 0);
 }
 
 int
 work_interval_leave(void)
 {
 	return __work_interval_ctl(WORK_INTERVAL_OPERATION_JOIN,
-	                           (uint64_t)MACH_PORT_NULL, NULL, 0);
+	           (uint64_t)MACH_PORT_NULL, NULL, 0);
 }
 
 int
@@ -236,7 +236,7 @@ work_interval_copy_port(work_interval_t interval_handle, mach_port_t *port)
 	mach_port_t wi_port = interval_handle->wi_port;
 
 	kern_return_t kr = mach_port_mod_refs(mach_task_self(), wi_port,
-	                                      MACH_PORT_RIGHT_SEND, 1);
+	    MACH_PORT_RIGHT_SEND, 1);
 
 	if (kr != KERN_SUCCESS) {
 		*port = MACH_PORT_NULL;
@@ -248,7 +248,3 @@ work_interval_copy_port(work_interval_t interval_handle, mach_port_t *port)
 
 	return 0;
 }
-
-
-
-

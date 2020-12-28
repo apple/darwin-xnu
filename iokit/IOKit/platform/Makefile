@@ -14,7 +14,7 @@ MI_DIR = platform
 NOT_EXPORT_HEADERS =
 NOT_KF_MI_HEADERS  =
 
-ALL_HEADERS = $(shell (cd $(SOURCE); echo *.h))
+ALL_HEADERS = $(notdir $(wildcard $(SOURCE)*.h))
 
 INSTALL_MI_LIST	=
 INSTALL_MI_LCL_LIST =

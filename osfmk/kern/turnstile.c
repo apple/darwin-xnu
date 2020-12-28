@@ -40,19 +40,21 @@
 #include <kern/sched_prim.h>
 #include <kern/zalloc.h>
 #include <kern/debug.h>
-#include <machine/machlimits.h>
+#include <machine/limits.h>
 #include <machine/atomic.h>
 
 #include <pexpert/pexpert.h>
+#include <os/hash.h>
 #include <libkern/section_keywords.h>
 
 static zone_t turnstiles_zone;
 static int turnstile_max_hop;
+static struct mpsc_daemon_queue turnstile_deallocate_queue;
 #define MAX_TURNSTILES (thread_max)
 #define TURNSTILES_CHUNK (THREAD_CHUNK)
 
 /* Global table for turnstile promote policy for all type of turnstiles */
-turnstile_promote_policy_t turnstile_promote_policy[TURNSTILE_TOTAL_TYPES] = {
+static const turnstile_promote_policy_t turnstile_promote_policy[TURNSTILE_TOTAL_TYPES] = {
 	[TURNSTILE_NONE]          = TURNSTILE_PROMOTE_NONE,
 	[TURNSTILE_KERNEL_MUTEX]  = TURNSTILE_KERNEL_PROMOTE,
 	[TURNSTILE_ULOCK]         = TURNSTILE_USER_PROMOTE,
@@ -61,6 +63,20 @@ turnstile_promote_policy_t turnstile_promote_policy[TURNSTILE_TOTAL_TYPES] = {
 	[TURNSTILE_WORKLOOPS]     = TURNSTILE_USER_IPC_PROMOTE,
 	[TURNSTILE_WORKQS]        = TURNSTILE_USER_IPC_PROMOTE,
 	[TURNSTILE_KNOTE]         = TURNSTILE_USER_IPC_PROMOTE,
+	[TURNSTILE_SLEEP_INHERITOR] = TURNSTILE_KERNEL_PROMOTE,
+};
+
+/* Global table for turnstile hash lock policy for all type of turnstiles */
+static const turnstile_hash_lock_policy_t turnstile_hash_lock_policy[TURNSTILE_TOTAL_TYPES] = {
+	[TURNSTILE_NONE]          = TURNSTILE_HASH_LOCK_POLICY_NONE,
+	[TURNSTILE_KERNEL_MUTEX]  = TURNSTILE_HASH_LOCK_POLICY_NONE,
+	[TURNSTILE_ULOCK]         = TURNSTILE_HASH_LOCK_POLICY_NONE,
+	[TURNSTILE_PTHREAD_MUTEX] = TURNSTILE_HASH_LOCK_POLICY_NONE,
+	[TURNSTILE_SYNC_IPC]      = TURNSTILE_HASH_LOCK_POLICY_NONE,
+	[TURNSTILE_WORKLOOPS]     = TURNSTILE_HASH_LOCK_POLICY_NONE,
+	[TURNSTILE_WORKQS]        = TURNSTILE_HASH_LOCK_POLICY_NONE,
+	[TURNSTILE_KNOTE]         = TURNSTILE_HASH_LOCK_POLICY_NONE,
+	[TURNSTILE_SLEEP_INHERITOR] = (TURNSTILE_IRQ_UNSAFE_HASH | TURNSTILE_LOCKED_HASH),
 };
 
 os_refgrp_decl(static, turnstile_refgrp, "turnstile", NULL);
@@ -69,19 +85,19 @@ os_refgrp_decl(static, turnstile_refgrp, "turnstile", NULL);
 static queue_head_t turnstiles_list;
 static lck_spin_t global_turnstile_lock;
 
-lck_grp_t		turnstiles_dev_lock_grp;
-lck_attr_t		turnstiles_dev_lock_attr;
-lck_grp_attr_t		turnstiles_dev_lock_grp_attr;
+lck_grp_t               turnstiles_dev_lock_grp;
+lck_attr_t              turnstiles_dev_lock_attr;
+lck_grp_attr_t          turnstiles_dev_lock_grp_attr;
 
 #define global_turnstiles_lock_init() \
 	lck_spin_init(&global_turnstile_lock, &turnstiles_dev_lock_grp, &turnstiles_dev_lock_attr)
 #define global_turnstiles_lock_destroy() \
 	lck_spin_destroy(&global_turnstile_lock, &turnstiles_dev_lock_grp)
-#define	global_turnstiles_lock() \
-	lck_spin_lock(&global_turnstile_lock)
-#define	global_turnstiles_lock_try() \
-	lck_spin_try_lock(&global_turnstile_lock)
-#define	global_turnstiles_unlock() \
+#define global_turnstiles_lock() \
+	lck_spin_lock_grp(&global_turnstile_lock, &turnstiles_dev_lock_grp)
+#define global_turnstiles_lock_try() \
+	lck_spin_try_lock_grp(&global_turnstile_lock, &turnstiles_dev_lock_grp)
+#define global_turnstiles_unlock() \
 	lck_spin_unlock(&global_turnstile_lock)
 
 /* Array to store stats for multi-hop boosting */
@@ -89,11 +105,10 @@ static struct turnstile_stats turnstile_boost_stats[TURNSTILE_MAX_HOP_DEFAULT] =
 static struct turnstile_stats turnstile_unboost_stats[TURNSTILE_MAX_HOP_DEFAULT] = {};
 uint64_t thread_block_on_turnstile_count;
 uint64_t thread_block_on_regular_waitq_count;
-
-#endif
+#endif /* DEVELOPMENT || DEBUG */
 
 #ifndef max
-#define max(a,b)        (((a) > (b)) ? (a) : (b))
+#define max(a, b)        (((a) > (b)) ? (a) : (b))
 #endif /* max */
 
 /* Static function declarations */
@@ -109,57 +124,60 @@ static void
 turnstile_update_inheritor_workq_priority_chain(struct turnstile *in_turnstile, spl_t s);
 static void
 turnstile_update_inheritor_thread_priority_chain(struct turnstile **in_turnstile,
-		thread_t *out_thread, int total_hop, turnstile_stats_update_flags_t tsu_flags);
+    thread_t *out_thread, int total_hop, turnstile_stats_update_flags_t tsu_flags);
 static void
 turnstile_update_inheritor_turnstile_priority_chain(struct turnstile **in_out_turnstile,
-		int total_hop, turnstile_stats_update_flags_t tsu_flags);
+    int total_hop, turnstile_stats_update_flags_t tsu_flags);
 static void
 thread_update_waiting_turnstile_priority_chain(thread_t *in_thread,
-		struct turnstile **out_turnstile, int thread_hop, int total_hop,
-		turnstile_stats_update_flags_t tsu_flags);
+    struct turnstile **out_turnstile, int thread_hop, int total_hop,
+    turnstile_stats_update_flags_t tsu_flags);
 static boolean_t
 turnstile_update_turnstile_promotion_locked(struct turnstile *dst_turnstile,
-		struct turnstile *src_turnstile);
+    struct turnstile *src_turnstile);
 static boolean_t
 turnstile_update_turnstile_promotion(struct turnstile *dst_turnstile,
-		struct turnstile *src_turnstile);
+    struct turnstile *src_turnstile);
 static boolean_t
 turnstile_need_turnstile_promotion_update(struct turnstile *dst_turnstile,
-		struct turnstile *src_turnstile);
+    struct turnstile *src_turnstile);
 static boolean_t
 turnstile_add_turnstile_promotion(struct turnstile *dst_turnstile,
-		struct turnstile *src_turnstile);
+    struct turnstile *src_turnstile);
 static boolean_t
 turnstile_remove_turnstile_promotion(struct turnstile *dst_turnstile,
-		struct turnstile *src_turnstile);
+    struct turnstile *src_turnstile);
 static boolean_t
 turnstile_update_thread_promotion_locked(struct turnstile *dst_turnstile,
-		thread_t thread);
+    thread_t thread);
 static boolean_t
 turnstile_need_thread_promotion_update(struct turnstile *dst_turnstile,
-		thread_t thread);
+    thread_t thread);
 static boolean_t
 thread_add_turnstile_promotion(
-		thread_t thread, struct turnstile *turnstile);
+	thread_t thread, struct turnstile *turnstile);
 static boolean_t
 thread_remove_turnstile_promotion(
-		thread_t thread, struct turnstile *turnstile);
+	thread_t thread, struct turnstile *turnstile);
 static boolean_t
 thread_needs_turnstile_promotion_update(thread_t thread,
-		struct turnstile *turnstile);
+    struct turnstile *turnstile);
 static boolean_t
 thread_update_turnstile_promotion(
-		thread_t thread, struct turnstile *turnstile);
+	thread_t thread, struct turnstile *turnstile);
 static boolean_t
 thread_update_turnstile_promotion_locked(
-		thread_t thread, struct turnstile *turnstile);
+	thread_t thread, struct turnstile *turnstile);
 static boolean_t
 workq_add_turnstile_promotion(
-		struct workqueue *wq_inheritor, struct turnstile *turnstile);
+	struct workqueue *wq_inheritor, struct turnstile *turnstile);
 static turnstile_stats_update_flags_t
 thread_get_update_flags_for_turnstile_propagation_stoppage(thread_t thread);
 static turnstile_stats_update_flags_t
 turnstile_get_update_flags_for_above_UI_pri_change(struct turnstile *turnstile);
+static void turnstile_stash_inheritor(turnstile_inheritor_t new_inheritor,
+    turnstile_update_flags_t flags);
+static int turnstile_compute_thread_push(struct turnstile *turnstile, thread_t thread);
 
 #if DEVELOPMENT || DEBUG
 /* Test primitives and interfaces for testing turnstiles */
@@ -172,6 +190,9 @@ struct tstile_test_prim {
 
 struct tstile_test_prim *test_prim_ts_inline;
 struct tstile_test_prim *test_prim_global_htable;
+struct tstile_test_prim *test_prim_global_ts_kernel;
+struct tstile_test_prim *test_prim_global_ts_kernel_hash;
+
 static void
 tstile_test_prim_init(struct tstile_test_prim **test_prim_ptr);
 #endif
@@ -180,7 +201,7 @@ union turnstile_type_gencount {
 	uint32_t value;
 	struct {
 		uint32_t ts_type:(8 * sizeof(turnstile_type_t)),
-		         ts_gencount: (8 *(sizeof(uint32_t) - sizeof(turnstile_type_t)));
+		ts_gencount: (8 * (sizeof(uint32_t) - sizeof(turnstile_type_t)));
 	};
 };
 
@@ -218,9 +239,9 @@ turnstile_set_type_and_increment_gencount(struct turnstile *turnstile, turnstile
 /* Turnstile hashtable Implementation */
 
 /*
- * Maximum number of buckets in the turnstile hashtable. This number affects the 
- * performance of the hashtable since it determines the hash collision 
- * rate. To experiment with the number of buckets in this hashtable use the 
+ * Maximum number of buckets in the turnstile hashtable. This number affects the
+ * performance of the hashtable since it determines the hash collision
+ * rate. To experiment with the number of buckets in this hashtable use the
  * "ts_htable_buckets" boot-arg.
  */
 #define TURNSTILE_HTABLE_BUCKETS_DEFAULT   32
@@ -229,13 +250,16 @@ turnstile_set_type_and_increment_gencount(struct turnstile *turnstile, turnstile
 SLIST_HEAD(turnstile_hashlist, turnstile);
 
 struct turnstile_htable_bucket {
-        lck_spin_t                    ts_ht_bucket_lock;
-        struct turnstile_hashlist     ts_ht_bucket_list;
+	lck_spin_t                    ts_ht_bucket_lock;
+	struct turnstile_hashlist     ts_ht_bucket_list;
 };
 
 SECURITY_READ_ONLY_LATE(static uint32_t) ts_htable_buckets;
-/* Global hashtable for turnstiles */
+/* Global hashtable for turnstiles managed with interrupts disabled */
+SECURITY_READ_ONLY_LATE(static struct turnstile_htable_bucket *)turnstile_htable_irq_safe;
+/* Global hashtable for turnstiles managed with interrupts enabled */
 SECURITY_READ_ONLY_LATE(static struct turnstile_htable_bucket *)turnstile_htable;
+
 
 /* Bucket locks for turnstile hashtable */
 lck_grp_t               turnstiles_htable_lock_grp;
@@ -243,11 +267,14 @@ lck_attr_t              turnstiles_htable_lock_attr;
 lck_grp_attr_t          turnstiles_htable_lock_grp_attr;
 
 #define turnstile_bucket_lock_init(bucket) \
-        lck_spin_init(&bucket->ts_ht_bucket_lock, &turnstiles_htable_lock_grp, &turnstiles_htable_lock_attr)
+	lck_spin_init(&bucket->ts_ht_bucket_lock, &turnstiles_htable_lock_grp, &turnstiles_htable_lock_attr)
 #define turnstile_bucket_lock(bucket) \
-        lck_spin_lock(&bucket->ts_ht_bucket_lock)
+	lck_spin_lock_grp(&bucket->ts_ht_bucket_lock, &turnstiles_htable_lock_grp)
 #define turnstile_bucket_unlock(bucket) \
-        lck_spin_unlock(&bucket->ts_ht_bucket_lock)
+	lck_spin_unlock(&bucket->ts_ht_bucket_lock)
+
+#define kdp_turnstile_bucket_is_locked(bucket) \
+	kdp_lck_spin_is_acquired(&bucket->ts_ht_bucket_lock)
 
 /*
  * Name: turnstiles_hashtable_init
@@ -264,22 +291,32 @@ static void
 turnstiles_hashtable_init(void)
 {
 	/* Initialize number of buckets in the hashtable */
-	if (PE_parse_boot_argn("ts_htable_buckets", &ts_htable_buckets, sizeof(ts_htable_buckets)) != TRUE)
+	if (PE_parse_boot_argn("ts_htable_buckets", &ts_htable_buckets, sizeof(ts_htable_buckets)) != TRUE) {
 		ts_htable_buckets = TURNSTILE_HTABLE_BUCKETS_DEFAULT;
- 
+	}
+
 	assert(ts_htable_buckets <= TURNSTILE_HTABLE_BUCKETS_MAX);
 	uint32_t ts_htable_size = ts_htable_buckets * sizeof(struct turnstile_htable_bucket);
-	turnstile_htable = (struct turnstile_htable_bucket *)kalloc(ts_htable_size);
-	if (turnstile_htable == NULL)
+	turnstile_htable_irq_safe = (struct turnstile_htable_bucket *)kalloc(ts_htable_size);
+	if (turnstile_htable_irq_safe == NULL) {
 		panic("Turnstiles hash table memory allocation failed!");
-	
+	}
+
+	turnstile_htable = (struct turnstile_htable_bucket *)kalloc(ts_htable_size);
+	if (turnstile_htable == NULL) {
+		panic("Turnstiles hash table memory allocation failed!");
+	}
 	lck_grp_attr_setdefault(&turnstiles_htable_lock_grp_attr);
 	lck_grp_init(&turnstiles_htable_lock_grp, "turnstiles_htable_locks", &turnstiles_htable_lock_grp_attr);
 	lck_attr_setdefault(&turnstiles_htable_lock_attr);
 
-	/* Initialize all the buckets of the hashtable */
+	/* Initialize all the buckets of the hashtables */
 	for (uint32_t i = 0; i < ts_htable_buckets; i++) {
-		struct turnstile_htable_bucket *ts_bucket = &(turnstile_htable[i]);
+		struct turnstile_htable_bucket *ts_bucket = &(turnstile_htable_irq_safe[i]);
+		turnstile_bucket_lock_init(ts_bucket);
+		SLIST_INIT(&ts_bucket->ts_ht_bucket_list);
+
+		ts_bucket = &(turnstile_htable[i]);
 		turnstile_bucket_lock_init(ts_bucket);
 		SLIST_INIT(&ts_bucket->ts_ht_bucket_list);
 	}
@@ -367,13 +404,115 @@ turnstile_freelist_remove(
  * Returns:
  *   hash table bucket index for provided proprietor
  */
-static inline uint32_t 
+static inline uint32_t
 turnstile_hash(uintptr_t proprietor)
 {
-	char *key = (char *)&proprietor;
-	uint32_t hash = jenkins_hash(key, sizeof(key));
-	hash &= (ts_htable_buckets - 1);
-	return hash;
+	uint32_t hash = os_hash_kernel_pointer((void *)proprietor);
+	return hash & (ts_htable_buckets - 1);
+}
+
+static inline struct turnstile_htable_bucket *
+turnstile_get_bucket(uint32_t index, turnstile_type_t type)
+{
+	struct turnstile_htable_bucket *ts_bucket;
+	int hash_policy = turnstile_hash_lock_policy[type];
+
+	if (hash_policy & TURNSTILE_IRQ_UNSAFE_HASH) {
+		ts_bucket = &(turnstile_htable[index]);
+	} else {
+		ts_bucket = &(turnstile_htable_irq_safe[index]);
+	}
+
+	return ts_bucket;
+}
+
+/*
+ * Name: turnstile_hash_bucket_lock
+ *
+ * Description: locks the spinlock associated with proprietor's bucket.
+ *              if proprietor is specified the index for the hash will be
+ *              recomputed and returned in index_proprietor,
+ *              otherwise the value save in index_proprietor is used as index.
+ *
+ * Args:
+ *   Arg1: proprietor (key) for hashing
+ *   Arg2: index for proprietor in the hash
+ *   Arg3: turnstile type
+ *
+ * Returns: old value of irq if irq were disabled before acquiring the lock.
+ */
+unsigned
+turnstile_hash_bucket_lock(uintptr_t proprietor, uint32_t *index_proprietor, turnstile_type_t type)
+{
+	struct turnstile_htable_bucket *ts_bucket;
+	int hash_policy = turnstile_hash_lock_policy[type];
+	bool irq_safe = !(hash_policy & TURNSTILE_IRQ_UNSAFE_HASH);
+	spl_t ret = 0;
+	uint32_t index;
+
+	/*
+	 * If the proprietor is specified, the caller doesn't know
+	 * the index in the hash, so compute it.
+	 * Otherwise use the value of index provided.
+	 */
+	if (proprietor) {
+		index = turnstile_hash(proprietor);
+		*index_proprietor = index;
+	} else {
+		index = *index_proprietor;
+	}
+
+	ts_bucket = turnstile_get_bucket(index, type);
+
+	if (irq_safe) {
+		ret = splsched();
+	}
+
+	turnstile_bucket_lock(ts_bucket);
+
+	return ret;
+}
+
+/*
+ * Name: turnstile_hash_bucket_unlock
+ *
+ * Description: unlocks the spinlock associated with proprietor's bucket.
+ *              if proprietor is specified the index for the hash will be
+ *              recomputed and returned in index_proprietor,
+ *              otherwise the value save in index_proprietor is used as index.
+ *
+ * Args:
+ *   Arg1: proprietor (key) for hashing
+ *   Arg2: index for proprietor in the hash
+ *   Arg3: turnstile type
+ *   Arg4: irq value returned by turnstile_hash_bucket_lock
+ *
+ */
+void
+turnstile_hash_bucket_unlock(uintptr_t proprietor, uint32_t *index_proprietor, turnstile_type_t type, unsigned s)
+{
+	struct turnstile_htable_bucket *ts_bucket;
+	int hash_policy = turnstile_hash_lock_policy[type];
+	bool irq_safe = !(hash_policy & TURNSTILE_IRQ_UNSAFE_HASH);
+	uint32_t index;
+
+	/*
+	 * If the proprietor is specified, the caller doesn't know
+	 * the index in the hash, so compute it.
+	 * Otherwise use the value of index provided.
+	 */
+	if (proprietor) {
+		index = turnstile_hash(proprietor);
+		*index_proprietor = index;
+	} else {
+		index = *index_proprietor;
+	}
+	ts_bucket = turnstile_get_bucket(index, type);
+
+	turnstile_bucket_unlock(ts_bucket);
+	if (irq_safe) {
+		splx(s);
+	}
 }
 
 /*
@@ -388,32 +527,48 @@ turnstile_hash(uintptr_t proprietor)
  * Args:
  *   Arg1: proprietor
  *   Arg2: new turnstile for primitive
+ *   Arg3: turnstile_type_t type
  *
  * Returns:
  *   Previous turnstile for proprietor in the hash table
  */
 static struct turnstile *
 turnstile_htable_lookup_add(
-	uintptr_t proprietor, 
-	struct turnstile *new_turnstile)
+	uintptr_t proprietor,
+	struct turnstile *new_turnstile,
+	turnstile_type_t type)
 {
 	uint32_t index = turnstile_hash(proprietor);
 	assert(index < ts_htable_buckets);
-	struct turnstile_htable_bucket *ts_bucket = &(turnstile_htable[index]);
+	struct turnstile_htable_bucket *ts_bucket;
+	int hash_policy = turnstile_hash_lock_policy[type];
+	bool needs_lock = !(hash_policy & TURNSTILE_LOCKED_HASH);
+	bool irq_safe = !(hash_policy & TURNSTILE_IRQ_UNSAFE_HASH);
 	spl_t s;
-	
-	s = splsched();
-	turnstile_bucket_lock(ts_bucket);
+
+	ts_bucket = turnstile_get_bucket(index, type);
+
+	if (needs_lock) {
+		if (irq_safe) {
+			s = splsched();
+		}
+		turnstile_bucket_lock(ts_bucket);
+	}
+
 	struct turnstile *ts;
 
 	SLIST_FOREACH(ts, &ts_bucket->ts_ht_bucket_list, ts_htable_link) {
 		if (ts->ts_proprietor == proprietor) {
-			/* 
+			/*
 			 * Found an entry in the hashtable for this proprietor; add thread turnstile to freelist
 			 * and return this turnstile
 			 */
-			turnstile_bucket_unlock(ts_bucket);
-			splx(s);
+			if (needs_lock) {
+				turnstile_bucket_unlock(ts_bucket);
+				if (irq_safe) {
+					splx(s);
+				}
+			}
 			turnstile_freelist_insert(ts, new_turnstile);
 			return ts;
 		}
@@ -422,8 +577,12 @@ turnstile_htable_lookup_add(
 	/* No entry for this proprietor; add the new turnstile in the hash table */
 	SLIST_INSERT_HEAD(&ts_bucket->ts_ht_bucket_list, new_turnstile, ts_htable_link);
 	turnstile_state_add(new_turnstile, TURNSTILE_STATE_HASHTABLE);
-	turnstile_bucket_unlock(ts_bucket);
-	splx(s);
+	if (needs_lock) {
+		turnstile_bucket_unlock(ts_bucket);
+		if (irq_safe) {
+			splx(s);
+		}
+	}
 	/* Since there was no previous entry for this proprietor, return TURNSTILE_NULL */
 	return TURNSTILE_NULL;
 }
@@ -441,6 +600,7 @@ turnstile_htable_lookup_add(
  * Args:
  *   Arg1: proprietor
  *   Arg2: free turnstile to be returned
+ *   Arg3: turnstile_type_t type
  *
  * Returns:
  *   turnstile for this proprietor in the hashtable after the removal
@@ -448,16 +608,27 @@ turnstile_htable_lookup_add(
 static struct turnstile *
 turnstable_htable_lookup_remove(
 	uintptr_t proprietor,
-	struct turnstile **free_turnstile)
+	struct turnstile **free_turnstile,
+	turnstile_type_t type)
 {
 	uint32_t index = turnstile_hash(proprietor);
 	assert(index < ts_htable_buckets);
-	struct turnstile_htable_bucket *ts_bucket = &(turnstile_htable[index]);
+	struct turnstile_htable_bucket *ts_bucket;
 	struct turnstile *ret_turnstile = TURNSTILE_NULL;
+	int hash_policy = turnstile_hash_lock_policy[type];
+	bool needs_lock = !(hash_policy & TURNSTILE_LOCKED_HASH);
+	bool irq_safe = !(hash_policy & TURNSTILE_IRQ_UNSAFE_HASH);
 	spl_t s;
 
-	s = splsched();
-	turnstile_bucket_lock(ts_bucket);
+	ts_bucket = turnstile_get_bucket(index, type);
+
+	if (needs_lock) {
+		if (irq_safe) {
+			s = splsched();
+		}
+		turnstile_bucket_lock(ts_bucket);
+	}
+
 	struct turnstile *ts, **prev_tslink;
 	/* Find the turnstile for the given proprietor in the hashtable */
 	SLIST_FOREACH_PREVPTR(ts, prev_tslink, &ts_bucket->ts_ht_bucket_list, ts_htable_link) {
@@ -473,17 +644,25 @@ turnstable_htable_lookup_remove(
 		/* No turnstiles on the freelist; remove the turnstile from the hashtable and mark it freed */
 		*prev_tslink = SLIST_NEXT(ret_turnstile, ts_htable_link);
 		turnstile_state_remove(ret_turnstile, TURNSTILE_STATE_HASHTABLE);
-		turnstile_bucket_unlock(ts_bucket);
-		splx(s);
+		if (needs_lock) {
+			turnstile_bucket_unlock(ts_bucket);
+			if (irq_safe) {
+				splx(s);
+			}
+		}
 		*free_turnstile = ret_turnstile;
 		return TURNSTILE_NULL;
 	} else {
-		/* 
+		/*
 		 * Turnstile has free turnstiles on its list; leave the hashtable unchanged
 		 * and return the first turnstile in the freelist as the free turnstile
 		 */
-		turnstile_bucket_unlock(ts_bucket);
-		splx(s);
+		if (needs_lock) {
+			turnstile_bucket_unlock(ts_bucket);
+			if (irq_safe) {
+				splx(s);
+			}
+		}
 		*free_turnstile = turnstile_freelist_remove(ret_turnstile);
 		return ret_turnstile;
 	}
@@ -498,21 +677,39 @@ turnstable_htable_lookup_remove(
  *
  * Args:
  *   Arg1: proprietor
+ *   Arg2: turnstile_type_t type
  *
  * Returns:
  *   Turnstile for proprietor in the hash table
  */
 static struct turnstile *
 turnstile_htable_lookup(
-	uintptr_t proprietor)
+	uintptr_t proprietor,
+	turnstile_type_t type)
 {
 	uint32_t index = turnstile_hash(proprietor);
 	assert(index < ts_htable_buckets);
-	struct turnstile_htable_bucket *ts_bucket = &(turnstile_htable[index]);
+	bool kdp_ctx = !not_in_kdp;
+	struct turnstile_htable_bucket *ts_bucket = turnstile_get_bucket(index, type);
+	int hash_policy = turnstile_hash_lock_policy[type];
+	bool needs_lock = !(hash_policy & TURNSTILE_LOCKED_HASH);
+	bool irq_safe = !(hash_policy & TURNSTILE_IRQ_UNSAFE_HASH);
 	spl_t s;
 
-	s = splsched();
-	turnstile_bucket_lock(ts_bucket);
+	if (needs_lock) {
+		if (irq_safe && !kdp_ctx) {
+			s = splsched();
+		}
+
+		if (kdp_ctx) {
+			if (kdp_turnstile_bucket_is_locked(ts_bucket)) {
+				/* This should move to TURNSTILE_BUSY once 51725781 is in the build */
+				return TURNSTILE_NULL;
+			}
+		} else {
+			turnstile_bucket_lock(ts_bucket);
+		}
+	}
 	struct turnstile *ts = TURNSTILE_NULL;
 	struct turnstile *ret_turnstile = TURNSTILE_NULL;
 
@@ -524,9 +721,37 @@ turnstile_htable_lookup(
 		}
 	}
 
-	turnstile_bucket_unlock(ts_bucket);
-	splx(s);
+	if (needs_lock && !kdp_ctx) {
+		turnstile_bucket_unlock(ts_bucket);
+		if (irq_safe) {
+			splx(s);
+		}
+	}
+
 	return ret_turnstile;
+}
+
+/*
+ * Name: turnstile_deallocate_queue_invoke
+ *
+ * Description: invoke function for the asynchronous turnstile deallocation
+ *              queue
+ *
+ * Arg1: &turnstile_deallocate_queue
+ * Arg2: a pointer to the turnstile ts_deallocate_link member of a tunrstile to
+ *       destroy.
+ *
+ * Returns: None.
+ */
+static void
+turnstile_deallocate_queue_invoke(mpsc_queue_chain_t e,
+    __assert_only mpsc_daemon_queue_t dq)
+{
+	struct turnstile *ts;
+
+	ts = mpsc_queue_element(e, struct turnstile, ts_deallocate_link);
+	assert(dq == &turnstile_deallocate_queue);
+	turnstile_destroy(ts);
 }
 
 /*
@@ -542,15 +767,18 @@ void
 turnstiles_init(void)
 {
 	turnstiles_zone = zinit(sizeof(struct turnstile),
-	                  MAX_TURNSTILES * sizeof(struct turnstile),
-			  TURNSTILES_CHUNK * sizeof(struct turnstile),
-			  "turnstiles");
+	    MAX_TURNSTILES * sizeof(struct turnstile),
+	    TURNSTILES_CHUNK * sizeof(struct turnstile),
+	    "turnstiles");
 
 	if (!PE_parse_boot_argn("turnstile_max_hop", &turnstile_max_hop, sizeof(turnstile_max_hop))) {
 		turnstile_max_hop = TURNSTILE_MAX_HOP_DEFAULT;
 	}
-	
+
 	turnstiles_hashtable_init();
+
+	thread_deallocate_daemon_register_queue(&turnstile_deallocate_queue,
+	    turnstile_deallocate_queue_invoke);
 
 #if DEVELOPMENT || DEBUG
 	/* Initialize the global turnstile locks and lock group */
@@ -565,6 +793,8 @@ turnstiles_init(void)
 	/* Initialize turnstile test primitive */
 	tstile_test_prim_init(&test_prim_ts_inline);
 	tstile_test_prim_init(&test_prim_global_htable);
+	tstile_test_prim_init(&test_prim_global_ts_kernel);
+	tstile_test_prim_init(&test_prim_global_ts_kernel_hash);
 #endif
 	return;
 }
@@ -591,7 +821,7 @@ turnstile_alloc(void)
 	/* Add turnstile to global list */
 	global_turnstiles_lock();
 	queue_enter(&turnstiles_list, turnstile,
-		struct turnstile *, ts_global_elm);
+	    struct turnstile *, ts_global_elm);
 	global_turnstiles_unlock();
 #endif
 	return turnstile;
@@ -614,21 +844,21 @@ turnstile_init(struct turnstile *turnstile)
 
 	/* Initialize the waitq */
 	kret = waitq_init(&turnstile->ts_waitq, SYNC_POLICY_DISABLE_IRQ | SYNC_POLICY_REVERSED |
-		SYNC_POLICY_TURNSTILE);
+	    SYNC_POLICY_TURNSTILE);
 	assert(kret == KERN_SUCCESS);
 
 	turnstile->ts_inheritor = TURNSTILE_INHERITOR_NULL;
 	SLIST_INIT(&turnstile->ts_free_turnstiles);
-	turnstile->ts_type_gencount = 0;
+	os_atomic_init(&turnstile->ts_type_gencount, 0);
 	turnstile_set_type_and_increment_gencount(turnstile, TURNSTILE_NONE);
 	turnstile_state_init(turnstile, TURNSTILE_STATE_THREAD);
 	os_ref_init_count(&turnstile->ts_refcount, &turnstile_refgrp, 1);
 	turnstile->ts_proprietor = TURNSTILE_PROPRIETOR_NULL;
-	turnstile->ts_priority = MAXPRI_THROTTLE;
+	turnstile->ts_priority = 0;
 	turnstile->ts_inheritor_flags = TURNSTILE_UPDATE_FLAGS_NONE;
 	turnstile->ts_port_ref = 0;
 	priority_queue_init(&turnstile->ts_inheritor_queue,
-			PRIORITY_QUEUE_BUILTIN_MAX_HEAP);
+	    PRIORITY_QUEUE_BUILTIN_MAX_HEAP);
 
 #if DEVELOPMENT || DEBUG
 	turnstile->ts_thread = current_thread();
@@ -693,8 +923,8 @@ turnstile_deallocate_safe(struct turnstile *turnstile)
 	}
 
 	if (__improbable(os_ref_release(&turnstile->ts_refcount) == 0)) {
-		/* enqueue the turnstile for thread deallocate deamon to call turnstile_destroy */
-		turnstile_deallocate_enqueue(turnstile);
+		mpsc_daemon_enqueue(&turnstile_deallocate_queue,
+		    &turnstile->ts_deallocate_link, MPSC_QUEUE_DISABLE_PREEMPTION);
 	}
 }
 
@@ -721,7 +951,7 @@ turnstile_destroy(struct turnstile *turnstile)
 	/* Remove turnstile from global list */
 	global_turnstiles_lock();
 	queue_remove(&turnstiles_list, turnstile,
-		struct turnstile *, ts_global_elm);
+	    struct turnstile *, ts_global_elm);
 	global_turnstiles_unlock();
 #endif
 	zfree(turnstiles_zone, turnstile);
@@ -771,16 +1001,16 @@ turnstile_prepare(
 	thread_turnstile->ts_proprietor = proprietor;
 	turnstile_state_remove(thread_turnstile, TURNSTILE_STATE_THREAD);
 
-	thread_turnstile->ts_priority = MAXPRI_THROTTLE;
+	thread_turnstile->ts_priority = 0;
 #if DEVELOPMENT || DEBUG
 	thread_turnstile->ts_prev_thread = thread_turnstile->ts_thread;
 	thread_turnstile->ts_thread = NULL;
 #endif
-	
+
 	if (tstore != NULL) {
-		/* 
-		 * If the primitive stores the turnstile, 
-		 * If there is already a turnstile, put the thread_turnstile if the primitive currently does not have a 
+		/*
+		 * If the primitive stores the turnstile,
+		 * If there is already a turnstile, put the thread_turnstile if the primitive currently does not have a
 		 * turnstile.
 		 * Else, add the thread turnstile to freelist of the primitive turnstile.
 		 */
@@ -789,29 +1019,29 @@ turnstile_prepare(
 			turnstile_state_add(thread_turnstile, TURNSTILE_STATE_PROPRIETOR);
 			*tstore = thread_turnstile;
 			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-				(TURNSTILE_CODE(TURNSTILE_FREELIST_OPERATIONS, (TURNSTILE_PREPARE))) | DBG_FUNC_NONE,
-				VM_KERNEL_UNSLIDE_OR_PERM(thread_turnstile),
-				VM_KERNEL_UNSLIDE_OR_PERM(proprietor),
-				turnstile_get_type(thread_turnstile), 0, 0);
+			    (TURNSTILE_CODE(TURNSTILE_FREELIST_OPERATIONS, (TURNSTILE_PREPARE))) | DBG_FUNC_NONE,
+			    VM_KERNEL_UNSLIDE_OR_PERM(thread_turnstile),
+			    VM_KERNEL_UNSLIDE_OR_PERM(proprietor),
+			    turnstile_get_type(thread_turnstile), 0, 0);
 		} else {
 			turnstile_freelist_insert(ret_turnstile, thread_turnstile);
 		}
 		ret_turnstile = *tstore;
 	} else {
-		/* 
+		/*
 		 * Lookup the primitive in the turnstile hash table and see if it already has an entry.
 		 */
-		ret_turnstile = turnstile_htable_lookup_add(proprietor, thread_turnstile);
+		ret_turnstile = turnstile_htable_lookup_add(proprietor, thread_turnstile, type);
 		if (ret_turnstile == NULL) {
 			ret_turnstile = thread_turnstile;
 			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-				(TURNSTILE_CODE(TURNSTILE_FREELIST_OPERATIONS, (TURNSTILE_PREPARE))) | DBG_FUNC_NONE,
-				VM_KERNEL_UNSLIDE_OR_PERM(thread_turnstile),
-				VM_KERNEL_UNSLIDE_OR_PERM(proprietor),
-				turnstile_get_type(thread_turnstile), 0, 0);
+			    (TURNSTILE_CODE(TURNSTILE_FREELIST_OPERATIONS, (TURNSTILE_PREPARE))) | DBG_FUNC_NONE,
+			    VM_KERNEL_UNSLIDE_OR_PERM(thread_turnstile),
+			    VM_KERNEL_UNSLIDE_OR_PERM(proprietor),
+			    turnstile_get_type(thread_turnstile), 0, 0);
 		}
 	}
-	
+
 	return ret_turnstile;
 }
 
@@ -819,13 +1049,13 @@ turnstile_prepare(
  * Name: turnstile_complete
  *
  * Description: Transfer the primitive's turnstile or from it's freelist to current thread.
- *              Function is called holding the interlock (spinlock) of the primitive.
  *              Current thread will have a turnstile attached to it after this call.
  *
  * Args:
  *   Arg1: proprietor
  *   Arg2: pointer in primitive struct to update turnstile
  *   Arg3: pointer to store the returned turnstile instead of attaching it to thread
+ *   Arg4: type of primitive
  *
  * Returns:
  *   None.
@@ -834,7 +1064,8 @@ void
 turnstile_complete(
 	uintptr_t proprietor,
 	struct turnstile **tstore,
-	struct turnstile **out_turnstile)
+	struct turnstile **out_turnstile,
+	turnstile_type_t type)
 {
 	thread_t thread = current_thread();
 	struct turnstile *primitive_turnstile = TURNSTILE_NULL;
@@ -860,7 +1091,7 @@ turnstile_complete(
 		primitive_turnstile = *tstore;
 	} else {
 		/* Use the global hash to find and remove a turnstile */
-		primitive_turnstile = turnstable_htable_lookup_remove(proprietor, &thread_turnstile);
+		primitive_turnstile = turnstable_htable_lookup_remove(proprietor, &thread_turnstile, type);
 	}
 	if (primitive_turnstile == NULL) {
 		/*
@@ -870,7 +1101,7 @@ turnstile_complete(
 		 */
 		if (thread_turnstile->ts_inheritor != TURNSTILE_INHERITOR_NULL) {
 			turnstile_update_inheritor(thread_turnstile, TURNSTILE_INHERITOR_NULL,
-				(TURNSTILE_IMMEDIATE_UPDATE | TURNSTILE_INHERITOR_THREAD));
+			    (TURNSTILE_IMMEDIATE_UPDATE | TURNSTILE_INHERITOR_THREAD));
 			/*
 			 * old inheritor is set in curret thread and its priority propagation
 			 * will happen in turnstile cleanup call
@@ -879,17 +1110,17 @@ turnstile_complete(
 		assert(thread_turnstile->ts_inheritor == TURNSTILE_INHERITOR_NULL);
 
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-				(TURNSTILE_CODE(TURNSTILE_FREELIST_OPERATIONS, (TURNSTILE_COMPLETE))) | DBG_FUNC_NONE,
-				VM_KERNEL_UNSLIDE_OR_PERM(thread_turnstile),
-				VM_KERNEL_UNSLIDE_OR_PERM(proprietor),
-				turnstile_get_type(thread_turnstile), 0, 0);
+		    (TURNSTILE_CODE(TURNSTILE_FREELIST_OPERATIONS, (TURNSTILE_COMPLETE))) | DBG_FUNC_NONE,
+		    VM_KERNEL_UNSLIDE_OR_PERM(thread_turnstile),
+		    VM_KERNEL_UNSLIDE_OR_PERM(proprietor),
+		    turnstile_get_type(thread_turnstile), 0, 0);
 	} else {
 		/* If primitive's turnstile needs priority update, set it up for turnstile cleanup */
 		if (turnstile_recompute_priority(primitive_turnstile)) {
 			turnstile_reference(primitive_turnstile);
 			thread->inheritor = primitive_turnstile;
 			thread->inheritor_flags = (TURNSTILE_INHERITOR_TURNSTILE |
-				TURNSTILE_INHERITOR_NEEDS_PRI_UPDATE);
+			    TURNSTILE_INHERITOR_NEEDS_PRI_UPDATE);
 		}
 	}
 
@@ -907,6 +1138,42 @@ turnstile_complete(
 		*out_turnstile = thread_turnstile;
 	}
 	return;
+}
+
+/*
+ * Name: turnstile_kernel_update_inheritor_on_wake_locked
+ *
+ * Description: Set thread as the inheritor of the turnstile and
+ *		boost the inheritor.
+ * Args:
+ *   Arg1: turnstile
+ *   Arg2: new_inheritor
+ *   Arg3: flags
+ *
+ * Called with turnstile locked
+ */
+void
+turnstile_kernel_update_inheritor_on_wake_locked(
+	struct turnstile *turnstile,
+	turnstile_inheritor_t new_inheritor,
+	turnstile_update_flags_t flags __assert_only)
+{
+	/* for now only kernel primitives are allowed to call this function */
+	__assert_only turnstile_promote_policy_t policy =
+	    turnstile_promote_policy[turnstile_get_type(turnstile)];
+
+	assert(flags & TURNSTILE_INHERITOR_THREAD);
+	assert(policy == TURNSTILE_KERNEL_PROMOTE || policy == TURNSTILE_USER_PROMOTE);
+
+	turnstile_stash_inheritor((thread_t)new_inheritor, TURNSTILE_INHERITOR_THREAD);
+	/*
+	 * new_inheritor has just been removed from the turnstile waitq,
+	 * the turnstile new priority needs to be recomputed so that
+	 * when new_inheritor will become this turnstile inheritor can
+	 * inherit the correct priority.
+	 */
+	turnstile_recompute_priority_locked(turnstile);
+	turnstile_update_inheritor_locked(turnstile);
 }
 
 /*
@@ -932,7 +1199,7 @@ turnstile_update_inheritor_locked(
 	boolean_t old_inheritor_needs_update = FALSE;
 	boolean_t new_inheritor_needs_update = FALSE;
 	turnstile_stats_update_flags_t tsu_flags =
-		turnstile_get_update_flags_for_above_UI_pri_change(turnstile);
+	    turnstile_get_update_flags_for_above_UI_pri_change(turnstile);
 
 	assert(waitq_held(&turnstile->ts_waitq));
 
@@ -946,122 +1213,124 @@ turnstile_update_inheritor_locked(
 	switch (turnstile_promote_policy[turnstile_get_type(turnstile)]) {
 	case TURNSTILE_USER_PROMOTE:
 	case TURNSTILE_USER_IPC_PROMOTE:
-
-		/* Check if update is needed */
-		if (old_inheritor == new_inheritor && old_inheritor == NULL) {
-			break;
-		}
-
-		if (old_inheritor == new_inheritor) {
-			if (new_inheritor_flags & TURNSTILE_INHERITOR_THREAD) {
-				thread_t thread_inheritor = (thread_t)new_inheritor;
-
-				assert(old_inheritor_flags & TURNSTILE_INHERITOR_THREAD);
-
-				/* adjust turnstile position in the thread's inheritor list */
-				new_inheritor_needs_update = thread_update_turnstile_promotion(
-					thread_inheritor, turnstile);
-
-			} else if (new_inheritor_flags & TURNSTILE_INHERITOR_TURNSTILE) {
-				struct turnstile *inheritor_turnstile = new_inheritor;
-
-				assert(old_inheritor_flags & TURNSTILE_INHERITOR_TURNSTILE);
-
-				new_inheritor_needs_update = turnstile_update_turnstile_promotion(
-					inheritor_turnstile, turnstile);
-
-			} else if (new_inheritor_flags & TURNSTILE_INHERITOR_WORKQ) {
-				/*
-				 * When we are still picking "WORKQ" then possible racing
-				 * updates will call redrive through their own propagation
-				 * and we don't need to update anything here.
-				 */
-				turnstile_stats_update(1, TSU_NO_PRI_CHANGE_NEEDED |
-					TSU_TURNSTILE_ARG | TSU_BOOST_ARG, turnstile);
-			} else {
-				panic("Inheritor flags lost along the way");
-			}
-
-			/* Update turnstile stats */
-			if (!new_inheritor_needs_update) {
-				turnstile_stats_update(1, TSU_PRI_PROPAGATION |
-					TSU_TURNSTILE_ARG | TSU_BOOST_ARG | tsu_flags, turnstile);
-			}
-			break;
-		}
-
-		if (old_inheritor != NULL) {
-			if (old_inheritor_flags & TURNSTILE_INHERITOR_THREAD) {
-				thread_t thread_inheritor = (thread_t)old_inheritor;
-
-				/* remove turnstile from thread's inheritor list */
-				old_inheritor_needs_update = thread_remove_turnstile_promotion(thread_inheritor, turnstile);
-
-			} else if (old_inheritor_flags & TURNSTILE_INHERITOR_TURNSTILE) {
-				struct turnstile *old_turnstile = old_inheritor;
-
-				old_inheritor_needs_update = turnstile_remove_turnstile_promotion(
-					old_turnstile, turnstile);
-
-			} else if (old_inheritor_flags & TURNSTILE_INHERITOR_WORKQ) {
-				/*
-				 * We don't need to do anything when the push was WORKQ
-				 * because nothing is pushed on in the first place.
-				 */
-				turnstile_stats_update(1, TSU_NO_PRI_CHANGE_NEEDED |
-					TSU_TURNSTILE_ARG, turnstile);
-			} else {
-				panic("Inheritor flags lost along the way");
-			}
-			/* Update turnstile stats */
-			if (!old_inheritor_needs_update) {
-				turnstile_stats_update(1, TSU_PRI_PROPAGATION | TSU_TURNSTILE_ARG,
-					turnstile);
-			}
-		}
-
-		if (new_inheritor != NULL) {
-			if (new_inheritor_flags & TURNSTILE_INHERITOR_THREAD) {
-				thread_t thread_inheritor = (thread_t)new_inheritor;
-
-				assert(new_inheritor_flags & TURNSTILE_INHERITOR_THREAD);
-				/* add turnstile to thread's inheritor list */
-				new_inheritor_needs_update = thread_add_turnstile_promotion(
-						thread_inheritor, turnstile);
-
-			} else if (new_inheritor_flags & TURNSTILE_INHERITOR_TURNSTILE) {
-				struct turnstile *new_turnstile = new_inheritor;
-
-				new_inheritor_needs_update = turnstile_add_turnstile_promotion(
-					new_turnstile, turnstile);
-
-			} else if (new_inheritor_flags & TURNSTILE_INHERITOR_WORKQ) {
-				struct workqueue *wq_inheritor = new_inheritor;
-
-				new_inheritor_needs_update = workq_add_turnstile_promotion(
-						wq_inheritor, turnstile);
-				if (!new_inheritor_needs_update) {
-					turnstile_stats_update(1, TSU_NO_PRI_CHANGE_NEEDED |
-						TSU_TURNSTILE_ARG | TSU_BOOST_ARG, turnstile);
-				}
-			} else {
-				panic("Inheritor flags lost along the way");
-			}
-			/* Update turnstile stats */
-			if (!new_inheritor_needs_update) {
-				turnstile_stats_update(1, TSU_PRI_PROPAGATION |
-					TSU_TURNSTILE_ARG | TSU_BOOST_ARG | tsu_flags,turnstile);
-			}
-		}
-
 		break;
-
 	case TURNSTILE_KERNEL_PROMOTE:
+		/* some sanity checks, turnstile kernel can push just between threads */
+		if (old_inheritor) {
+			assert(old_inheritor_flags & TURNSTILE_INHERITOR_THREAD);
+		}
+
+		if (new_inheritor) {
+			assert(new_inheritor_flags & TURNSTILE_INHERITOR_THREAD);
+		}
+
 		break;
 	default:
 		panic("turnstile promotion for type %d not yet implemented", turnstile_get_type(turnstile));
 	}
 
+	/* Check if update is needed */
+	if (old_inheritor == new_inheritor && old_inheritor == NULL) {
+		goto done;
+	}
+
+	if (old_inheritor == new_inheritor) {
+		if (new_inheritor_flags & TURNSTILE_INHERITOR_THREAD) {
+			thread_t thread_inheritor = (thread_t)new_inheritor;
+
+			assert(old_inheritor_flags & TURNSTILE_INHERITOR_THREAD);
+
+			/* adjust turnstile position in the thread's inheritor list */
+			new_inheritor_needs_update = thread_update_turnstile_promotion(
+				thread_inheritor, turnstile);
+		} else if (new_inheritor_flags & TURNSTILE_INHERITOR_TURNSTILE) {
+			struct turnstile *inheritor_turnstile = new_inheritor;
+
+			assert(old_inheritor_flags & TURNSTILE_INHERITOR_TURNSTILE);
+
+			new_inheritor_needs_update = turnstile_update_turnstile_promotion(
+				inheritor_turnstile, turnstile);
+		} else if (new_inheritor_flags & TURNSTILE_INHERITOR_WORKQ) {
+			/*
+			 * When we are still picking "WORKQ" then possible racing
+			 * updates will call redrive through their own propagation
+			 * and we don't need to update anything here.
+			 */
+			turnstile_stats_update(1, TSU_NO_PRI_CHANGE_NEEDED |
+			    TSU_TURNSTILE_ARG | TSU_BOOST_ARG, turnstile);
+		} else {
+			panic("Inheritor flags lost along the way");
+		}
+
+		/* Update turnstile stats */
+		if (!new_inheritor_needs_update) {
+			turnstile_stats_update(1, TSU_PRI_PROPAGATION |
+			    TSU_TURNSTILE_ARG | TSU_BOOST_ARG | tsu_flags, turnstile);
+		}
+		goto done;
+	}
+
+	if (old_inheritor != NULL) {
+		if (old_inheritor_flags & TURNSTILE_INHERITOR_THREAD) {
+			thread_t thread_inheritor = (thread_t)old_inheritor;
+
+			/* remove turnstile from thread's inheritor list */
+			old_inheritor_needs_update = thread_remove_turnstile_promotion(thread_inheritor, turnstile);
+		} else if (old_inheritor_flags & TURNSTILE_INHERITOR_TURNSTILE) {
+			struct turnstile *old_turnstile = old_inheritor;
+
+			old_inheritor_needs_update = turnstile_remove_turnstile_promotion(
+				old_turnstile, turnstile);
+		} else if (old_inheritor_flags & TURNSTILE_INHERITOR_WORKQ) {
+			/*
+			 * We don't need to do anything when the push was WORKQ
+			 * because nothing is pushed on in the first place.
+			 */
+			turnstile_stats_update(1, TSU_NO_PRI_CHANGE_NEEDED |
+			    TSU_TURNSTILE_ARG, turnstile);
+		} else {
+			panic("Inheritor flags lost along the way");
+		}
+		/* Update turnstile stats */
+		if (!old_inheritor_needs_update) {
+			turnstile_stats_update(1, TSU_PRI_PROPAGATION | TSU_TURNSTILE_ARG,
+			    turnstile);
+		}
+	}
+
+	if (new_inheritor != NULL) {
+		if (new_inheritor_flags & TURNSTILE_INHERITOR_THREAD) {
+			thread_t thread_inheritor = (thread_t)new_inheritor;
+
+			assert(new_inheritor_flags & TURNSTILE_INHERITOR_THREAD);
+			/* add turnstile to thread's inheritor list */
+			new_inheritor_needs_update = thread_add_turnstile_promotion(
+				thread_inheritor, turnstile);
+		} else if (new_inheritor_flags & TURNSTILE_INHERITOR_TURNSTILE) {
+			struct turnstile *new_turnstile = new_inheritor;
+
+			new_inheritor_needs_update = turnstile_add_turnstile_promotion(
+				new_turnstile, turnstile);
+		} else if (new_inheritor_flags & TURNSTILE_INHERITOR_WORKQ) {
+			struct workqueue *wq_inheritor = new_inheritor;
+
+			new_inheritor_needs_update = workq_add_turnstile_promotion(
+				wq_inheritor, turnstile);
+			if (!new_inheritor_needs_update) {
+				turnstile_stats_update(1, TSU_NO_PRI_CHANGE_NEEDED |
+				    TSU_TURNSTILE_ARG | TSU_BOOST_ARG, turnstile);
+			}
+		} else {
+			panic("Inheritor flags lost along the way");
+		}
+		/* Update turnstile stats */
+		if (!new_inheritor_needs_update) {
+			turnstile_stats_update(1, TSU_PRI_PROPAGATION |
+			    TSU_TURNSTILE_ARG | TSU_BOOST_ARG | tsu_flags, turnstile);
+		}
+	}
+
+done:
 	if (old_inheritor_needs_update) {
 		old_inheritor_flags |= TURNSTILE_INHERITOR_NEEDS_PRI_UPDATE;
 	}
@@ -1079,6 +1348,52 @@ turnstile_update_inheritor_locked(
 	thread->inheritor = old_inheritor;
 	thread->inheritor_flags = old_inheritor_flags;
 	return;
+}
+
+/*
+ * Name: turnstile_stash_inheritor
+ *
+ * Description: Save the new inheritor reference of the turnstile on the
+ *              current thread. It will take a thread reference on the inheritor.
+ *              Called with the interlock of the primitive held.
+ *
+ * Args:
+ *   Arg1: inheritor
+ *   Arg2: flags
+ *
+ * Returns:
+ *   old inheritor reference is stashed on current thread's struct.
+ */
+static void
+turnstile_stash_inheritor(
+	turnstile_inheritor_t new_inheritor,
+	turnstile_update_flags_t flags)
+{
+	thread_t thread = current_thread();
+
+	/*
+	 * Set the inheritor on calling thread struct, no need
+	 * to take the turnstile waitq lock since the inheritor
+	 * is protected by the primitive's interlock
+	 */
+	assert(thread->inheritor == TURNSTILE_INHERITOR_NULL);
+	thread->inheritor = new_inheritor;
+	thread->inheritor_flags = TURNSTILE_UPDATE_FLAGS_NONE;
+	if (new_inheritor == TURNSTILE_INHERITOR_NULL) {
+		/* nothing to retain or remember */
+	} else if (flags & TURNSTILE_INHERITOR_THREAD) {
+		thread->inheritor_flags |= TURNSTILE_INHERITOR_THREAD;
+		thread_reference((thread_t)new_inheritor);
+	} else if (flags & TURNSTILE_INHERITOR_TURNSTILE) {
+		thread->inheritor_flags |= TURNSTILE_INHERITOR_TURNSTILE;
+		turnstile_reference((struct turnstile *)new_inheritor);
+	} else if (flags & TURNSTILE_INHERITOR_WORKQ) {
+		thread->inheritor_flags |= TURNSTILE_INHERITOR_WORKQ;
+		workq_reference((struct workqueue *)new_inheritor);
+	} else {
+		panic("Missing type in flags (%x) for inheritor (%p)", flags,
+		    new_inheritor);
+	}
 }
 
 /*
@@ -1102,32 +1417,9 @@ turnstile_update_inheritor(
 	turnstile_inheritor_t new_inheritor,
 	turnstile_update_flags_t flags)
 {
-	thread_t thread = current_thread();
 	spl_t spl;
 
-	/*
-	 * Set the inheritor on calling thread struct, no need
-	 * to take the turnstile waitq lock since the inheritor
-	 * is protected by the primitive's interlock
-	 */
-	assert(thread->inheritor == TURNSTILE_INHERITOR_NULL);
-	thread->inheritor = new_inheritor;
-	thread->inheritor_flags = TURNSTILE_UPDATE_FLAGS_NONE;
-	if (new_inheritor == TURNSTILE_INHERITOR_NULL) {
-		/* nothing to retain or remember */
-	} else if (flags & TURNSTILE_INHERITOR_THREAD) {
-		thread->inheritor_flags |= TURNSTILE_INHERITOR_THREAD;
-		thread_reference((thread_t)new_inheritor);
-	} else if (flags & TURNSTILE_INHERITOR_TURNSTILE) {
-		thread->inheritor_flags |= TURNSTILE_INHERITOR_TURNSTILE;
-		turnstile_reference((struct turnstile *)new_inheritor);
-	} else if (flags & TURNSTILE_INHERITOR_WORKQ) {
-		thread->inheritor_flags |= TURNSTILE_INHERITOR_WORKQ;
-		workq_reference((struct workqueue *)new_inheritor);
-	} else {
-		panic("Missing type in flags (%x) for inheritor (%p)", flags,
-				new_inheritor);
-	}
+	turnstile_stash_inheritor(new_inheritor, flags);
 
 	/* Do not perform the update if delayed update is specified */
 	if (flags & TURNSTILE_DELAYED_UPDATE) {
@@ -1162,16 +1454,19 @@ turnstile_update_inheritor(
  */
 static boolean_t
 turnstile_need_thread_promotion_update(
-	struct turnstile *dst_turnstile __assert_only,
+	struct turnstile *dst_turnstile,
 	thread_t thread)
 {
 	int thread_link_priority;
 	boolean_t needs_update = FALSE;
 
 	thread_link_priority = priority_queue_entry_key(&(dst_turnstile->ts_waitq.waitq_prio_queue),
-				 &(thread->wait_prioq_links));
+	    &(thread->wait_prioq_links));
 
-	needs_update = (thread_link_priority == thread->base_pri) ? FALSE : TRUE;
+	int priority = turnstile_compute_thread_push(dst_turnstile, thread);
+
+	needs_update = (thread_link_priority == priority) ? FALSE : TRUE;
+
 	return needs_update;
 }
 
@@ -1188,18 +1483,18 @@ turnstile_need_thread_promotion_update(
  */
 static boolean_t
 turnstile_priority_queue_update_entry_key(struct priority_queue *q,
-		priority_queue_entry_t elt, priority_queue_key_t pri)
+    priority_queue_entry_t elt, priority_queue_key_t pri)
 {
 	priority_queue_key_t old_key = priority_queue_max_key(q);
 
 	if (priority_queue_entry_key(q, elt) < pri) {
 		if (priority_queue_entry_increase(q, elt, pri,
-				PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE)) {
+		    PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE)) {
 			return old_key != priority_queue_max_key(q);
 		}
 	} else if (priority_queue_entry_key(q, elt) > pri) {
 		if (priority_queue_entry_decrease(q, elt, pri,
-				PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE)) {
+		    PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE)) {
 			return old_key != priority_queue_max_key(q);
 		}
 	}
@@ -1226,28 +1521,31 @@ turnstile_update_thread_promotion_locked(
 	struct turnstile *dst_turnstile,
 	thread_t thread)
 {
-	int thread_link_priority = priority_queue_entry_key(&(dst_turnstile->ts_waitq.waitq_prio_queue),
-				 &(thread->wait_prioq_links));
+	int thread_link_priority;
 
-	if (thread->base_pri != thread_link_priority) {
+	int priority = turnstile_compute_thread_push(dst_turnstile, thread);
+
+	thread_link_priority = priority_queue_entry_key(&(dst_turnstile->ts_waitq.waitq_prio_queue),
+	    &(thread->wait_prioq_links));
+
+	if (priority != thread_link_priority) {
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-			(TURNSTILE_CODE(TURNSTILE_HEAP_OPERATIONS, (THREAD_MOVED_IN_TURNSTILE_WAITQ))) | DBG_FUNC_NONE,
-			VM_KERNEL_UNSLIDE_OR_PERM(dst_turnstile),
-			thread_tid(thread),
-			thread->base_pri,
-			thread_link_priority, 0);
+		    (TURNSTILE_CODE(TURNSTILE_HEAP_OPERATIONS, (THREAD_MOVED_IN_TURNSTILE_WAITQ))) | DBG_FUNC_NONE,
+		    VM_KERNEL_UNSLIDE_OR_PERM(dst_turnstile),
+		    thread_tid(thread),
+		    priority,
+		    thread_link_priority, 0);
 	}
 
 	if (!turnstile_priority_queue_update_entry_key(
-			&dst_turnstile->ts_waitq.waitq_prio_queue,
-			&thread->wait_prioq_links, thread->base_pri)) {
+		    &dst_turnstile->ts_waitq.waitq_prio_queue,
+		    &thread->wait_prioq_links, priority)) {
 		return FALSE;
 	}
 
 	/* Update dst turnstile's priority */
 	return turnstile_recompute_priority_locked(dst_turnstile);
 }
-
 
 /*
  * Name: thread_add_turnstile_promotion
@@ -1273,31 +1571,49 @@ thread_add_turnstile_promotion(
 	thread_lock(thread);
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		(TURNSTILE_CODE(TURNSTILE_HEAP_OPERATIONS, (TURNSTILE_ADDED_TO_THREAD_HEAP))) | DBG_FUNC_NONE,
-		thread_tid(thread),
-		VM_KERNEL_UNSLIDE_OR_PERM(turnstile),
-		turnstile->ts_priority, 0, 0);
+	    (TURNSTILE_CODE(TURNSTILE_HEAP_OPERATIONS, (TURNSTILE_ADDED_TO_THREAD_HEAP))) | DBG_FUNC_NONE,
+	    thread_tid(thread),
+	    VM_KERNEL_UNSLIDE_OR_PERM(turnstile),
+	    turnstile->ts_priority, 0, 0);
 
-	priority_queue_entry_init(&(turnstile->ts_inheritor_links));
-	if (priority_queue_insert(&thread->inheritor_queue,
-			&turnstile->ts_inheritor_links, turnstile->ts_priority,
-			PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE)) {
-		/* Update thread priority */
-		needs_update = thread_recompute_user_promotion_locked(thread);
+	priority_queue_entry_init(&turnstile->ts_inheritor_links);
+
+	switch (turnstile_promote_policy[turnstile_get_type(turnstile)]) {
+	case TURNSTILE_USER_PROMOTE:
+	case TURNSTILE_USER_IPC_PROMOTE:
+
+		if (priority_queue_insert(&(thread->base_inheritor_queue),
+		    &turnstile->ts_inheritor_links, turnstile->ts_priority,
+		    PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE)) {
+			needs_update = thread_recompute_user_promotion_locked(thread);
+		}
+
+		break;
+	case TURNSTILE_KERNEL_PROMOTE:
+
+		if (priority_queue_insert(&(thread->sched_inheritor_queue),
+		    &turnstile->ts_inheritor_links, turnstile->ts_priority,
+		    PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE)) {
+			needs_update = thread_recompute_kernel_promotion_locked(thread);
+		}
+
+		break;
+	default:
+		panic("turnstile promotion for type %d not yet implemented", turnstile_get_type(turnstile));
 	}
 
 	/* Update turnstile stats */
 	if (!needs_update) {
 		turnstile_stats_update(1,
-			thread_get_update_flags_for_turnstile_propagation_stoppage(thread) |
-			TSU_TURNSTILE_ARG | TSU_BOOST_ARG,
-			turnstile);
+		    thread_get_update_flags_for_turnstile_propagation_stoppage(thread) |
+		    TSU_TURNSTILE_ARG | TSU_BOOST_ARG,
+		    turnstile);
 	}
 
 	thread_unlock(thread);
+
 	return needs_update;
 }
-
 
 /*
  * Name: thread_remove_turnstile_promotion
@@ -1319,30 +1635,45 @@ thread_remove_turnstile_promotion(
 {
 	boolean_t needs_update = FALSE;
 
-	/* Update the pairing heap */
 	thread_lock(thread);
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		(TURNSTILE_CODE(TURNSTILE_HEAP_OPERATIONS, (TURNSTILE_REMOVED_FROM_THREAD_HEAP))) | DBG_FUNC_NONE,
-		thread_tid(thread),
-		VM_KERNEL_UNSLIDE_OR_PERM(turnstile),
-		0, 0, 0);
+	    (TURNSTILE_CODE(TURNSTILE_HEAP_OPERATIONS, (TURNSTILE_REMOVED_FROM_THREAD_HEAP))) | DBG_FUNC_NONE,
+	    thread_tid(thread),
+	    VM_KERNEL_UNSLIDE_OR_PERM(turnstile),
+	    0, 0, 0);
 
-	if (priority_queue_remove(&thread->inheritor_queue,
-			&turnstile->ts_inheritor_links,
-			PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE)) {
-		/* Update thread priority */
-		needs_update = thread_recompute_user_promotion_locked(thread);
+	/* Update the pairing heap */
+
+	switch (turnstile_promote_policy[turnstile_get_type(turnstile)]) {
+	case TURNSTILE_USER_PROMOTE:
+	case TURNSTILE_USER_IPC_PROMOTE:
+		if (priority_queue_remove(&(thread->base_inheritor_queue),
+		    &turnstile->ts_inheritor_links,
+		    PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE)) {
+			needs_update = thread_recompute_user_promotion_locked(thread);
+		}
+		break;
+	case TURNSTILE_KERNEL_PROMOTE:
+		if (priority_queue_remove(&(thread->sched_inheritor_queue),
+		    &turnstile->ts_inheritor_links,
+		    PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE)) {
+			needs_update = thread_recompute_kernel_promotion_locked(thread);
+		}
+		break;
+	default:
+		panic("turnstile promotion for type %d not yet implemented", turnstile_get_type(turnstile));
 	}
 
 	/* Update turnstile stats */
 	if (!needs_update) {
 		turnstile_stats_update(1,
-			thread_get_update_flags_for_turnstile_propagation_stoppage(thread) | TSU_TURNSTILE_ARG,
-			turnstile);
+		    thread_get_update_flags_for_turnstile_propagation_stoppage(thread) | TSU_TURNSTILE_ARG,
+		    turnstile);
 	}
 
 	thread_unlock(thread);
+
 	return needs_update;
 }
 
@@ -1365,11 +1696,21 @@ thread_needs_turnstile_promotion_update(
 	struct turnstile *turnstile)
 {
 	boolean_t needs_update = FALSE;
-	int turnstile_link_priority;
+	int turnstile_link_priority = 0;
 
-	/* Update the pairing heap */
-	turnstile_link_priority = priority_queue_entry_key(&(thread->inheritor_queue),
-				 &(turnstile->ts_inheritor_links));
+	switch (turnstile_promote_policy[turnstile_get_type(turnstile)]) {
+	case TURNSTILE_USER_PROMOTE:
+	case TURNSTILE_USER_IPC_PROMOTE:
+		turnstile_link_priority = priority_queue_entry_key(&(thread->base_inheritor_queue),
+		    &(turnstile->ts_inheritor_links));
+		break;
+	case TURNSTILE_KERNEL_PROMOTE:
+		turnstile_link_priority = priority_queue_entry_key(&(thread->sched_inheritor_queue),
+		    &(turnstile->ts_inheritor_links));
+		break;
+	default:
+		panic("turnstile promotion for type %d not yet implemented", turnstile_get_type(turnstile));
+	}
 
 	needs_update = (turnstile_link_priority == turnstile->ts_priority) ? FALSE : TRUE;
 	return needs_update;
@@ -1393,25 +1734,41 @@ thread_update_turnstile_promotion_locked(
 	thread_t thread,
 	struct turnstile *turnstile)
 {
-	int turnstile_link_priority = priority_queue_entry_key(&(thread->inheritor_queue),
-				 &(turnstile->ts_inheritor_links));
+	boolean_t needs_update = FALSE;
+	int turnstile_link_priority = 0;
+
+	switch (turnstile_promote_policy[turnstile_get_type(turnstile)]) {
+	case TURNSTILE_USER_PROMOTE:
+	case TURNSTILE_USER_IPC_PROMOTE:
+		turnstile_link_priority = priority_queue_entry_key(&(thread->base_inheritor_queue), &turnstile->ts_inheritor_links);
+
+		if (turnstile_priority_queue_update_entry_key(&(thread->base_inheritor_queue),
+		    &turnstile->ts_inheritor_links, turnstile->ts_priority)) {
+			needs_update = thread_recompute_user_promotion_locked(thread);
+		}
+		break;
+	case TURNSTILE_KERNEL_PROMOTE:
+		turnstile_link_priority = priority_queue_entry_key(&(thread->sched_inheritor_queue), &turnstile->ts_inheritor_links);
+
+		if (turnstile_priority_queue_update_entry_key(&(thread->sched_inheritor_queue),
+		    &turnstile->ts_inheritor_links, turnstile->ts_priority)) {
+			needs_update = thread_recompute_kernel_promotion_locked(thread);
+		}
+		break;
+	default:
+		panic("turnstile promotion for type %d not yet implemented", turnstile_get_type(turnstile));
+	}
 
 	if (turnstile->ts_priority != turnstile_link_priority) {
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-			(TURNSTILE_CODE(TURNSTILE_HEAP_OPERATIONS, (TURNSTILE_MOVED_IN_THREAD_HEAP))) | DBG_FUNC_NONE,
-			thread_tid(thread),
-			VM_KERNEL_UNSLIDE_OR_PERM(turnstile),
-			turnstile->ts_priority,
-			turnstile_link_priority, 0);
+		    (TURNSTILE_CODE(TURNSTILE_HEAP_OPERATIONS, (TURNSTILE_MOVED_IN_THREAD_HEAP))) | DBG_FUNC_NONE,
+		    thread_tid(thread),
+		    VM_KERNEL_UNSLIDE_OR_PERM(turnstile),
+		    turnstile->ts_priority,
+		    turnstile_link_priority, 0);
 	}
 
-	if (!turnstile_priority_queue_update_entry_key(&thread->inheritor_queue,
-			&turnstile->ts_inheritor_links, turnstile->ts_priority)) {
-		return FALSE;
-	}
-
-	/* Update thread priority */
-	return thread_recompute_user_promotion_locked(thread);
+	return needs_update;
 }
 
 
@@ -1438,51 +1795,81 @@ thread_update_turnstile_promotion(
 
 	if (!needs_update) {
 		turnstile_stats_update(1, TSU_NO_PRI_CHANGE_NEEDED |
-			TSU_TURNSTILE_ARG | TSU_BOOST_ARG, turnstile);
+		    TSU_TURNSTILE_ARG | TSU_BOOST_ARG, turnstile);
 		return needs_update;
 	}
 
-	/* Update the pairing heap */
 	thread_lock(thread);
+
+	/* Update the pairing heap */
 	needs_update = thread_update_turnstile_promotion_locked(thread, turnstile);
 
 	/* Update turnstile stats */
 	if (!needs_update) {
 		turnstile_stats_update(1,
-			thread_get_update_flags_for_turnstile_propagation_stoppage(thread) |
-			TSU_TURNSTILE_ARG | TSU_BOOST_ARG,
-			turnstile);
+		    thread_get_update_flags_for_turnstile_propagation_stoppage(thread) |
+		    TSU_TURNSTILE_ARG | TSU_BOOST_ARG,
+		    turnstile);
 	}
+
 	thread_unlock(thread);
+
 	return needs_update;
 }
 
 
 /*
- * Name: thread_get_inheritor_turnstile_priority
+ * Name: thread_get_inheritor_turnstile_sched_priority
  *
- * Description: Get the max priority of all the inheritor turnstiles
+ * Description: Get the max sched priority of all the inheritor turnstiles
  *
  * Arg1: thread
  *
- * Returns: Max priority of all the inheritor turnstiles.
+ * Returns: Max sched priority of all the inheritor turnstiles.
  *
  * Condition: thread locked
  */
 int
-thread_get_inheritor_turnstile_priority(thread_t thread)
+thread_get_inheritor_turnstile_sched_priority(thread_t thread)
 {
 	struct turnstile *max_turnstile;
 
-	max_turnstile = priority_queue_max(&thread->inheritor_queue,
-			struct turnstile, ts_inheritor_links);
+	max_turnstile = priority_queue_max(&thread->sched_inheritor_queue,
+	    struct turnstile, ts_inheritor_links);
 
 	if (max_turnstile) {
-		return priority_queue_entry_key(&thread->inheritor_queue,
-				&max_turnstile->ts_inheritor_links);
+		return priority_queue_entry_key(&thread->sched_inheritor_queue,
+		           &max_turnstile->ts_inheritor_links);
 	}
 
-	return MAXPRI_THROTTLE;
+	return 0;
+}
+
+/*
+ * Name: thread_get_inheritor_turnstile_base_priority
+ *
+ * Description: Get the max base priority of all the inheritor turnstiles
+ *
+ * Arg1: thread
+ *
+ * Returns: Max base priority of all the inheritor turnstiles.
+ *
+ * Condition: thread locked
+ */
+int
+thread_get_inheritor_turnstile_base_priority(thread_t thread)
+{
+	struct turnstile *max_turnstile;
+
+	max_turnstile = priority_queue_max(&thread->base_inheritor_queue,
+	    struct turnstile, ts_inheritor_links);
+
+	if (max_turnstile) {
+		return priority_queue_entry_key(&thread->base_inheritor_queue,
+		           &max_turnstile->ts_inheritor_links);
+	}
+
+	return 0;
 }
 
 
@@ -1509,9 +1896,8 @@ thread_get_waiting_turnstile(thread_t thread)
 		return turnstile;
 	}
 
-	/* Get the safeq if the waitq is a port queue */
-	if (waitq_is_port_queue(waitq)) {
-		waitq = waitq_get_safeq(waitq);
+	if (waitq_is_turnstile_proxy(waitq)) {
+		return waitq->waitq_ts;
 	}
 
 	/* Check if the waitq is a turnstile queue */
@@ -1521,7 +1907,6 @@ thread_get_waiting_turnstile(thread_t thread)
 	return turnstile;
 }
 
-
 /*
  * Name: turnstile_lookup_by_proprietor
  *
@@ -1529,6 +1914,7 @@ thread_get_waiting_turnstile(thread_t thread)
  *              turnstile hash.
  *
  * Arg1: port
+ * Arg2: turnstile_type_t type
  *
  * Returns: turnstile: if the proprietor has a turnstile.
  *          TURNSTILE_NULL: otherwise.
@@ -1536,11 +1922,10 @@ thread_get_waiting_turnstile(thread_t thread)
  * Condition: proprietor interlock held.
  */
 struct turnstile *
-turnstile_lookup_by_proprietor(uintptr_t proprietor)
+turnstile_lookup_by_proprietor(uintptr_t proprietor, turnstile_type_t type)
 {
-	return turnstile_htable_lookup(proprietor);
+	return turnstile_htable_lookup(proprietor, type);
 }
-
 
 /*
  * Name: thread_get_update_flags_for_turnstile_propagation_stoppage
@@ -1566,8 +1951,11 @@ thread_get_update_flags_for_turnstile_propagation_stoppage(thread_t thread)
 	}
 
 	/* Get the safeq if the waitq is a port queue */
-	if (waitq_is_port_queue(waitq)) {
-		waitq = waitq_get_safeq(waitq);
+	if (waitq_is_turnstile_proxy(waitq)) {
+		if (waitq->waitq_ts) {
+			return TSU_NO_PRI_CHANGE_NEEDED;
+		}
+		return TSU_NO_TURNSTILE;
 	}
 
 	/* Check if the waitq is a turnstile queue */
@@ -1599,7 +1987,6 @@ turnstile_get_update_flags_for_above_UI_pri_change(struct turnstile *turnstile)
 	    (thread_qos_policy_params.qos_pri[THREAD_QOS_USER_INTERACTIVE] + 1) &&
 	    turnstile_get_type(turnstile) != TURNSTILE_ULOCK) {
 		return TSU_ABOVE_UI_PRI_CHANGE;
-
 	}
 
 	return TSU_FLAGS_NONE;
@@ -1651,7 +2038,7 @@ turnstile_need_turnstile_promotion_update(
 	boolean_t needs_update = FALSE;
 
 	src_turnstile_link_priority = priority_queue_entry_key(&(dst_turnstile->ts_inheritor_queue),
-				 &(src_turnstile->ts_inheritor_links));
+	    &(src_turnstile->ts_inheritor_links));
 
 	needs_update = (src_turnstile_link_priority == src_turnstile->ts_priority) ? FALSE : TRUE;
 	return needs_update;
@@ -1678,19 +2065,19 @@ turnstile_update_turnstile_promotion_locked(
 {
 	int src_turnstile_link_priority;
 	src_turnstile_link_priority = priority_queue_entry_key(&(dst_turnstile->ts_inheritor_queue),
-				 &(src_turnstile->ts_inheritor_links));
+	    &(src_turnstile->ts_inheritor_links));
 
 	if (src_turnstile->ts_priority != src_turnstile_link_priority) {
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-			(TURNSTILE_CODE(TURNSTILE_HEAP_OPERATIONS, (TURNSTILE_MOVED_IN_TURNSTILE_HEAP))) | DBG_FUNC_NONE,
-			VM_KERNEL_UNSLIDE_OR_PERM(dst_turnstile),
-			VM_KERNEL_UNSLIDE_OR_PERM(src_turnstile),
-			src_turnstile->ts_priority, src_turnstile_link_priority, 0);
+		    (TURNSTILE_CODE(TURNSTILE_HEAP_OPERATIONS, (TURNSTILE_MOVED_IN_TURNSTILE_HEAP))) | DBG_FUNC_NONE,
+		    VM_KERNEL_UNSLIDE_OR_PERM(dst_turnstile),
+		    VM_KERNEL_UNSLIDE_OR_PERM(src_turnstile),
+		    src_turnstile->ts_priority, src_turnstile_link_priority, 0);
 	}
 
 	if (!turnstile_priority_queue_update_entry_key(
-			&dst_turnstile->ts_inheritor_queue, &src_turnstile->ts_inheritor_links,
-			src_turnstile->ts_priority)) {
+		    &dst_turnstile->ts_inheritor_queue, &src_turnstile->ts_inheritor_links,
+		    src_turnstile->ts_priority)) {
 		return FALSE;
 	}
 
@@ -1721,8 +2108,8 @@ turnstile_update_turnstile_promotion(
 	boolean_t needs_update = turnstile_need_turnstile_promotion_update(dst_turnstile, src_turnstile);
 	if (!needs_update) {
 		turnstile_stats_update(1, TSU_NO_PRI_CHANGE_NEEDED |
-			TSU_TURNSTILE_ARG | TSU_BOOST_ARG,
-			src_turnstile);
+		    TSU_TURNSTILE_ARG | TSU_BOOST_ARG,
+		    src_turnstile);
 		return needs_update;
 	}
 
@@ -1733,8 +2120,8 @@ turnstile_update_turnstile_promotion(
 	/* Update turnstile stats */
 	if (!needs_update) {
 		turnstile_stats_update(1,
-			(dst_turnstile->ts_inheritor ? TSU_NO_PRI_CHANGE_NEEDED : TSU_NO_INHERITOR) |
-			TSU_TURNSTILE_ARG | TSU_BOOST_ARG, src_turnstile);
+		    (dst_turnstile->ts_inheritor ? TSU_NO_PRI_CHANGE_NEEDED : TSU_NO_INHERITOR) |
+		    TSU_TURNSTILE_ARG | TSU_BOOST_ARG, src_turnstile);
 	}
 	waitq_unlock(&dst_turnstile->ts_waitq);
 	return needs_update;
@@ -1765,15 +2152,15 @@ turnstile_add_turnstile_promotion(
 	waitq_lock(&dst_turnstile->ts_waitq);
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		(TURNSTILE_CODE(TURNSTILE_HEAP_OPERATIONS, (TURNSTILE_ADDED_TO_TURNSTILE_HEAP))) | DBG_FUNC_NONE,
-		VM_KERNEL_UNSLIDE_OR_PERM(dst_turnstile),
-		VM_KERNEL_UNSLIDE_OR_PERM(src_turnstile),
-		src_turnstile->ts_priority, 0, 0);
+	    (TURNSTILE_CODE(TURNSTILE_HEAP_OPERATIONS, (TURNSTILE_ADDED_TO_TURNSTILE_HEAP))) | DBG_FUNC_NONE,
+	    VM_KERNEL_UNSLIDE_OR_PERM(dst_turnstile),
+	    VM_KERNEL_UNSLIDE_OR_PERM(src_turnstile),
+	    src_turnstile->ts_priority, 0, 0);
 
 	priority_queue_entry_init(&(src_turnstile->ts_inheritor_links));
 	if (priority_queue_insert(&dst_turnstile->ts_inheritor_queue,
-			&src_turnstile->ts_inheritor_links, src_turnstile->ts_priority,
-			PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE)) {
+	    &src_turnstile->ts_inheritor_links, src_turnstile->ts_priority,
+	    PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE)) {
 		/* Update dst turnstile priority */
 		needs_update = turnstile_recompute_priority_locked(dst_turnstile);
 	}
@@ -1781,8 +2168,8 @@ turnstile_add_turnstile_promotion(
 	/* Update turnstile stats */
 	if (!needs_update) {
 		turnstile_stats_update(1,
-			(dst_turnstile->ts_inheritor ? TSU_NO_PRI_CHANGE_NEEDED : TSU_NO_INHERITOR) |
-			TSU_TURNSTILE_ARG | TSU_BOOST_ARG, src_turnstile);
+		    (dst_turnstile->ts_inheritor ? TSU_NO_PRI_CHANGE_NEEDED : TSU_NO_INHERITOR) |
+		    TSU_TURNSTILE_ARG | TSU_BOOST_ARG, src_turnstile);
 	}
 
 	waitq_unlock(&dst_turnstile->ts_waitq);
@@ -1814,14 +2201,14 @@ turnstile_remove_turnstile_promotion(
 	waitq_lock(&dst_turnstile->ts_waitq);
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		(TURNSTILE_CODE(TURNSTILE_HEAP_OPERATIONS, (TURNSTILE_REMOVED_FROM_TURNSTILE_HEAP))) | DBG_FUNC_NONE,
-		VM_KERNEL_UNSLIDE_OR_PERM(dst_turnstile),
-		VM_KERNEL_UNSLIDE_OR_PERM(src_turnstile),
-		0, 0, 0);
+	    (TURNSTILE_CODE(TURNSTILE_HEAP_OPERATIONS, (TURNSTILE_REMOVED_FROM_TURNSTILE_HEAP))) | DBG_FUNC_NONE,
+	    VM_KERNEL_UNSLIDE_OR_PERM(dst_turnstile),
+	    VM_KERNEL_UNSLIDE_OR_PERM(src_turnstile),
+	    0, 0, 0);
 
 	if (priority_queue_remove(&dst_turnstile->ts_inheritor_queue,
-			&src_turnstile->ts_inheritor_links,
-			PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE)) {
+	    &src_turnstile->ts_inheritor_links,
+	    PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE)) {
 		/* Update dst turnstile priority */
 		needs_update = turnstile_recompute_priority_locked(dst_turnstile);
 	}
@@ -1829,12 +2216,94 @@ turnstile_remove_turnstile_promotion(
 	/* Update turnstile stats */
 	if (!needs_update) {
 		turnstile_stats_update(1,
-			(dst_turnstile->ts_inheritor ? TSU_NO_PRI_CHANGE_NEEDED : TSU_NO_INHERITOR) |
-			TSU_TURNSTILE_ARG, src_turnstile);
+		    (dst_turnstile->ts_inheritor ? TSU_NO_PRI_CHANGE_NEEDED : TSU_NO_INHERITOR) |
+		    TSU_TURNSTILE_ARG, src_turnstile);
 	}
 
 	waitq_unlock(&dst_turnstile->ts_waitq);
 	return needs_update;
+}
+
+/*
+ * Name: turnstile_compute_thread_push
+ *
+ * Description: Compute the priority at which the thread will push
+ *       on the turnstile.
+ *
+ * Arg1: turnstile
+ * Arg2: thread
+ *
+ * Condition: wq locked
+ */
+static int
+turnstile_compute_thread_push(
+	struct turnstile *turnstile,
+	thread_t thread)
+{
+	int priority = 0;
+	switch (turnstile_promote_policy[turnstile_get_type(turnstile)]) {
+	case TURNSTILE_USER_PROMOTE:
+	case TURNSTILE_USER_IPC_PROMOTE:
+		priority = thread->base_pri;
+		break;
+	case TURNSTILE_KERNEL_PROMOTE:
+		/*
+		 * Ideally this should be policy based
+		 * according to the turnstile type.
+		 *
+		 * The priority with which each thread pushes on
+		 * a primitive should be primitive dependent.
+		 */
+		priority = thread->sched_pri;
+		priority = MAX(priority, thread->base_pri);
+		priority = MAX(priority, BASEPRI_DEFAULT);
+		priority = MIN(priority, MAXPRI_PROMOTE);
+		break;
+	default:
+		panic("turnstile promotion for type %d not yet implemented", turnstile_get_type(turnstile));
+	}
+
+	return priority;
+}
+
+/*
+ * Name: turnstile_waitq_add_thread_priority_queue
+ *
+ * Description: add thread to the turnstile wq
+ *
+ * Arg1: turnstile wq
+ * Arg2: thread to add
+ *
+ * Condition: wq locked
+ */
+void
+turnstile_waitq_add_thread_priority_queue(
+	struct waitq *wq,
+	thread_t thread)
+{
+	struct turnstile *turnstile = waitq_to_turnstile(wq);
+	int priority = turnstile_compute_thread_push(turnstile, thread);
+
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+	    (TURNSTILE_CODE(TURNSTILE_HEAP_OPERATIONS, (THREAD_ADDED_TO_TURNSTILE_WAITQ))) | DBG_FUNC_NONE,
+	    VM_KERNEL_UNSLIDE_OR_PERM(turnstile),
+	    thread_tid(thread),
+	    priority, 0, 0);
+	/*
+	 * For turnstile queues (which use priority queues),
+	 * insert the thread in the heap based on its priority.
+	 * Note that the priority queue implementation
+	 * is currently not stable, so does not maintain fifo for
+	 * threads at the same pri. Also, if the pri
+	 * of the thread changes while its blocked in the waitq,
+	 * the thread position should be updated in the priority
+	 * queue by calling priority queue increase/decrease
+	 * operations.
+	 */
+	priority_queue_entry_init(&(thread->wait_prioq_links));
+	priority_queue_insert(&wq->waitq_prio_queue,
+	    &thread->wait_prioq_links, priority,
+	    PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE);
 }
 
 /*
@@ -1860,30 +2329,31 @@ turnstile_recompute_priority_locked(
 	boolean_t needs_priority_update = FALSE;
 	thread_t max_thread = THREAD_NULL;
 	struct turnstile *max_turnstile;
-	int thread_max_pri = MAXPRI_THROTTLE;
-	int turnstile_max_pri = MAXPRI_THROTTLE;
+	int thread_max_pri = 0;
+	int turnstile_max_pri = 0;
 
 	switch (turnstile_promote_policy[turnstile_get_type(turnstile)]) {
-
 	case TURNSTILE_USER_PROMOTE:
 	case TURNSTILE_USER_IPC_PROMOTE:
+	case TURNSTILE_KERNEL_PROMOTE:
 
 		old_priority = turnstile->ts_priority;
 
 		max_thread = priority_queue_max(&turnstile->ts_waitq.waitq_prio_queue,
-				struct thread, wait_prioq_links);
+		    struct thread, wait_prioq_links);
 
 		if (max_thread) {
 			thread_max_pri = priority_queue_entry_key(&turnstile->ts_waitq.waitq_prio_queue,
-					&max_thread->wait_prioq_links);
+			    &max_thread->wait_prioq_links);
 		}
 
 		max_turnstile = priority_queue_max(&turnstile->ts_inheritor_queue,
-				struct turnstile, ts_inheritor_links);
+		    struct turnstile, ts_inheritor_links);
 
 		if (max_turnstile) {
+			assert(turnstile_promote_policy[turnstile_get_type(turnstile)] != TURNSTILE_KERNEL_PROMOTE);
 			turnstile_max_pri = priority_queue_entry_key(&turnstile->ts_inheritor_queue,
-					&max_turnstile->ts_inheritor_links);
+			    &max_turnstile->ts_inheritor_links);
 		}
 
 		new_priority = max(thread_max_pri, turnstile_max_pri);
@@ -1891,31 +2361,27 @@ turnstile_recompute_priority_locked(
 
 		if (old_priority != new_priority) {
 			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-				(TURNSTILE_CODE(TURNSTILE_PRIORITY_OPERATIONS,
-				(TURNSTILE_PRIORITY_CHANGE))) | DBG_FUNC_NONE,
-				VM_KERNEL_UNSLIDE_OR_PERM(turnstile),
-				new_priority,
-				old_priority,
-				0, 0);
+			    (TURNSTILE_CODE(TURNSTILE_PRIORITY_OPERATIONS,
+			    (TURNSTILE_PRIORITY_CHANGE))) | DBG_FUNC_NONE,
+			    VM_KERNEL_UNSLIDE_OR_PERM(turnstile),
+			    new_priority,
+			    old_priority,
+			    0, 0);
 		}
 		needs_priority_update = (!(old_priority == new_priority)) &&
-				(turnstile->ts_inheritor != NULL);
-	break;
+		    (turnstile->ts_inheritor != NULL);
+		break;
 
 	case TURNSTILE_PROMOTE_NONE:
-	case TURNSTILE_KERNEL_PROMOTE:
-
-	/* The turnstile was repurposed, do nothing */
-	break;
+		/* The turnstile was repurposed, do nothing */
+		break;
 
 	default:
 
-	panic("Needs implementation for turnstile_recompute_priority");
-	break;
-
+		panic("Needs implementation for turnstile_recompute_priority");
+		break;
 	}
 	return needs_priority_update;
-
 }
 
 
@@ -1945,7 +2411,6 @@ turnstile_recompute_priority(
 	waitq_unlock(&turnstile->ts_waitq);
 	splx(s);
 	return needs_priority_update;
-
 }
 
 
@@ -1980,10 +2445,10 @@ turnstile_workq_proprietor_of_max_turnstile(
 	waitq_lock(&turnstile->ts_waitq);
 
 	max_turnstile = priority_queue_max(&turnstile->ts_inheritor_queue,
-			struct turnstile, ts_inheritor_links);
+	    struct turnstile, ts_inheritor_links);
 	if (max_turnstile) {
 		max_priority = priority_queue_entry_key(&turnstile->ts_inheritor_queue,
-				&max_turnstile->ts_inheritor_links);
+		    &max_turnstile->ts_inheritor_links);
 		proprietor = max_turnstile->ts_proprietor;
 	}
 
@@ -1994,10 +2459,145 @@ turnstile_workq_proprietor_of_max_turnstile(
 		max_priority = 0;
 		proprietor = 0;
 	}
-	if (proprietor_out) *proprietor_out = proprietor;
+	if (proprietor_out) {
+		*proprietor_out = proprietor;
+	}
 	return max_priority;
 }
 
+/*
+ * Name: turnstile_workloop_pusher_info
+ *
+ * Description: Returns the priority of the turnstile push for a workloop,
+ *              and the thread or knote responsible for this push.
+ *
+ * Args: workloop turnstile
+ *
+ * Returns:
+ *    Priority of the push or 0
+ *    Thread (with a +1 reference) with that push or THREAD_NULL.
+ *    Port (with a +1 reference) with that push, or IP_NULL.
+ *    Sync IPC knote with the highest push (or NULL)
+ */
+int
+turnstile_workloop_pusher_info(
+	struct turnstile *turnstile,
+	thread_t *thread_out,
+	ipc_port_t *port_out,
+	struct knote **knote_out)
+{
+	struct turnstile *max_ts;
+	thread_t max_thread;
+	int max_thread_pri = 0;
+	int max_ts_pri = 0;
+	ipc_port_t port;
+
+	assert(turnstile_get_type(turnstile) == TURNSTILE_WORKLOOPS);
+
+	spl_t s = splsched();
+	waitq_lock(&turnstile->ts_waitq);
+
+	max_thread = priority_queue_max(&turnstile->ts_waitq.waitq_prio_queue,
+	    struct thread, wait_prioq_links);
+	if (max_thread) {
+		max_thread_pri = priority_queue_entry_key(
+			&turnstile->ts_waitq.waitq_prio_queue,
+			&max_thread->wait_prioq_links);
+	}
+
+	max_ts = priority_queue_max(&turnstile->ts_inheritor_queue,
+	    struct turnstile, ts_inheritor_links);
+	if (max_ts) {
+		max_ts_pri = priority_queue_entry_key(&turnstile->ts_inheritor_queue,
+		    &max_ts->ts_inheritor_links);
+	}
+
+	/*
+	 * Reasons to push on a workloop turnstile are:
+	 *
+	 * 1. threads in dispatch sync
+	 *
+	 * 2. sync IPC pushes, which in turn have 4 sub-cases:
+	 *
+	 *   2.a. special reply port or receive right pushing through a knote
+	 *        turnstile,
+	 *
+	 *   2.b. special reply port stashed on a knote, pushing on the workloop
+	 *        directly,
+	 *
+	 *   2.c. receive right stashed on a knote, pushing on the workloop
+	 *        directly,
+	 *
+	 *   2.d. a receive right monitored by a knote, pushing on the workloop
+	 *        directly.
+	 *
+	 * See ipc_port_send_update_inheritor(), ipc_port_recv_update_inheritor().
+	 *
+	 * Note: dereferencing the knote in the caller is safe provided this
+	 * function i scalled under the proper interlocks (the filt_wllock + req
+	 * lock) which serializes with the knote going away.
+	 */
+	if (max_thread_pri > max_ts_pri) {
+		thread_reference(max_thread);
+		*thread_out = max_thread;
+		*port_out = NULL;
+		*knote_out = NULL;
+	} else if (max_ts_pri) {
+		switch (turnstile_get_type(max_ts)) {
+		case TURNSTILE_KNOTE:
+			/* 2.a. */
+			*thread_out = THREAD_NULL;
+			*port_out = IP_NULL;
+			*knote_out = (struct knote *)max_ts->ts_proprietor;
+			break;
+
+		case TURNSTILE_SYNC_IPC:
+			/* 2.[bcd] */
+			port = (ipc_port_t)max_ts->ts_proprietor;
+			ip_reference(port);
+			*thread_out = THREAD_NULL;
+			*port_out = port;
+			*knote_out = NULL;
+			break;
+
+		default:
+			panic("Unexpected type for turnstile %p", max_ts);
+		}
+	} else {
+		*thread_out = THREAD_NULL;
+		*port_out = IP_NULL;
+		*knote_out = NULL;
+	}
+
+	waitq_unlock(&turnstile->ts_waitq);
+	splx(s);
+
+	return max(max_thread_pri, max_ts_pri);
+}
+
+/*
+ * Name: turnstile_has_waiters
+ *
+ * Description: returns if there are waiters on the turnstile
+ *
+ * Arg1: turnstile: turnstile
+ *
+ * Returns: TRUE if there are waiters, FALSE otherwise.
+ */
+
+boolean_t
+turnstile_has_waiters(struct turnstile *turnstile)
+{
+	boolean_t ret;
+
+	spl_t s = splsched();
+	waitq_lock(&turnstile->ts_waitq);
+	ret = !priority_queue_empty(&turnstile->ts_waitq.waitq_prio_queue);
+	waitq_unlock(&turnstile->ts_waitq);
+	splx(s);
+
+	return ret;
+}
 
 /*
  * Name: turnstile_update_inheritor_priority_chain
@@ -2020,7 +2620,7 @@ turnstile_update_inheritor_priority_chain(
 	int total_hop = 0, thread_hop = 0;
 	spl_t s;
 	turnstile_stats_update_flags_t tsu_flags = ((turnstile_flags & TURNSTILE_UPDATE_BOOST) ?
-		TSU_BOOST_ARG : TSU_FLAGS_NONE) | TSU_PRI_PROPAGATION;
+	    TSU_BOOST_ARG : TSU_FLAGS_NONE) | TSU_PRI_PROPAGATION;
 
 	if (inheritor == NULL) {
 		return;
@@ -2031,8 +2631,8 @@ turnstile_update_inheritor_priority_chain(
 	if (turnstile_flags & TURNSTILE_INHERITOR_THREAD) {
 		thread = inheritor;
 		thread_lock(thread);
-		//TODO: Need to call sched promotion for kernel mutex.
 		thread_recompute_user_promotion_locked(thread);
+		thread_recompute_kernel_promotion_locked(thread);
 	} else if (turnstile_flags & TURNSTILE_INHERITOR_TURNSTILE) {
 		turnstile = inheritor;
 		waitq_lock(&turnstile->ts_waitq);
@@ -2050,32 +2650,29 @@ turnstile_update_inheritor_priority_chain(
 		if (turnstile != TURNSTILE_NULL) {
 			if (turnstile->ts_inheritor == NULL) {
 				turnstile_stats_update(total_hop + 1, TSU_NO_INHERITOR |
-					TSU_TURNSTILE_ARG | tsu_flags,
-					turnstile);
+				    TSU_TURNSTILE_ARG | tsu_flags,
+				    turnstile);
 				waitq_unlock(&turnstile->ts_waitq);
 				turnstile = TURNSTILE_NULL;
 				break;
 			}
 			if (turnstile->ts_inheritor_flags & TURNSTILE_INHERITOR_THREAD) {
 				turnstile_update_inheritor_thread_priority_chain(&turnstile, &thread,
-					total_hop, tsu_flags);
-
+				    total_hop, tsu_flags);
 			} else if (turnstile->ts_inheritor_flags & TURNSTILE_INHERITOR_TURNSTILE) {
 				turnstile_update_inheritor_turnstile_priority_chain(&turnstile,
-					total_hop, tsu_flags);
-
+				    total_hop, tsu_flags);
 			} else if (turnstile->ts_inheritor_flags & TURNSTILE_INHERITOR_WORKQ) {
 				turnstile_update_inheritor_workq_priority_chain(turnstile, s);
 				turnstile_stats_update(total_hop + 1, TSU_NO_PRI_CHANGE_NEEDED | tsu_flags,
-					NULL);
+				    NULL);
 				return;
-
 			} else {
 				panic("Inheritor flags not passed in turnstile_update_inheritor");
 			}
 		} else if (thread != THREAD_NULL) {
 			thread_update_waiting_turnstile_priority_chain(&thread, &turnstile,
-					thread_hop, total_hop, tsu_flags);
+			    thread_hop, total_hop, tsu_flags);
 			thread_hop++;
 		}
 		total_hop++;
@@ -2114,7 +2711,7 @@ turnstile_update_inheritor_complete(
 	/* Perform priority update for new inheritor */
 	if (inheritor_flags & TURNSTILE_NEEDS_PRI_UPDATE) {
 		turnstile_update_inheritor_priority_chain(turnstile,
-			TURNSTILE_INHERITOR_TURNSTILE | TURNSTILE_UPDATE_BOOST);
+		    TURNSTILE_INHERITOR_TURNSTILE | TURNSTILE_UPDATE_BOOST);
 	}
 }
 
@@ -2147,7 +2744,7 @@ turnstile_cleanup(void)
 	/* Perform priority demotion for old inheritor */
 	if (inheritor_flags & TURNSTILE_INHERITOR_NEEDS_PRI_UPDATE) {
 		turnstile_update_inheritor_priority_chain(old_inheritor,
-			inheritor_flags);
+		    inheritor_flags);
 	}
 
 	/* Drop thread reference for old inheritor */
@@ -2160,6 +2757,23 @@ turnstile_cleanup(void)
 	} else {
 		panic("Inheritor flags lost along the way");
 	}
+}
+
+/*
+ * Name: turnstile_update_thread_priority_chain
+ *
+ * Description: Priority of a thread blocked on a turnstile
+ *              has changed, update the turnstile priority.
+ *
+ * Arg1: thread: thread whose priority has changed.
+ *
+ * Returns: None.
+ */
+void
+turnstile_update_thread_priority_chain(thread_t thread)
+{
+	turnstile_update_inheritor_priority_chain(thread,
+	    TURNSTILE_INHERITOR_THREAD | TURNSTILE_UPDATE_BOOST);
 }
 
 /*
@@ -2186,13 +2800,19 @@ turnstile_update_inheritor_workq_priority_chain(struct turnstile *turnstile, spl
 		return;
 	}
 
-	if (!workq_lock_held) workq_reference(wq);
+	if (!workq_lock_held) {
+		workq_reference(wq);
+		disable_preemption();
+	}
 	waitq_unlock(&turnstile->ts_waitq);
 	splx(s);
 
 	workq_schedule_creator_turnstile_redrive(wq, workq_lock_held);
 
-	if (!workq_lock_held) workq_deallocate_safe(wq);
+	if (!workq_lock_held) {
+		enable_preemption();
+		workq_deallocate_safe(wq);
+	}
 }
 
 /*
@@ -2231,7 +2851,7 @@ turnstile_update_inheritor_thread_priority_chain(
 	needs_update = thread_needs_turnstile_promotion_update(thread_inheritor, turnstile);
 	if (!needs_update && !first_update) {
 		turnstile_stats_update(total_hop + 1, TSU_NO_PRI_CHANGE_NEEDED |
-			TSU_TURNSTILE_ARG | tsu_flags, turnstile);
+		    TSU_TURNSTILE_ARG | tsu_flags, turnstile);
 		waitq_unlock(&turnstile->ts_waitq);
 		return;
 	}
@@ -2252,9 +2872,9 @@ turnstile_update_inheritor_thread_priority_chain(
 	if (!needs_update && !first_update) {
 		/* Update turnstile stats before returning */
 		turnstile_stats_update(total_hop + 1,
-			(thread_get_update_flags_for_turnstile_propagation_stoppage(thread_inheritor)) |
-			TSU_TURNSTILE_ARG | tsu_flags,
-			turnstile);
+		    (thread_get_update_flags_for_turnstile_propagation_stoppage(thread_inheritor)) |
+		    TSU_TURNSTILE_ARG | tsu_flags,
+		    turnstile);
 		thread_unlock(thread_inheritor);
 		waitq_unlock(&turnstile->ts_waitq);
 		return;
@@ -2301,8 +2921,8 @@ turnstile_update_inheritor_turnstile_priority_chain(
 	needs_update = turnstile_need_turnstile_promotion_update(inheritor_turnstile, turnstile);
 	if (!needs_update && !first_update) {
 		turnstile_stats_update(total_hop + 1, TSU_NO_PRI_CHANGE_NEEDED |
-			TSU_TURNSTILE_ARG | tsu_flags,
-			turnstile);
+		    TSU_TURNSTILE_ARG | tsu_flags,
+		    turnstile);
 		waitq_unlock(&turnstile->ts_waitq);
 		return;
 	}
@@ -2322,9 +2942,9 @@ turnstile_update_inheritor_turnstile_priority_chain(
 	if (!needs_update && !first_update) {
 		/* Update turnstile stats before returning */
 		turnstile_stats_update(total_hop + 1,
-			(inheritor_turnstile->ts_inheritor ? TSU_NO_PRI_CHANGE_NEEDED : TSU_NO_INHERITOR) |
-			TSU_TURNSTILE_ARG | tsu_flags,
-			turnstile);
+		    (inheritor_turnstile->ts_inheritor ? TSU_NO_PRI_CHANGE_NEEDED : TSU_NO_INHERITOR) |
+		    TSU_TURNSTILE_ARG | tsu_flags,
+		    turnstile);
 		waitq_unlock(&inheritor_turnstile->ts_waitq);
 		waitq_unlock(&turnstile->ts_waitq);
 		return;
@@ -2373,15 +2993,15 @@ thread_update_waiting_turnstile_priority_chain(
 
 	if (waiting_turnstile == TURNSTILE_NULL || thread_hop > turnstile_max_hop) {
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-			(TURNSTILE_CODE(TURNSTILE_HEAP_OPERATIONS,
-			 (waiting_turnstile ? TURNSTILE_UPDATE_STOPPED_BY_LIMIT : THREAD_NOT_WAITING_ON_TURNSTILE)
-			)) | DBG_FUNC_NONE,
-			thread_tid(thread),
-			turnstile_max_hop,
-			thread_hop,
-			VM_KERNEL_UNSLIDE_OR_PERM(waiting_turnstile), 0);
+		    (TURNSTILE_CODE(TURNSTILE_HEAP_OPERATIONS,
+		    (waiting_turnstile ? TURNSTILE_UPDATE_STOPPED_BY_LIMIT : THREAD_NOT_WAITING_ON_TURNSTILE)
+		    )) | DBG_FUNC_NONE,
+		    thread_tid(thread),
+		    turnstile_max_hop,
+		    thread_hop,
+		    VM_KERNEL_UNSLIDE_OR_PERM(waiting_turnstile), 0);
 		turnstile_stats_update(total_hop + 1, TSU_NO_TURNSTILE |
-			TSU_THREAD_ARG | tsu_flags, thread);
+		    TSU_THREAD_ARG | tsu_flags, thread);
 		thread_unlock(thread);
 		return;
 	}
@@ -2390,7 +3010,7 @@ thread_update_waiting_turnstile_priority_chain(
 	needs_update = turnstile_need_thread_promotion_update(waiting_turnstile, thread);
 	if (!needs_update && !first_update) {
 		turnstile_stats_update(total_hop + 1, TSU_NO_PRI_CHANGE_NEEDED |
-			TSU_THREAD_ARG | tsu_flags, thread);
+		    TSU_THREAD_ARG | tsu_flags, thread);
 		thread_unlock(thread);
 		return;
 	}
@@ -2409,7 +3029,7 @@ thread_update_waiting_turnstile_priority_chain(
 	if (turnstile_gencount != turnstile_get_gencount(waiting_turnstile) ||
 	    waiting_turnstile != thread_get_waiting_turnstile(thread)) {
 		turnstile_stats_update(total_hop + 1, TSU_NO_PRI_CHANGE_NEEDED |
-			TSU_THREAD_ARG | tsu_flags, thread);
+		    TSU_THREAD_ARG | tsu_flags, thread);
 		/* No updates required, bail out */
 		thread_unlock(thread);
 		waitq_unlock(&waiting_turnstile->ts_waitq);
@@ -2438,8 +3058,8 @@ thread_update_waiting_turnstile_priority_chain(
 	 */
 	if (!needs_update && !first_update) {
 		turnstile_stats_update(total_hop + 1,
-			(waiting_turnstile->ts_inheritor ? TSU_NO_PRI_CHANGE_NEEDED : TSU_NO_INHERITOR) |
-			TSU_THREAD_ARG | tsu_flags, thread);
+		    (waiting_turnstile->ts_inheritor ? TSU_NO_PRI_CHANGE_NEEDED : TSU_NO_INHERITOR) |
+		    TSU_THREAD_ARG | tsu_flags, thread);
 		thread_unlock(thread);
 		waitq_unlock(&waiting_turnstile->ts_waitq);
 		return;
@@ -2485,14 +3105,14 @@ turnstile_stats_update(
 	/*
 	 * Check if turnstile stats needs to be updated.
 	 * Bail out if the turnstile or thread does not
-	 * have any user promotion, i.e. pri 4.
+	 * have any user promotion.
 	 * Bail out if it is the first hop of WQ turnstile
 	 * since WQ's use of a turnstile for the admission check
 	 * introduces a lot of noise due to state changes.
 	 */
 	if (flags & TSU_TURNSTILE_ARG) {
 		struct turnstile *ts = (struct turnstile *)inheritor;
-		if (ts->ts_priority <= MAXPRI_THROTTLE) {
+		if (ts->ts_priority == 0) {
 			return;
 		}
 
@@ -2501,7 +3121,7 @@ turnstile_stats_update(
 		}
 	} else if (flags & TSU_THREAD_ARG) {
 		thread_t thread = (thread_t)inheritor;
-		if (thread->user_promotion_basepri <= MAXPRI_THROTTLE) {
+		if (thread->user_promotion_basepri == 0) {
 			return;
 		}
 	} else {
@@ -2541,10 +3161,64 @@ turnstile_stats_update(
 #endif
 }
 
+static uint64_t
+kdp_turnstile_traverse_inheritor_chain(struct turnstile *ts, uint64_t *flags, uint8_t *hops)
+{
+	if (waitq_held(&ts->ts_waitq)) {
+		*flags |= STACKSHOT_TURNSTILE_STATUS_LOCKED_WAITQ;
+		return 0;
+	}
+
+	*hops = *hops + 1;
+
+	if (ts->ts_inheritor_flags & TURNSTILE_INHERITOR_TURNSTILE) {
+		return kdp_turnstile_traverse_inheritor_chain(ts->ts_inheritor, flags, hops);
+	}
+
+	if (ts->ts_inheritor_flags & TURNSTILE_INHERITOR_THREAD) {
+		*flags |= STACKSHOT_TURNSTILE_STATUS_THREAD;
+		return (uint64_t) thread_tid(ts->ts_inheritor);
+	}
+
+	if (ts->ts_inheritor_flags & TURNSTILE_INHERITOR_WORKQ) {
+		*flags |= STACKSHOT_TURNSTILE_STATUS_WORKQUEUE;
+		return VM_KERNEL_UNSLIDE_OR_PERM(ts->ts_inheritor);
+	}
+
+	*flags |= STACKSHOT_TURNSTILE_STATUS_UNKNOWN;
+	return 0;
+}
+
+void
+kdp_turnstile_fill_tsinfo(struct turnstile *ts, thread_turnstileinfo_t *tsinfo)
+{
+	uint64_t final_inheritor;
+	uint64_t flags = 0;
+	uint8_t hops = 0;
+
+	tsinfo->turnstile_context  = 0;
+	tsinfo->number_of_hops     = 0;
+	tsinfo->turnstile_priority = 0;
+
+	assert(ts != TURNSTILE_NULL);
+
+	if (waitq_held(&ts->ts_waitq)) {
+		tsinfo->turnstile_flags |= STACKSHOT_TURNSTILE_STATUS_LOCKED_WAITQ;
+		return;
+	}
+
+	final_inheritor = kdp_turnstile_traverse_inheritor_chain(ts, &flags, &hops);
+
+	/* store some metadata about the turnstile itself */
+	tsinfo->turnstile_flags = flags;
+	tsinfo->number_of_hops = hops;
+	tsinfo->turnstile_priority = ts->ts_priority;
+	tsinfo->turnstile_context = final_inheritor;
+}
 
 #if DEVELOPMENT || DEBUG
 
-int sysctl_io_opaque(void *req,void *pValue, size_t valueSize, int *changed);
+int sysctl_io_opaque(void *req, void *pValue, size_t valueSize, int *changed);
 
 /*
  * Name: turnstile_get_boost_stats_sysctl
@@ -2559,7 +3233,7 @@ int
 turnstile_get_boost_stats_sysctl(
 	void *req)
 {
-	return sysctl_io_opaque(req, turnstile_boost_stats, sizeof (struct turnstile_stats) * TURNSTILE_MAX_HOP_DEFAULT, NULL);
+	return sysctl_io_opaque(req, turnstile_boost_stats, sizeof(struct turnstile_stats) * TURNSTILE_MAX_HOP_DEFAULT, NULL);
 }
 
 /*
@@ -2575,13 +3249,13 @@ int
 turnstile_get_unboost_stats_sysctl(
 	void *req)
 {
-	return sysctl_io_opaque(req, turnstile_unboost_stats, sizeof (struct turnstile_stats) * TURNSTILE_MAX_HOP_DEFAULT, NULL);
+	return sysctl_io_opaque(req, turnstile_unboost_stats, sizeof(struct turnstile_stats) * TURNSTILE_MAX_HOP_DEFAULT, NULL);
 }
 
 /* Testing interface for Development kernels */
-#define	tstile_test_prim_lock_interlock(test_prim) \
+#define tstile_test_prim_lock_interlock(test_prim) \
 	lck_spin_lock(&test_prim->ttprim_interlock)
-#define	tstile_test_prim_unlock_interlock(test_prim) \
+#define tstile_test_prim_unlock_interlock(test_prim) \
 	lck_spin_unlock(&test_prim->ttprim_interlock)
 
 static void
@@ -2599,10 +3273,45 @@ tstile_test_prim_init(struct tstile_test_prim **test_prim_ptr)
 }
 
 int
-tstile_test_prim_lock(boolean_t use_hashtable)
+tstile_test_prim_lock(int val)
 {
-	struct tstile_test_prim *test_prim = use_hashtable ? test_prim_global_htable : test_prim_ts_inline;
+	struct tstile_test_prim *test_prim;
+	boolean_t use_hashtable;
+	turnstile_type_t type;
+	wait_interrupt_t wait_type;
+
+	switch (val) {
+	case SYSCTL_TURNSTILE_TEST_USER_DEFAULT:
+		test_prim = test_prim_ts_inline;
+		use_hashtable = FALSE;
+		wait_type = THREAD_ABORTSAFE;
+		type = TURNSTILE_ULOCK;
+		break;
+	case SYSCTL_TURNSTILE_TEST_USER_HASHTABLE:
+		test_prim = test_prim_global_htable;
+		use_hashtable = TRUE;
+		wait_type = THREAD_ABORTSAFE;
+		type = TURNSTILE_ULOCK;
+		break;
+	case SYSCTL_TURNSTILE_TEST_KERNEL_DEFAULT:
+		test_prim = test_prim_global_ts_kernel;
+		use_hashtable = FALSE;
+		wait_type = THREAD_UNINT | THREAD_WAIT_NOREPORT_USER;
+		type = TURNSTILE_KERNEL_MUTEX;
+		break;
+	case SYSCTL_TURNSTILE_TEST_KERNEL_HASHTABLE:
+		test_prim = test_prim_global_ts_kernel_hash;
+		use_hashtable = TRUE;
+		wait_type = THREAD_UNINT | THREAD_WAIT_NOREPORT_USER;
+		type = TURNSTILE_KERNEL_MUTEX;
+		break;
+
+	default:
+		return -1;
+	}
+
 lock_start:
+
 	/* take the interlock of the primitive */
 	tstile_test_prim_lock_interlock(test_prim);
 
@@ -2618,8 +3327,8 @@ lock_start:
 
 	/* primitive locked, get a turnstile */
 	prim_turnstile = turnstile_prepare((uintptr_t)test_prim,
-			use_hashtable ? NULL : &test_prim->ttprim_turnstile,
-			TURNSTILE_NULL, TURNSTILE_ULOCK);
+	    use_hashtable ? NULL : &test_prim->ttprim_turnstile,
+	    TURNSTILE_NULL, type);
 
 	assert(prim_turnstile != TURNSTILE_NULL);
 
@@ -2630,29 +3339,28 @@ lock_start:
 
 		/* Update the turnstile owner */
 		turnstile_update_inheritor(prim_turnstile,
-				current_thread(),
-				(TURNSTILE_IMMEDIATE_UPDATE | TURNSTILE_INHERITOR_THREAD));
+		    current_thread(),
+		    (TURNSTILE_IMMEDIATE_UPDATE | TURNSTILE_INHERITOR_THREAD));
 
 		turnstile_update_inheritor_complete(prim_turnstile, TURNSTILE_INTERLOCK_HELD);
 
 		turnstile_complete((uintptr_t)test_prim,
-			use_hashtable ? NULL : &test_prim->ttprim_turnstile, NULL);
+		    use_hashtable ? NULL : &test_prim->ttprim_turnstile, NULL, type);
 
 		tstile_test_prim_unlock_interlock(test_prim);
 
 		turnstile_cleanup();
-
 		return 0;
 	}
 
 	test_prim->tt_prim_waiters++;
 	turnstile_update_inheritor(prim_turnstile,
-				test_prim->ttprim_owner,
-				(TURNSTILE_DELAYED_UPDATE | TURNSTILE_INHERITOR_THREAD));
+	    test_prim->ttprim_owner,
+	    (TURNSTILE_DELAYED_UPDATE | TURNSTILE_INHERITOR_THREAD));
 
 	waitq_assert_wait64(&prim_turnstile->ts_waitq,
-		CAST_EVENT64_T(test_prim), THREAD_ABORTSAFE,
-		TIMEOUT_WAIT_FOREVER);
+	    CAST_EVENT64_T(test_prim), wait_type,
+	    TIMEOUT_WAIT_FOREVER);
 
 	/* drop the interlock */
 	tstile_test_prim_unlock_interlock(test_prim);
@@ -2666,7 +3374,7 @@ lock_start:
 	tstile_test_prim_lock_interlock(test_prim);
 	test_prim->tt_prim_waiters--;
 	turnstile_complete((uintptr_t)test_prim,
-		use_hashtable ? NULL : &test_prim->ttprim_turnstile, NULL);
+	    use_hashtable ? NULL : &test_prim->ttprim_turnstile, NULL, type);
 
 	tstile_test_prim_unlock_interlock(test_prim);
 
@@ -2681,10 +3389,37 @@ lock_start:
 }
 
 int
-tstile_test_prim_unlock(boolean_t use_hashtable)
+tstile_test_prim_unlock(int val)
 {
+	struct tstile_test_prim *test_prim;
+	boolean_t use_hashtable;
+	turnstile_type_t type;
 
-	struct tstile_test_prim *test_prim = use_hashtable ? test_prim_global_htable : test_prim_ts_inline;
+	switch (val) {
+	case SYSCTL_TURNSTILE_TEST_USER_DEFAULT:
+		test_prim = test_prim_ts_inline;
+		use_hashtable = FALSE;
+		type = TURNSTILE_ULOCK;
+		break;
+	case SYSCTL_TURNSTILE_TEST_USER_HASHTABLE:
+		test_prim = test_prim_global_htable;
+		use_hashtable = TRUE;
+		type = TURNSTILE_ULOCK;
+		break;
+	case SYSCTL_TURNSTILE_TEST_KERNEL_DEFAULT:
+		test_prim = test_prim_global_ts_kernel;
+		use_hashtable = FALSE;
+		type = TURNSTILE_KERNEL_MUTEX;
+		break;
+	case SYSCTL_TURNSTILE_TEST_KERNEL_HASHTABLE:
+		test_prim = test_prim_global_ts_kernel_hash;
+		use_hashtable = TRUE;
+		type = TURNSTILE_KERNEL_MUTEX;
+		break;
+	default:
+		return -1;
+	}
+
 	/* take the interlock of the primitive */
 	tstile_test_prim_lock_interlock(test_prim);
 
@@ -2711,24 +3446,24 @@ tstile_test_prim_unlock(boolean_t use_hashtable)
 
 	/* primitive locked, get a turnstile */
 	prim_turnstile = turnstile_prepare((uintptr_t)test_prim,
-			use_hashtable ? NULL : &test_prim->ttprim_turnstile,
-			TURNSTILE_NULL, TURNSTILE_ULOCK);
+	    use_hashtable ? NULL : &test_prim->ttprim_turnstile,
+	    TURNSTILE_NULL, type);
 
 	assert(prim_turnstile != TURNSTILE_NULL);
 
 	/* Update the turnstile owner */
 	turnstile_update_inheritor(prim_turnstile,
-			NULL,
-			(TURNSTILE_IMMEDIATE_UPDATE | TURNSTILE_INHERITOR_THREAD));
+	    NULL,
+	    (TURNSTILE_IMMEDIATE_UPDATE | TURNSTILE_INHERITOR_THREAD));
 
 	waitq_wakeup64_one(&prim_turnstile->ts_waitq,
-		CAST_EVENT64_T(test_prim),
-		THREAD_AWAKENED, WAITQ_SELECT_MAX_PRI);
+	    CAST_EVENT64_T(test_prim),
+	    THREAD_AWAKENED, WAITQ_ALL_PRIORITIES);
 
 	turnstile_update_inheritor_complete(prim_turnstile, TURNSTILE_INTERLOCK_HELD);
 
 	turnstile_complete((uintptr_t)test_prim,
-		use_hashtable ? NULL : &test_prim->ttprim_turnstile, NULL);
+	    use_hashtable ? NULL : &test_prim->ttprim_turnstile, NULL, type);
 
 	tstile_test_prim_unlock_interlock(test_prim);
 

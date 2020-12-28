@@ -78,13 +78,14 @@
 #include <kern/monotonic.h>
 #endif /* MONOTONIC */
 
-extern void	patch_low_glo(void);
-extern int	serial_init(void);
+extern void     patch_low_glo(void);
+extern int      serial_init(void);
 extern void sleep_token_buffer_init(void);
 
 extern vm_offset_t intstack_top;
 #if __arm64__
 extern vm_offset_t excepstack_top;
+extern uint64_t events_per_sec;
 #else
 extern vm_offset_t fiqstack_top;
 #endif
@@ -100,6 +101,16 @@ int             debug_task;
 boolean_t up_style_idle_exit = 0;
 
 
+#if HAS_NEX_PG
+uint32_t nex_pg = 1;
+extern void set_nex_pg(void);
+#endif
+
+#if HAS_BP_RET
+/* Enable both branch target retention (0x2) and branch direction retention (0x1) across sleep */
+uint32_t bp_ret = 3;
+extern void set_bp_ret(void);
+#endif
 
 #if INTERRUPT_MASKED_DEBUG
 boolean_t interrupt_masked_debug = 1;
@@ -110,7 +121,7 @@ boot_args const_boot_args __attribute__((section("__DATA, __const")));
 boot_args      *BootArgs __attribute__((section("__DATA, __const")));
 
 unsigned int arm_diag;
-#ifdef	APPLETYPHOON
+#ifdef  APPLETYPHOON
 static unsigned cpus_defeatures = 0x0;
 extern void cpu_defeatures_set(unsigned int);
 #endif
@@ -121,15 +132,13 @@ extern volatile boolean_t arm64_stall_sleep;
 
 extern boolean_t force_immediate_debug_halt;
 
-#define MIN_LOW_GLO_MASK (0x144)
-
 /*
  * Forward definition
  */
 void arm_init(boot_args * args);
 
 #if __arm64__
-unsigned int page_shift_user32;	/* for page_size as seen by a 32-bit task */
+unsigned int page_shift_user32; /* for page_size as seen by a 32-bit task */
 #endif /* __arm64__ */
 
 
@@ -137,6 +146,9 @@ unsigned int page_shift_user32;	/* for page_size as seen by a 32-bit task */
  * JOP rebasing
  */
 
+#if defined(HAS_APPLE_PAC)
+#include <ptrauth.h>
+#endif /* defined(HAS_APPLE_PAC) */
 
 // Note, the following should come from a header from dyld
 static void
@@ -147,6 +159,11 @@ rebase_chain(uintptr_t chainStartAddress, uint64_t stepMultiplier, uintptr_t bas
 	do {
 		uint64_t value = *(uint64_t*)address;
 
+#if HAS_APPLE_PAC
+		uint16_t diversity = (uint16_t)(value >> 32);
+		bool hasAddressDiversity = (value & (1ULL << 48)) != 0;
+		ptrauth_key key = (ptrauth_key)((value >> 49) & 0x3);
+#endif
 		bool isAuthenticated = (value & (1ULL << 63)) != 0;
 		bool isRebase = (value & (1ULL << 62)) == 0;
 		if (isRebase) {
@@ -155,16 +172,41 @@ rebase_chain(uintptr_t chainStartAddress, uint64_t stepMultiplier, uintptr_t bas
 				uint64_t newValue = (value & 0xFFFFFFFF) + slide;
 				// Add in the offset from the mach_header
 				newValue += baseAddress;
+#if HAS_APPLE_PAC
+				// We have bits to merge in to the discriminator
+				uintptr_t discriminator = diversity;
+				if (hasAddressDiversity) {
+					// First calculate a new discriminator using the address of where we are trying to store the value
+					// Only blend if we have a discriminator
+					if (discriminator) {
+						discriminator = __builtin_ptrauth_blend_discriminator((void*)address, discriminator);
+					} else {
+						discriminator = address;
+					}
+				}
+				switch (key) {
+				case ptrauth_key_asia:
+					newValue = (uintptr_t)__builtin_ptrauth_sign_unauthenticated((void*)newValue, ptrauth_key_asia, discriminator);
+					break;
+				case ptrauth_key_asib:
+					newValue = (uintptr_t)__builtin_ptrauth_sign_unauthenticated((void*)newValue, ptrauth_key_asib, discriminator);
+					break;
+				case ptrauth_key_asda:
+					newValue = (uintptr_t)__builtin_ptrauth_sign_unauthenticated((void*)newValue, ptrauth_key_asda, discriminator);
+					break;
+				case ptrauth_key_asdb:
+					newValue = (uintptr_t)__builtin_ptrauth_sign_unauthenticated((void*)newValue, ptrauth_key_asdb, discriminator);
+					break;
+				}
+#endif
 				*(uint64_t*)address = newValue;
-
-			} else
-			{
+			} else {
 				// Regular pointer which needs to fit in 51-bits of value.
 				// C++ RTTI uses the top bit, so we'll allow the whole top-byte
 				// and the bottom 43-bits to be fit in to 51-bits.
 				uint64_t top8Bits = value & 0x0007F80000000000ULL;
 				uint64_t bottom43Bits = value & 0x000007FFFFFFFFFFULL;
-				uint64_t targetValue = ( top8Bits << 13 ) | (((intptr_t)(bottom43Bits << 21) >> 21) & 0x00FFFFFFFFFFFFFF);
+				uint64_t targetValue = (top8Bits << 13) | (((intptr_t)(bottom43Bits << 21) >> 21) & 0x00FFFFFFFFFFFFFF);
 				targetValue = targetValue + slide;
 				*(uint64_t*)address = targetValue;
 			}
@@ -173,25 +215,27 @@ rebase_chain(uintptr_t chainStartAddress, uint64_t stepMultiplier, uintptr_t bas
 		// The delta is bits [51..61]
 		// And bit 62 is to tell us if we are a rebase (0) or bind (1)
 		value &= ~(1ULL << 62);
-		delta = ( value & 0x3FF8000000000000 ) >> 51;
+		delta = (value & 0x3FF8000000000000) >> 51;
 		address += delta * stepMultiplier;
-	} while ( delta != 0 );
+	} while (delta != 0);
 }
 
 // Note, the following method should come from a header from dyld
 static bool
 rebase_threaded_starts(uint32_t *threadArrayStart, uint32_t *threadArrayEnd,
-	                    uintptr_t macho_header_addr, uintptr_t macho_header_vmaddr, size_t slide)
+    uintptr_t macho_header_addr, uintptr_t macho_header_vmaddr, size_t slide)
 {
 	uint32_t threadStartsHeader = *threadArrayStart;
 	uint64_t stepMultiplier = (threadStartsHeader & 1) == 1 ? 8 : 4;
 	for (uint32_t* threadOffset = threadArrayStart + 1; threadOffset != threadArrayEnd; ++threadOffset) {
-		if (*threadOffset == 0xFFFFFFFF)
+		if (*threadOffset == 0xFFFFFFFF) {
 			break;
+		}
 		rebase_chain(macho_header_addr + *threadOffset, stepMultiplier, macho_header_vmaddr, slide);
 	}
 	return true;
 }
+
 
 /*
  *		Routine:		arm_init
@@ -203,7 +247,7 @@ extern uint32_t __thread_starts_sect_end[]   __asm("section$end$__TEXT$__thread_
 
 void
 arm_init(
-	boot_args	*args)
+	boot_args       *args)
 {
 	unsigned int    maxmem;
 	uint32_t        memsize;
@@ -211,14 +255,13 @@ arm_init(
 	thread_t        thread;
 	processor_t     my_master_proc;
 
-    // rebase and sign jops
-	if (&__thread_starts_sect_end[0] != &__thread_starts_sect_start[0])
-	{
+	// rebase and sign jops
+	if (&__thread_starts_sect_end[0] != &__thread_starts_sect_start[0]) {
 		uintptr_t mh    = (uintptr_t) &_mh_execute_header;
 		uintptr_t slide = mh - VM_KERNEL_LINK_ADDRESS;
 		rebase_threaded_starts( &__thread_starts_sect_start[0],
-								&__thread_starts_sect_end[0],
-								mh, mh - slide, slide);
+		    &__thread_starts_sect_end[0],
+		    mh, mh - slide, slide);
 	}
 
 	/* If kernel integrity is supported, use a constant copy of the boot args. */
@@ -226,24 +269,42 @@ arm_init(
 	BootArgs = args = &const_boot_args;
 
 	cpu_data_init(&BootCpuData);
+#if defined(HAS_APPLE_PAC)
+	/* bootstrap cpu process dependent key for kernel has been loaded by start.s */
+	BootCpuData.rop_key = KERNEL_ROP_ID;
+#endif /* defined(HAS_APPLE_PAC) */
 
 	PE_init_platform(FALSE, args); /* Get platform expert set up */
 
 #if __arm64__
 
 
+#if defined(HAS_APPLE_PAC)
+	boolean_t user_jop = TRUE;
+	PE_parse_boot_argn("user_jop", &user_jop, sizeof(user_jop));
+	if (!user_jop) {
+		args->bootFlags |= kBootFlagsDisableUserJOP;
+	}
+	boolean_t user_ts_jop = TRUE;
+	PE_parse_boot_argn("user_ts_jop", &user_ts_jop, sizeof(user_ts_jop));
+	if (!user_ts_jop) {
+		args->bootFlags |= kBootFlagsDisableUserThreadStateJOP;
+	}
+#endif /* defined(HAS_APPLE_PAC) */
+
 	{
 		unsigned int    tmp_16k = 0;
 
-#ifdef	XXXX
+#ifdef  XXXX
 		/*
 		 * Select the advertised kernel page size; without the boot-arg
 		 * we default to the hardware page size for the current platform.
 		 */
-		if (PE_parse_boot_argn("-vm16k", &tmp_16k, sizeof(tmp_16k)))
+		if (PE_parse_boot_argn("-vm16k", &tmp_16k, sizeof(tmp_16k))) {
 			PAGE_SHIFT_CONST = PAGE_MAX_SHIFT;
-		else
+		} else {
 			PAGE_SHIFT_CONST = ARM_PGSHIFT;
+		}
 #else
 		/*
 		 * Select the advertised kernel page size; with the boot-arg
@@ -252,7 +313,7 @@ arm_init(
 		int radar_20804515 = 1; /* default: new mode */
 		PE_parse_boot_argn("radar_20804515", &radar_20804515, sizeof(radar_20804515));
 		if (radar_20804515) {
-			if (args->memSize > 1ULL*1024*1024*1024) {
+			if (args->memSize > 1ULL * 1024 * 1024 * 1024) {
 				/*
 				 * arm64 device with > 1GB of RAM:
 				 * kernel uses 16KB pages.
@@ -270,21 +331,23 @@ arm_init(
 			page_shift_user32 = PAGE_MAX_SHIFT;
 		} else {
 			/* kernel page size: */
-			if (PE_parse_boot_argn("-use_hwpagesize", &tmp_16k, sizeof(tmp_16k)))
+			if (PE_parse_boot_argn("-use_hwpagesize", &tmp_16k, sizeof(tmp_16k))) {
 				PAGE_SHIFT_CONST = ARM_PGSHIFT;
-			else
+			} else {
 				PAGE_SHIFT_CONST = PAGE_MAX_SHIFT;
+			}
 			/* old mode: 32-bit apps see same page size as kernel */
 			page_shift_user32 = PAGE_SHIFT_CONST;
 		}
 #endif
-#ifdef	APPLETYPHOON
+#ifdef  APPLETYPHOON
 		if (PE_parse_boot_argn("cpus_defeatures", &cpus_defeatures, sizeof(cpus_defeatures))) {
-			if ((cpus_defeatures & 0xF) != 0)
+			if ((cpus_defeatures & 0xF) != 0) {
 				cpu_defeatures_set(cpus_defeatures & 0xF);
+			}
 		}
 #endif
-        }
+	}
 #endif
 
 	ml_parse_cpu_topology();
@@ -293,45 +356,46 @@ arm_init(
 	assert(master_cpu >= 0 && master_cpu <= ml_get_max_cpu_number());
 
 	BootCpuData.cpu_number = (unsigned short)master_cpu;
-#if	__arm__
+#if     __arm__
 	BootCpuData.cpu_exc_vectors = (vm_offset_t)&ExceptionVectorsTable;
 #endif
-	BootCpuData.intstack_top = (vm_offset_t) & intstack_top;
+	BootCpuData.intstack_top = (vm_offset_t) &intstack_top;
 	BootCpuData.istackptr = BootCpuData.intstack_top;
 #if __arm64__
-	BootCpuData.excepstack_top = (vm_offset_t) & excepstack_top;
+	BootCpuData.excepstack_top = (vm_offset_t) &excepstack_top;
 	BootCpuData.excepstackptr = BootCpuData.excepstack_top;
 #else
-	BootCpuData.fiqstack_top = (vm_offset_t) & fiqstack_top;
+	BootCpuData.fiqstack_top = (vm_offset_t) &fiqstack_top;
 	BootCpuData.fiqstackptr = BootCpuData.fiqstack_top;
 #endif
 	BootCpuData.cpu_processor = cpu_processor_alloc(TRUE);
 	BootCpuData.cpu_console_buf = (void *)NULL;
 	CpuDataEntries[master_cpu].cpu_data_vaddr = &BootCpuData;
 	CpuDataEntries[master_cpu].cpu_data_paddr = (void *)((uintptr_t)(args->physBase)
-	                                            + ((uintptr_t)&BootCpuData
-	                                            - (uintptr_t)(args->virtBase)));
+	    + ((uintptr_t)&BootCpuData
+	    - (uintptr_t)(args->virtBase)));
 
-	thread_bootstrap();
-	thread = current_thread();
+	thread = thread_bootstrap();
+	thread->machine.CpuDatap = &BootCpuData;
+	machine_set_current_thread(thread);
+
 	/*
 	 * Preemption is enabled for this thread so that it can lock mutexes without
 	 * tripping the preemption check. In reality scheduling is not enabled until
-	 * this thread completes, and there are no other threads to switch to, so 
+	 * this thread completes, and there are no other threads to switch to, so
 	 * preemption level is not really meaningful for the bootstrap thread.
 	 */
 	thread->machine.preemption_count = 0;
-	thread->machine.CpuDatap = &BootCpuData;
-#if	__arm__ && __ARM_USER_PROTECT__
-        {
-                unsigned int ttbr0_val, ttbr1_val, ttbcr_val;
-                __asm__ volatile("mrc p15,0,%0,c2,c0,0\n" : "=r"(ttbr0_val));
-                __asm__ volatile("mrc p15,0,%0,c2,c0,1\n" : "=r"(ttbr1_val));
-                __asm__ volatile("mrc p15,0,%0,c2,c0,2\n" : "=r"(ttbcr_val));
+#if     __arm__ && __ARM_USER_PROTECT__
+	{
+		unsigned int ttbr0_val, ttbr1_val, ttbcr_val;
+		__asm__ volatile ("mrc p15,0,%0,c2,c0,0\n" : "=r"(ttbr0_val));
+		__asm__ volatile ("mrc p15,0,%0,c2,c0,1\n" : "=r"(ttbr1_val));
+		__asm__ volatile ("mrc p15,0,%0,c2,c0,2\n" : "=r"(ttbcr_val));
 		thread->machine.uptw_ttb = ttbr0_val;
 		thread->machine.kptw_ttb = ttbr1_val;
 		thread->machine.uptw_ttc = ttbcr_val;
-        }
+	}
 #endif
 	BootCpuData.cpu_processor->processor_data.kernel_timer = &thread->system_timer;
 	BootCpuData.cpu_processor->processor_data.thread_timer = &thread->system_timer;
@@ -340,23 +404,29 @@ arm_init(
 
 	rtclock_early_init();
 
+	lck_mod_init();
+
+	/*
+	 * Initialize the timer callout world
+	 */
+	timer_call_init();
+
 	kernel_early_bootstrap();
 
 	cpu_init();
 
-	EntropyData.index_ptr = EntropyData.buffer;
-
 	processor_bootstrap();
 	my_master_proc = master_processor;
 
-	(void)PE_parse_boot_argn("diag", &arm_diag, sizeof (arm_diag));
+	(void)PE_parse_boot_argn("diag", &arm_diag, sizeof(arm_diag));
 
-	if (PE_parse_boot_argn("maxmem", &maxmem, sizeof (maxmem)))
-		xmaxmem = (uint64_t) maxmem *(1024 * 1024);
-	else if (PE_get_default("hw.memsize", &memsize, sizeof (memsize)))
+	if (PE_parse_boot_argn("maxmem", &maxmem, sizeof(maxmem))) {
+		xmaxmem = (uint64_t) maxmem * (1024 * 1024);
+	} else if (PE_get_default("hw.memsize", &memsize, sizeof(memsize))) {
 		xmaxmem = (uint64_t) memsize;
-	else
+	} else {
 		xmaxmem = 0;
+	}
 
 	if (PE_parse_boot_argn("up_style_idle_exit", &up_style_idle_exit, sizeof(up_style_idle_exit))) {
 		up_style_idle_exit = 1;
@@ -365,15 +435,23 @@ arm_init(
 	int wdt_boot_arg = 0;
 	/* Disable if WDT is disabled or no_interrupt_mask_debug in boot-args */
 	if (PE_parse_boot_argn("no_interrupt_masked_debug", &interrupt_masked_debug,
-				sizeof(interrupt_masked_debug)) || (PE_parse_boot_argn("wdt", &wdt_boot_arg,
-				sizeof(wdt_boot_arg)) && (wdt_boot_arg == -1)))  {
+	    sizeof(interrupt_masked_debug)) || (PE_parse_boot_argn("wdt", &wdt_boot_arg,
+	    sizeof(wdt_boot_arg)) && (wdt_boot_arg == -1)) || kern_feature_override(KF_INTERRUPT_MASKED_DEBUG_OVRD)) {
 		interrupt_masked_debug = 0;
 	}
 
 	PE_parse_boot_argn("interrupt_masked_debug_timeout", &interrupt_masked_timeout, sizeof(interrupt_masked_timeout));
 #endif
 
+#if HAS_NEX_PG
+	PE_parse_boot_argn("nexpg", &nex_pg, sizeof(nex_pg));
+	set_nex_pg(); // Apply NEX powergating settings to boot CPU
+#endif
 
+#if HAS_BP_RET
+	PE_parse_boot_argn("bpret", &bp_ret, sizeof(bp_ret));
+	set_bp_ret(); // Apply branch predictor retention settings to boot CPU
+#endif
 
 	PE_parse_boot_argn("immediate_NMI", &force_immediate_debug_halt, sizeof(force_immediate_debug_halt));
 
@@ -385,8 +463,9 @@ arm_init(
 
 	uint32_t debugmode;
 	if (PE_parse_boot_argn("debug", &debugmode, sizeof(debugmode)) &&
-	   ((debugmode & MIN_LOW_GLO_MASK) == MIN_LOW_GLO_MASK))
+	    debugmode) {
 		patch_low_glo();
+	}
 
 	printf_init();
 	panic_init();
@@ -407,17 +486,17 @@ arm_init(
 
 	serialmode = 0;                                                      /* Assume normal keyboard and console */
 	if (PE_parse_boot_argn("serial", &serialmode, sizeof(serialmode))) { /* Do we want a serial
-	                                                                      * keyboard and/or
-	                                                                      * console? */
+		                                                              * keyboard and/or
+		                                                              * console? */
 		kprintf("Serial mode specified: %08X\n", serialmode);
 		int force_sync = serialmode & SERIALMODE_SYNCDRAIN;
 		if (force_sync || PE_parse_boot_argn("drain_uart_sync", &force_sync, sizeof(force_sync))) {
 			if (force_sync) {
 				serialmode |= SERIALMODE_SYNCDRAIN;
 				kprintf(
-				    "WARNING: Forcing uart driver to output synchronously."
-				    "printf()s/IOLogs will impact kernel performance.\n"
-				    "You are advised to avoid using 'drain_uart_sync' boot-arg.\n");
+					"WARNING: Forcing uart driver to output synchronously."
+					"printf()s/IOLogs will impact kernel performance.\n"
+					"You are advised to avoid using 'drain_uart_sync' boot-arg.\n");
 			}
 		}
 	}
@@ -442,13 +521,33 @@ arm_init(
 
 	cpu_machine_idle_init(TRUE);
 
-#if	(__ARM_ARCH__ == 7)
-	if (arm_diag & 0x8000)
+#if     (__ARM_ARCH__ == 7)
+	if (arm_diag & 0x8000) {
 		set_mmu_control((get_mmu_control()) ^ SCTLR_PREDIC);
+	}
 #endif
 
 	PE_init_platform(TRUE, &BootCpuData);
+
+#if __arm64__
+	if (PE_parse_boot_argn("wfe_events_sec", &events_per_sec, sizeof(events_per_sec))) {
+		if (events_per_sec <= 0) {
+			events_per_sec = 1;
+		} else if (events_per_sec > USEC_PER_SEC) {
+			events_per_sec = USEC_PER_SEC;
+		}
+	} else {
+#if defined(ARM_BOARD_WFE_TIMEOUT_NS)
+		events_per_sec = NSEC_PER_SEC / ARM_BOARD_WFE_TIMEOUT_NS;
+#else /* !defined(ARM_BOARD_WFE_TIMEOUT_NS) */
+		/* Default to 1usec (or as close as we can get) */
+		events_per_sec = USEC_PER_SEC;
+#endif /* !defined(ARM_BOARD_WFE_TIMEOUT_NS) */
+	}
+#endif
+
 	cpu_timebase_init(TRUE);
+	PE_init_cpu();
 	fiq_context_bootstrap(TRUE);
 
 
@@ -475,11 +574,12 @@ arm_init(
 
 void
 arm_init_cpu(
-	cpu_data_t	*cpu_data_ptr)
+	cpu_data_t      *cpu_data_ptr)
 {
 #if __ARM_PAN_AVAILABLE__
 	__builtin_arm_wsr("pan", 1);
 #endif
+
 
 	cpu_data_ptr->cpu_flags &= ~SleepState;
 #if     __ARM_SMP__ && defined(ARMA7)
@@ -499,13 +599,15 @@ arm_init_cpu(
 
 	cpu_init();
 
-#if	(__ARM_ARCH__ == 7)
-	if (arm_diag & 0x8000)
+#if     (__ARM_ARCH__ == 7)
+	if (arm_diag & 0x8000) {
 		set_mmu_control((get_mmu_control()) ^ SCTLR_PREDIC);
+	}
 #endif
-#ifdef	APPLETYPHOON
-	if ((cpus_defeatures & (0xF << 4*cpu_data_ptr->cpu_number)) != 0)
-		cpu_defeatures_set((cpus_defeatures >> 4*cpu_data_ptr->cpu_number) & 0xF);
+#ifdef  APPLETYPHOON
+	if ((cpus_defeatures & (0xF << 4 * cpu_data_ptr->cpu_number)) != 0) {
+		cpu_defeatures_set((cpus_defeatures >> 4 * cpu_data_ptr->cpu_number) & 0xF);
+	}
 #endif
 	/* Initialize the timebase before serial_init, as some serial
 	 * drivers use mach_absolute_time() to implement rate control
@@ -524,6 +626,7 @@ arm_init_cpu(
 		PE_init_platform(TRUE, NULL);
 		commpage_update_timebase();
 	}
+	PE_init_cpu();
 
 	fiq_context_init(TRUE);
 	cpu_data_ptr->rtcPop = EndOfAllTime;
@@ -544,6 +647,14 @@ arm_init_cpu(
 	mt_wake_per_core();
 #endif /* MONOTONIC && defined(__arm64__) */
 
+#if defined(KERNEL_INTEGRITY_CTRR)
+	if (cpu_data_ptr->cluster_master) {
+		lck_spin_lock(&ctrr_cpu_start_lck);
+		ctrr_cluster_locked[cpu_data_ptr->cpu_cluster_id] = 1;
+		thread_wakeup(&ctrr_cluster_locked[cpu_data_ptr->cpu_cluster_id]);
+		lck_spin_unlock(&ctrr_cpu_start_lck);
+	}
+#endif
 
 	slave_main(NULL);
 }
@@ -554,7 +665,7 @@ arm_init_cpu(
  */
 void __attribute__((noreturn))
 arm_init_idle_cpu(
-	cpu_data_t	*cpu_data_ptr)
+	cpu_data_t      *cpu_data_ptr)
 {
 #if __ARM_PAN_AVAILABLE__
 	__builtin_arm_wsr("pan", 1);
@@ -572,13 +683,15 @@ arm_init_idle_cpu(
 	__builtin_arm_wsr("DAIFClr", DAIFSC_ASYNCF);
 #endif
 
-#if	(__ARM_ARCH__ == 7)
-	if (arm_diag & 0x8000)
+#if     (__ARM_ARCH__ == 7)
+	if (arm_diag & 0x8000) {
 		set_mmu_control((get_mmu_control()) ^ SCTLR_PREDIC);
+	}
 #endif
-#ifdef	APPLETYPHOON
-	if ((cpus_defeatures & (0xF << 4*cpu_data_ptr->cpu_number)) != 0)
-		cpu_defeatures_set((cpus_defeatures >> 4*cpu_data_ptr->cpu_number) & 0xF);
+#ifdef  APPLETYPHOON
+	if ((cpus_defeatures & (0xF << 4 * cpu_data_ptr->cpu_number)) != 0) {
+		cpu_defeatures_set((cpus_defeatures >> 4 * cpu_data_ptr->cpu_number) & 0xF);
+	}
 #endif
 
 	fiq_context_init(FALSE);

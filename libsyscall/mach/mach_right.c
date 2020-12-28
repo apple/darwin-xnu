@@ -34,15 +34,15 @@
 #pragma mark Utilities
 #define _assert_mach(__op, __kr) \
 	do { \
-		if (kr != KERN_SUCCESS) { \
-			__builtin_trap(); \
-		} \
+	        if (kr != KERN_SUCCESS) { \
+	                __builtin_trap(); \
+	        } \
 	} while (0)
 
 #pragma mark API
 mach_right_recv_t
 mach_right_recv_construct(mach_right_flags_t flags,
-		mach_right_send_t *_Nullable sr, uintptr_t ctx)
+    mach_right_send_t *_Nullable sr, uintptr_t ctx)
 {
 	kern_return_t kr = KERN_FAILURE;
 	mach_port_t p = MACH_PORT_NULL;
@@ -72,7 +72,7 @@ mach_right_recv_construct(mach_right_flags_t flags,
 
 void
 mach_right_recv_destruct(mach_right_recv_t r, mach_right_send_t *s,
-		uintptr_t ctx)
+    uintptr_t ctx)
 {
 	kern_return_t kr = KERN_FAILURE;
 	mach_port_delta_t srd = 0;
@@ -80,7 +80,7 @@ mach_right_recv_destruct(mach_right_recv_t r, mach_right_send_t *s,
 	if (s) {
 		if (r.mrr_name != s->mrs_name) {
 			_os_set_crash_log_cause_and_message(s->mrs_name,
-					"api misuse: bad send right");
+			    "api misuse: bad send right");
 			__builtin_trap();
 		}
 
@@ -97,7 +97,7 @@ mach_right_send_create(mach_right_recv_t r)
 	kern_return_t kr = KERN_FAILURE;
 
 	kr = mach_port_insert_right(mach_task_self(), r.mrr_name, r.mrr_name,
-			MACH_MSG_TYPE_MAKE_SEND);
+	    MACH_MSG_TYPE_MAKE_SEND);
 	_mach_assert("create send right", kr);
 
 	return mach_right_send(r.mrr_name);
@@ -110,7 +110,7 @@ mach_right_send_retain(mach_right_send_t s)
 	mach_right_send_t rs = MACH_RIGHT_SEND_NULL;
 
 	kr = mach_port_mod_refs(mach_task_self(), s.mrs_name,
-			MACH_PORT_RIGHT_SEND, 1);
+	    MACH_PORT_RIGHT_SEND, 1);
 	switch (kr) {
 	case 0:
 		rs = s;
@@ -119,9 +119,9 @@ mach_right_send_retain(mach_right_send_t s)
 		rs.mrs_name = MACH_PORT_DEAD;
 		break;
 	case KERN_INVALID_NAME:
-		// mach_port_mod_refs() will return success when given either
-		// MACH_PORT_DEAD or MACH_PORT_NULL with send or send-once right
-		// operations, so this is always fatal.
+	// mach_port_mod_refs() will return success when given either
+	// MACH_PORT_DEAD or MACH_PORT_NULL with send or send-once right
+	// operations, so this is always fatal.
 	default:
 		_mach_assert("retain send right", kr);
 	}
@@ -135,13 +135,13 @@ mach_right_send_release(mach_right_send_t s)
 	kern_return_t kr = KERN_FAILURE;
 
 	kr = mach_port_mod_refs(mach_task_self(), s.mrs_name,
-			MACH_PORT_RIGHT_SEND, -1);
+	    MACH_PORT_RIGHT_SEND, -1);
 	switch (kr) {
 	case 0:
 		break;
 	case KERN_INVALID_RIGHT:
 		kr = mach_port_mod_refs(mach_task_self(), s.mrs_name,
-				MACH_PORT_RIGHT_DEAD_NAME, -1);
+		    MACH_PORT_RIGHT_DEAD_NAME, -1);
 		_mach_assert("release dead name", kr);
 		break;
 	default:
@@ -155,7 +155,7 @@ mach_right_send_once_create(mach_right_recv_t r)
 	mach_msg_type_name_t right = 0;
 	mach_port_t so = MACH_PORT_NULL;
 	kern_return_t kr = mach_port_extract_right(mach_task_self(), r.mrr_name,
-			MACH_MSG_TYPE_MAKE_SEND_ONCE, &so, &right);
+	    MACH_MSG_TYPE_MAKE_SEND_ONCE, &so, &right);
 	_mach_assert("create send-once right", kr);
 
 	return mach_right_send_once(so);
@@ -167,13 +167,13 @@ mach_right_send_once_consume(mach_right_send_once_t so)
 	kern_return_t kr = KERN_FAILURE;
 
 	kr = mach_port_mod_refs(mach_task_self(), so.mrso_name,
-			MACH_PORT_RIGHT_SEND_ONCE, -1);
+	    MACH_PORT_RIGHT_SEND_ONCE, -1);
 	switch (kr) {
 	case 0:
 		break;
 	case KERN_INVALID_RIGHT:
 		kr = mach_port_mod_refs(mach_task_self(), so.mrso_name,
-				MACH_PORT_RIGHT_DEAD_NAME, -1);
+		    MACH_PORT_RIGHT_DEAD_NAME, -1);
 		_mach_assert("release dead name", kr);
 		break;
 	default:

@@ -2,7 +2,7 @@
  * Copyright (c) 2010 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
@@ -63,7 +63,7 @@
  */
 
 /* Minimum length of any MLD protocol message. */
-#define MLD_MINLEN	sizeof(struct icmp6_hdr)
+#define MLD_MINLEN      sizeof(struct icmp6_hdr)
 
 /*
  * MLD v2 query format.
@@ -71,69 +71,69 @@
  * (MLDv1 query and host report format).
  */
 struct mldv2_query {
-	struct icmp6_hdr	mld_icmp6_hdr;	/* ICMPv6 header */
-	struct in6_addr		mld_addr;	/* address being queried */
-	uint8_t		mld_misc;	/* reserved/suppress/robustness   */
-	uint8_t		mld_qqi;	/* querier's query interval       */
-	uint16_t	mld_numsrc;	/* number of sources              */
+	struct icmp6_hdr        mld_icmp6_hdr;  /* ICMPv6 header */
+	struct in6_addr         mld_addr;       /* address being queried */
+	uint8_t         mld_misc;       /* reserved/suppress/robustness   */
+	uint8_t         mld_qqi;        /* querier's query interval       */
+	uint16_t        mld_numsrc;     /* number of sources              */
 	/* followed by 1..numsrc source addresses */
 } __attribute__((__packed__));
-#define MLD_V2_QUERY_MINLEN		sizeof(struct mldv2_query)
-#define MLD_MRC_EXP(x)			((ntohs((x)) >> 12) & 0x0007)
-#define MLD_MRC_MANT(x)			(ntohs((x)) & 0x0fff)
-#define MLD_QQIC_EXP(x)			(((x) >> 4) & 0x07)
-#define MLD_QQIC_MANT(x)		((x) & 0x0f)
-#define MLD_QRESV(x)			(((x) >> 4) & 0x0f)
-#define MLD_SFLAG(x)			(((x) >> 3) & 0x01)
-#define MLD_QRV(x)			((x) & 0x07)
+#define MLD_V2_QUERY_MINLEN             sizeof(struct mldv2_query)
+#define MLD_MRC_EXP(x)                  ((ntohs((x)) >> 12) & 0x0007)
+#define MLD_MRC_MANT(x)                 (ntohs((x)) & 0x0fff)
+#define MLD_QQIC_EXP(x)                 (((x) >> 4) & 0x07)
+#define MLD_QQIC_MANT(x)                ((x) & 0x0f)
+#define MLD_QRESV(x)                    (((x) >> 4) & 0x0f)
+#define MLD_SFLAG(x)                    (((x) >> 3) & 0x01)
+#define MLD_QRV(x)                      ((x) & 0x07)
 
 /*
  * MLDv2 host membership report header.
  * mld_type: MLDV2_LISTENER_REPORT
  */
 struct mldv2_report {
-	struct icmp6_hdr	mld_icmp6_hdr;
+	struct icmp6_hdr        mld_icmp6_hdr;
 	/* followed by 1..numgrps records */
 } __attribute__((__packed__));
 /* overlaid on struct icmp6_hdr. */
-#define mld_numrecs	mld_icmp6_hdr.icmp6_data16[1]
+#define mld_numrecs     mld_icmp6_hdr.icmp6_data16[1]
 
 struct mldv2_record {
-	uint8_t			mr_type;	/* record type */
-	uint8_t			mr_datalen;	/* length of auxiliary data */
-	uint16_t		mr_numsrc;	/* number of sources */
-	struct in6_addr		mr_addr;	/* address being reported */
+	uint8_t                 mr_type;        /* record type */
+	uint8_t                 mr_datalen;     /* length of auxiliary data */
+	uint16_t                mr_numsrc;      /* number of sources */
+	struct in6_addr         mr_addr;        /* address being reported */
 	/* followed by 1..numsrc source addresses */
 } __attribute__((__packed__));
-#define MLD_V2_REPORT_MAXRECS		65535
+#define MLD_V2_REPORT_MAXRECS           65535
 
 /*
  * MLDv2 report modes.
  */
-#define MLD_DO_NOTHING			0	/* don't send a record */
-#define MLD_MODE_IS_INCLUDE		1	/* MODE_IN */
-#define MLD_MODE_IS_EXCLUDE		2	/* MODE_EX */
-#define MLD_CHANGE_TO_INCLUDE_MODE	3	/* TO_IN */
-#define MLD_CHANGE_TO_EXCLUDE_MODE	4	/* TO_EX */
-#define MLD_ALLOW_NEW_SOURCES		5	/* ALLOW_NEW */
-#define MLD_BLOCK_OLD_SOURCES		6	/* BLOCK_OLD */
+#define MLD_DO_NOTHING                  0       /* don't send a record */
+#define MLD_MODE_IS_INCLUDE             1       /* MODE_IN */
+#define MLD_MODE_IS_EXCLUDE             2       /* MODE_EX */
+#define MLD_CHANGE_TO_INCLUDE_MODE      3       /* TO_IN */
+#define MLD_CHANGE_TO_EXCLUDE_MODE      4       /* TO_EX */
+#define MLD_ALLOW_NEW_SOURCES           5       /* ALLOW_NEW */
+#define MLD_BLOCK_OLD_SOURCES           6       /* BLOCK_OLD */
 
 /*
  * MLDv2 query types.
  */
-#define MLD_V2_GENERAL_QUERY		1
-#define MLD_V2_GROUP_QUERY		2
-#define MLD_V2_GROUP_SOURCE_QUERY	3
+#define MLD_V2_GENERAL_QUERY            1
+#define MLD_V2_GROUP_QUERY              2
+#define MLD_V2_GROUP_SOURCE_QUERY       3
 
 /*
  * Maximum report interval for MLDv1 host membership reports.
  */
-#define MLD_V1_MAX_RI			10
+#define MLD_V1_MAX_RI                   10
 
 /*
  * MLD_TIMER_SCALE denotes that the MLD code field specifies
  * time in milliseconds.
  */
-#define MLD_TIMER_SCALE			1000
+#define MLD_TIMER_SCALE                 1000
 
 #endif /* _NETINET6_MLD6_H_ */

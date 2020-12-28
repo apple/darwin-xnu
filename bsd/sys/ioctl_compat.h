@@ -2,7 +2,7 @@
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -67,138 +67,138 @@
  */
 
 #ifndef _SYS_IOCTL_COMPAT_H_
-#define	_SYS_IOCTL_COMPAT_H_
+#define _SYS_IOCTL_COMPAT_H_
 
 #include <sys/ttychars.h>
 #include <sys/ttydev.h>
 
 struct tchars {
-	char	t_intrc;	/* interrupt */
-	char	t_quitc;	/* quit */
-	char	t_startc;	/* start output */
-	char	t_stopc;	/* stop output */
-	char	t_eofc;		/* end-of-file */
-	char	t_brkc;		/* input delimiter (like nl) */
+	char    t_intrc;        /* interrupt */
+	char    t_quitc;        /* quit */
+	char    t_startc;       /* start output */
+	char    t_stopc;        /* stop output */
+	char    t_eofc;         /* end-of-file */
+	char    t_brkc;         /* input delimiter (like nl) */
 };
 
 struct ltchars {
-	char	t_suspc;	/* stop process signal */
-	char	t_dsuspc;	/* delayed stop process signal */
-	char	t_rprntc;	/* reprint line */
-	char	t_flushc;	/* flush output (toggles) */
-	char	t_werasc;	/* word erase */
-	char	t_lnextc;	/* literal next character */
+	char    t_suspc;        /* stop process signal */
+	char    t_dsuspc;       /* delayed stop process signal */
+	char    t_rprntc;       /* reprint line */
+	char    t_flushc;       /* flush output (toggles) */
+	char    t_werasc;       /* word erase */
+	char    t_lnextc;       /* literal next character */
 };
 
 /*
  * Structure for TIOCGETP and TIOCSETP ioctls.
  */
 #ifndef _SGTTYB_
-#define	_SGTTYB_
+#define _SGTTYB_
 struct sgttyb {
-	char	sg_ispeed;		/* input speed */
-	char	sg_ospeed;		/* output speed */
-	char	sg_erase;		/* erase character */
-	char	sg_kill;		/* kill character */
-	short	sg_flags;		/* mode flags */
+	char    sg_ispeed;              /* input speed */
+	char    sg_ospeed;              /* output speed */
+	char    sg_erase;               /* erase character */
+	char    sg_kill;                /* kill character */
+	short   sg_flags;               /* mode flags */
 };
 #endif
 
 #ifdef USE_OLD_TTY
 # undef  TIOCGETD
-# define TIOCGETD	_IOR('t', 0, int)	/* get line discipline */
+# define TIOCGETD       _IOR('t', 0, int)       /* get line discipline */
 # undef  TIOCSETD
-# define TIOCSETD	_IOW('t', 1, int)	/* set line discipline */
+# define TIOCSETD       _IOW('t', 1, int)       /* set line discipline */
 #else
-# define OTIOCGETD	_IOR('t', 0, int)	/* get line discipline */
-# define OTIOCSETD	_IOW('t', 1, int)	/* set line discipline */
+# define OTIOCGETD      _IOR('t', 0, int)       /* get line discipline */
+# define OTIOCSETD      _IOW('t', 1, int)       /* set line discipline */
 #endif
-#define	TIOCHPCL	_IO('t', 2)		/* hang up on last close */
-#define	TIOCGETP	_IOR('t', 8,struct sgttyb)/* get parameters -- gtty */
-#define	TIOCSETP	_IOW('t', 9,struct sgttyb)/* set parameters -- stty */
-#define	TIOCSETN	_IOW('t',10,struct sgttyb)/* as above, but no flushtty*/
-#define	TIOCSETC	_IOW('t',17,struct tchars)/* set special characters */
-#define	TIOCGETC	_IOR('t',18,struct tchars)/* get special characters */
-#define		TANDEM		0x00000001	/* send stopc on out q full */
-#define		CBREAK		0x00000002	/* half-cooked mode */
-#define		LCASE		0x00000004	/* simulate lower case */
-#define		ECHO		0x00000008	/* echo input */
-#define		CRMOD		0x00000010	/* map \r to \r\n on output */
-#define		RAW		0x00000020	/* no i/o processing */
-#define		ODDP		0x00000040	/* get/send odd parity */
-#define		EVENP		0x00000080	/* get/send even parity */
-#define		ANYP		0x000000c0	/* get any parity/send none */
-#define		NLDELAY		0x00000300	/* \n delay */
-#define		TBDELAY		0x00000c00	/* horizontal tab delay */
-#define		XTABS		0x00000c00	/* expand tabs on output */
-#define		CRDELAY		0x00003000	/* \r delay */
-#define		VTDELAY		0x00004000	/* vertical tab delay */
-#define		BSDELAY		0x00008000	/* \b delay */
-#ifndef	_SYS_TERMIOS_H_
+#define TIOCHPCL        _IO('t', 2)             /* hang up on last close */
+#define TIOCGETP        _IOR('t', 8,struct sgttyb)/* get parameters -- gtty */
+#define TIOCSETP        _IOW('t', 9,struct sgttyb)/* set parameters -- stty */
+#define TIOCSETN        _IOW('t',10,struct sgttyb)/* as above, but no flushtty*/
+#define TIOCSETC        _IOW('t',17,struct tchars)/* set special characters */
+#define TIOCGETC        _IOR('t',18,struct tchars)/* get special characters */
+#define         TANDEM          0x00000001      /* send stopc on out q full */
+#define         CBREAK          0x00000002      /* half-cooked mode */
+#define         LCASE           0x00000004      /* simulate lower case */
+#define         ECHO            0x00000008      /* echo input */
+#define         CRMOD           0x00000010      /* map \r to \r\n on output */
+#define         RAW             0x00000020      /* no i/o processing */
+#define         ODDP            0x00000040      /* get/send odd parity */
+#define         EVENP           0x00000080      /* get/send even parity */
+#define         ANYP            0x000000c0      /* get any parity/send none */
+#define         NLDELAY         0x00000300      /* \n delay */
+#define         TBDELAY         0x00000c00      /* horizontal tab delay */
+#define         XTABS           0x00000c00      /* expand tabs on output */
+#define         CRDELAY         0x00003000      /* \r delay */
+#define         VTDELAY         0x00004000      /* vertical tab delay */
+#define         BSDELAY         0x00008000      /* \b delay */
+#ifndef _SYS_TERMIOS_H_
 /*
  * These manifest constants have the same names as those in <sys/termios.h>,
  * so you are not permitted to have both definitions in scope simultaneously
  * in the same compilation unit.
  */
-#define			NL0	0x00000000
-#define			NL1	0x00000100	/* tty 37 */
-#define			NL2	0x00000200	/* vt05 */
-#define			NL3	0x00000300
-#define			TAB0	0x00000000
-#define			TAB1	0x00000400	/* tty 37 */
-#define			TAB2	0x00000800
-#define			CR0	0x00000000
-#define			CR1	0x00001000	/* tn 300 */
-#define			CR2	0x00002000	/* tty 37 */
-#define			CR3	0x00003000	/* concept 100 */
-#define			FF0	0x00000000
-#define			FF1	0x00004000	/* tty 37 */
-#define			BS0	0x00000000
-#define			BS1	0x00008000
-#endif	/* !_SYS_TERMIOS_H_ */
-#define		ALLDELAY	(NLDELAY|TBDELAY|CRDELAY|VTDELAY|BSDELAY)
-#define		CRTBS		0x00010000	/* do backspacing for crt */
-#define		PRTERA		0x00020000	/* \ ... / erase */
-#define		CRTERA		0x00040000	/* " \b " to wipe out char */
-#define		TILDE		0x00080000	/* hazeltine tilde kludge */
-#define		MDMBUF		0x00100000	/*start/stop output on carrier*/
-#define		LITOUT		0x00200000	/* literal output */
-#define		TOSTOP		0x00400000	/*SIGSTOP on background output*/
-#define		FLUSHO		0x00800000	/* flush output to terminal */
-#define		NOHANG		0x01000000	/* (no-op) was no SIGHUP on carrier drop */
-#define		L001000		0x02000000
-#define		CRTKIL		0x04000000	/* kill line with " \b " */
-#define		PASS8		0x08000000
-#define		CTLECH		0x10000000	/* echo control chars as ^X */
-#define		PENDIN		0x20000000	/* tp->t_rawq needs reread */
-#define		DECCTQ		0x40000000	/* only ^Q starts after ^S */
-#define		NOFLSH		0x80000000	/* no output flush on signal */
-#define	TIOCLBIS	_IOW('t', 127, int)	/* bis local mode bits */
-#define	TIOCLBIC	_IOW('t', 126, int)	/* bic local mode bits */
-#define	TIOCLSET	_IOW('t', 125, int)	/* set entire local mode word */
-#define	TIOCLGET	_IOR('t', 124, int)	/* get local modes */
-#define		LCRTBS		(CRTBS>>16)
-#define		LPRTERA		(PRTERA>>16)
-#define		LCRTERA		(CRTERA>>16)
-#define		LTILDE		(TILDE>>16)
-#define		LMDMBUF		(MDMBUF>>16)
-#define		LLITOUT		(LITOUT>>16)
-#define		LTOSTOP		(TOSTOP>>16)
-#define		LFLUSHO		(FLUSHO>>16)
-#define		LNOHANG		(NOHANG>>16)
-#define		LCRTKIL		(CRTKIL>>16)
-#define		LPASS8		(PASS8>>16)
-#define		LCTLECH		(CTLECH>>16)
-#define		LPENDIN		(PENDIN>>16)
-#define		LDECCTQ		(DECCTQ>>16)
-#define		LNOFLSH		(NOFLSH>>16)
-#define	TIOCSLTC	_IOW('t',117,struct ltchars)/* set local special chars*/
-#define	TIOCGLTC	_IOR('t',116,struct ltchars)/* get local special chars*/
-#define OTIOCCONS	_IO('t', 98)	/* for hp300 -- sans int arg */
-#define	OTTYDISC	0
-#define	NETLDISC	1
-#define	NTTYDISC	2
+#define                 NL0     0x00000000
+#define                 NL1     0x00000100      /* tty 37 */
+#define                 NL2     0x00000200      /* vt05 */
+#define                 NL3     0x00000300
+#define                 TAB0    0x00000000
+#define                 TAB1    0x00000400      /* tty 37 */
+#define                 TAB2    0x00000800
+#define                 CR0     0x00000000
+#define                 CR1     0x00001000      /* tn 300 */
+#define                 CR2     0x00002000      /* tty 37 */
+#define                 CR3     0x00003000      /* concept 100 */
+#define                 FF0     0x00000000
+#define                 FF1     0x00004000      /* tty 37 */
+#define                 BS0     0x00000000
+#define                 BS1     0x00008000
+#endif  /* !_SYS_TERMIOS_H_ */
+#define         ALLDELAY        (NLDELAY|TBDELAY|CRDELAY|VTDELAY|BSDELAY)
+#define         CRTBS           0x00010000      /* do backspacing for crt */
+#define         PRTERA          0x00020000      /* \ ... / erase */
+#define         CRTERA          0x00040000      /* " \b " to wipe out char */
+#define         TILDE           0x00080000      /* hazeltine tilde kludge */
+#define         MDMBUF          0x00100000      /*start/stop output on carrier*/
+#define         LITOUT          0x00200000      /* literal output */
+#define         TOSTOP          0x00400000      /*SIGSTOP on background output*/
+#define         FLUSHO          0x00800000      /* flush output to terminal */
+#define         NOHANG          0x01000000      /* (no-op) was no SIGHUP on carrier drop */
+#define         L001000         0x02000000
+#define         CRTKIL          0x04000000      /* kill line with " \b " */
+#define         PASS8           0x08000000
+#define         CTLECH          0x10000000      /* echo control chars as ^X */
+#define         PENDIN          0x20000000      /* tp->t_rawq needs reread */
+#define         DECCTQ          0x40000000      /* only ^Q starts after ^S */
+#define         NOFLSH          0x80000000      /* no output flush on signal */
+#define TIOCLBIS        _IOW('t', 127, int)     /* bis local mode bits */
+#define TIOCLBIC        _IOW('t', 126, int)     /* bic local mode bits */
+#define TIOCLSET        _IOW('t', 125, int)     /* set entire local mode word */
+#define TIOCLGET        _IOR('t', 124, int)     /* get local modes */
+#define         LCRTBS          (CRTBS>>16)
+#define         LPRTERA         (PRTERA>>16)
+#define         LCRTERA         (CRTERA>>16)
+#define         LTILDE          (TILDE>>16)
+#define         LMDMBUF         (MDMBUF>>16)
+#define         LLITOUT         (LITOUT>>16)
+#define         LTOSTOP         (TOSTOP>>16)
+#define         LFLUSHO         (FLUSHO>>16)
+#define         LNOHANG         (NOHANG>>16)
+#define         LCRTKIL         (CRTKIL>>16)
+#define         LPASS8          (PASS8>>16)
+#define         LCTLECH         (CTLECH>>16)
+#define         LPENDIN         (PENDIN>>16)
+#define         LDECCTQ         (DECCTQ>>16)
+#define         LNOFLSH         (NOFLSH>>16)
+#define TIOCSLTC        _IOW('t',117,struct ltchars)/* set local special chars*/
+#define TIOCGLTC        _IOR('t',116,struct ltchars)/* get local special chars*/
+#define OTIOCCONS       _IO('t', 98)    /* for hp300 -- sans int arg */
+#define OTTYDISC        0
+#define NETLDISC        1
+#define NTTYDISC        2
 
-#define TIOCGSID	_IOR('t', 99, int)	/* For svr4 -- get session id */
+#define TIOCGSID        _IOR('t', 99, int)      /* For svr4 -- get session id */
 
 #endif /* !_SYS_IOCTL_COMPAT_H_ */

@@ -2,7 +2,7 @@
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* IOArray.h created by rsulack on Thu 11-Sep-1997 */
@@ -48,91 +48,98 @@ OSMetaClassDefineReservedUnused(OSCollection, 5);
 OSMetaClassDefineReservedUnused(OSCollection, 6);
 OSMetaClassDefineReservedUnused(OSCollection, 7);
 
-bool OSCollection::init()
+bool
+OSCollection::init()
 {
-    if (!super::init())
-        return false;
-
-    updateStamp = 0;
-
-    return true;
-}
-
-void OSCollection::haveUpdated()
-{
-    if (fOptions & kImmutable)
-    {
-	if (!(gIOKitDebug & kOSRegistryModsMode))
-	{
-	    panic("Trying to change a collection in the registry");
+	if (!super::init()) {
+		return false;
 	}
-	else
-	{
-	    OSReportWithBacktrace("Trying to change a collection in the registry");
+
+	updateStamp = 0;
+
+	return true;
+}
+
+void
+OSCollection::haveUpdated()
+{
+	if (fOptions & kImmutable) {
+		if (!(gIOKitDebug & kOSRegistryModsMode)) {
+			panic("Trying to change a collection in the registry");
+		} else {
+			OSReportWithBacktrace("Trying to change a collection in the registry");
+		}
 	}
-    }
-    updateStamp++;
+	updateStamp++;
 }
 
-unsigned OSCollection::setOptions(unsigned options, unsigned mask, void *)
+unsigned
+OSCollection::setOptions(unsigned options, unsigned mask, void *)
 {
-    unsigned old = fOptions;
+	unsigned old = fOptions;
 
-    if (mask)
-	fOptions = (old & ~mask) | (options & mask);
+	if (mask) {
+		fOptions = (old & ~mask) | (options & mask);
+	}
 
-    return old;
+	return old;
 }
 
-OSCollection *  OSCollection::copyCollection(OSDictionary *cycleDict)
+OSCollection *
+OSCollection::copyCollection(OSDictionary *cycleDict)
 {
-    if (cycleDict) {
-	OSObject *obj = cycleDict->getObject((const OSSymbol *) this);
-	if (obj)
-	    obj->retain();
+	if (cycleDict) {
+		OSObject *obj = cycleDict->getObject((const OSSymbol *) this);
+		if (obj) {
+			obj->retain();
+		}
 
-	return reinterpret_cast<OSCollection *>(obj);
-    }
-    else {
-	// If we are here it means that there is a collection subclass that
-	// hasn't overridden the copyCollection method.  In which case just
-	// return a reference to ourselves.  
-	// Hopefully this collection will not be inserted into the registry
-	retain();
-	return this;
-    }
+		return reinterpret_cast<OSCollection *>(obj);
+	} else {
+		// If we are here it means that there is a collection subclass that
+		// hasn't overridden the copyCollection method.  In which case just
+		// return a reference to ourselves.
+		// Hopefully this collection will not be inserted into the registry
+		retain();
+		return this;
+	}
 }
 
-bool OSCollection::iterateObjects(void * refcon, bool (*callback)(void * refcon, OSObject * object))
+bool
+OSCollection::iterateObjects(void * refcon, bool (*callback)(void * refcon, OSObject * object))
 {
-    uint64_t     iteratorStore[2];
-    unsigned int initialUpdateStamp;
-    bool         done;
+	uint64_t     iteratorStore[2];
+	unsigned int initialUpdateStamp;
+	bool         done;
 
-    assert(iteratorSize() < sizeof(iteratorStore));
+	assert(iteratorSize() < sizeof(iteratorStore));
 
-    if (!initIterator(&iteratorStore[0])) return (false);
+	if (!initIterator(&iteratorStore[0])) {
+		return false;
+	}
 
-    initialUpdateStamp = updateStamp;
-    done = false;
-    do
-    {
-        OSObject * object;
-        if (!getNextObjectForIterator(&iteratorStore[0], &object)) break;
-        done = callback(refcon, object);
-    }
-    while (!done && (initialUpdateStamp == updateStamp));
+	initialUpdateStamp = updateStamp;
+	done = false;
+	do{
+		OSObject * object;
+		if (!getNextObjectForIterator(&iteratorStore[0], &object)) {
+			break;
+		}
+		done = callback(refcon, object);
+	}while (!done && (initialUpdateStamp == updateStamp));
 
-    return initialUpdateStamp == updateStamp;
+	return initialUpdateStamp == updateStamp;
 }
 
-static bool OSCollectionIterateObjectsBlock(void * refcon, OSObject * object)
+static bool
+OSCollectionIterateObjectsBlock(void * refcon, OSObject * object)
 {
-    bool (^block)(OSObject * object) = (typeof(block)) refcon;
-    return (block(object));
+	bool (^block)(OSObject * object) = (typeof(block))refcon;
+	return block(object);
 }
 
-bool OSCollection::iterateObjects(bool (^block)(OSObject * object))
+bool
+OSCollection::iterateObjects(bool (^block)(OSObject * object))
 {
-    return (iterateObjects((void *) block, OSCollectionIterateObjectsBlock));
+	return iterateObjects((void *) block, OSCollectionIterateObjectsBlock);
 }

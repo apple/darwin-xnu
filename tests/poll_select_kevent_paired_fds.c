@@ -30,9 +30,9 @@
 #include <System/sys/event.h> /* kevent_qos */
 
 T_GLOBAL_META(
-		T_META_NAMESPACE("xnu.kevent"),
-		T_META_CHECK_LEAKS(false),
-		T_META_LTEPHASE(LTE_POSTINIT));
+	T_META_NAMESPACE("xnu.kevent"),
+	T_META_CHECK_LEAKS(false),
+	T_META_LTEPHASE(LTE_POSTINIT));
 
 /*
  * Test to validate that monitoring a PTY device, FIFO, pipe, or socket pair in
@@ -118,7 +118,7 @@ static struct {
 static bool handle_reading(enum fd_pair fd_pair, int fd);
 static bool handle_writing(enum fd_pair fd_pair, int fd);
 static void drive_kq(bool reading, union mode mode, enum fd_pair fd_pair,
-		int fd);
+    int fd);
 
 #pragma mark writing
 
@@ -136,7 +136,7 @@ wake_writer(void)
 		char tmp = 'a';
 		close(shared.wr_wait.out_fd);
 		T_QUIET; T_ASSERT_POSIX_SUCCESS(write(
-				shared.wr_wait.in_fd, &tmp, 1), NULL);
+			    shared.wr_wait.in_fd, &tmp, 1), NULL);
 		break;
 	}
 	}
@@ -161,7 +161,7 @@ writer_wait(void)
 		char tmp;
 		close(shared.wr_wait.in_fd);
 		T_QUIET; T_ASSERT_POSIX_SUCCESS(read(
-				shared.wr_wait.out_fd, &tmp, 1), NULL);
+			    shared.wr_wait.out_fd, &tmp, 1), NULL);
 		break;
 	}
 	}
@@ -174,10 +174,10 @@ handle_writing(enum fd_pair __unused fd_pair, int fd)
 {
 	static unsigned int cur_char = 0;
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(write(fd,
-			&(EXPECTED_STRING[cur_char]), 1), NULL);
+	    &(EXPECTED_STRING[cur_char]), 1), NULL);
 	cur_char++;
 
-	return (cur_char < EXPECTED_LEN);
+	return cur_char < EXPECTED_LEN;
 }
 
 #define EXPECTED_QOS QOS_CLASS_USER_INITIATED
@@ -186,17 +186,17 @@ static void
 reenable_workq(int fd, int16_t filt)
 {
 	struct kevent_qos_s events[] = {{
-		.ident = (uint64_t)fd,
-		.filter = filt,
-		.flags = EV_ENABLE | EV_UDATA_SPECIFIC | EV_DISPATCH,
-		.qos = (int32_t)_pthread_qos_class_encode(EXPECTED_QOS,
-				0, 0),
-		.fflags = NOTE_LOWAT,
-		.data = 1
-	}};
+						.ident = (uint64_t)fd,
+						.filter = filt,
+						.flags = EV_ENABLE | EV_UDATA_SPECIFIC | EV_DISPATCH,
+						.qos = (int32_t)_pthread_qos_class_encode(EXPECTED_QOS,
+	    0, 0),
+						.fflags = NOTE_LOWAT,
+						.data = 1
+					}};
 
 	int kev = kevent_qos(-1, events, 1, events, 1, NULL, NULL,
-			KEVENT_FLAG_WORKQ | KEVENT_FLAG_ERROR_EVENTS);
+	    KEVENT_FLAG_WORKQ | KEVENT_FLAG_ERROR_EVENTS);
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(kev, "reenable workq in kevent_qos");
 }
 
@@ -205,7 +205,7 @@ workqueue_write_fn(void ** __unused buf, int * __unused count)
 {
 	// T_MAYFAIL;
 	// T_QUIET; T_ASSERT_EFFECTIVE_QOS_EQ(EXPECTED_QOS,
-			// "writer thread should be woken up at correct QoS");
+	// "writer thread should be woken up at correct QoS");
 	if (!handle_writing(shared.fd_pair, shared.wr_fd)) {
 		/* finished handling the fd, tear down the source */
 		T_LOG("signal shared.wr_finished");
@@ -230,23 +230,23 @@ drive_kq(bool reading, union mode mode, enum fd_pair fd_pair, int fd)
 
 	struct kevent events;
 	EV_SET(&events, fd, reading ? EVFILT_READ : EVFILT_WRITE, EV_ADD,
-			NOTE_LOWAT, 1, NULL);
+	    NOTE_LOWAT, 1, NULL);
 	struct kevent64_s events64;
 	EV_SET64(&events64, fd, reading ? EVFILT_READ : EVFILT_WRITE, EV_ADD,
-			NOTE_LOWAT, 1, 0, 0, 0);
+	    NOTE_LOWAT, 1, 0, 0, 0);
 	struct kevent_qos_s events_qos[] = {{
-		.ident = (uint64_t)fd,
-		.filter = reading ? EVFILT_READ : EVFILT_WRITE,
-		.flags = EV_ADD,
-		.fflags = NOTE_LOWAT,
-		.data = 1
-	}, {
-		.ident = 0,
-		.filter = EVFILT_TIMER,
-		.flags = EV_ADD,
-		.fflags = NOTE_SECONDS,
-		.data = READ_TIMEOUT_SECS
-	}};
+						    .ident = (uint64_t)fd,
+						    .filter = reading ? EVFILT_READ : EVFILT_WRITE,
+						    .flags = EV_ADD,
+						    .fflags = NOTE_LOWAT,
+						    .data = 1
+					    }, {
+						    .ident = 0,
+						    .filter = EVFILT_TIMER,
+						    .flags = EV_ADD,
+						    .fflags = NOTE_SECONDS,
+						    .data = READ_TIMEOUT_SECS
+					    }};
 
 	/* determine which variant of kevent to use */
 	enum read_mode which_kevent;
@@ -355,18 +355,18 @@ write_to_fd(void * __unused ctx)
 				T_LOG("write from child was interrupted");
 			}
 			bytes_wr = write(shared.wr_fd, EXPECTED_STRING,
-					EXPECTED_LEN);
+			    EXPECTED_LEN);
 		} while (bytes_wr == -1 && errno == EINTR);
 		T_QUIET; T_ASSERT_POSIX_SUCCESS(bytes_wr, "write");
 		T_QUIET; T_ASSERT_EQ(bytes_wr, (ssize_t)EXPECTED_LEN,
-				"wrote enough bytes");
+		    "wrote enough bytes");
 		break;
 
 	case INCREMENTAL_WRITE:
-		for (unsigned int i = 0; i < EXPECTED_LEN ; i++) {
+		for (unsigned int i = 0; i < EXPECTED_LEN; i++) {
 			T_QUIET;
 			T_ASSERT_POSIX_SUCCESS(write(shared.wr_fd,
-					&(EXPECTED_STRING[i]), 1), NULL);
+			    &(EXPECTED_STRING[i]), 1), NULL);
 			usleep(INCREMENTAL_WRITE_SLEEP_USECS);
 		}
 		break;
@@ -385,7 +385,7 @@ write_to_fd(void * __unused ctx)
 		int changes = 1;
 
 		T_ASSERT_MACH_SUCCESS(semaphore_create(mach_task_self(), &shared.wr_finished, SYNC_POLICY_FIFO, 0),
-		                      "semaphore_create shared.wr_finished");
+		    "semaphore_create shared.wr_finished");
 
 		T_QUIET;
 		T_ASSERT_NE_UINT(shared.wr_finished, (unsigned)MACH_PORT_NULL, "wr_finished semaphore_create");
@@ -394,19 +394,19 @@ write_to_fd(void * __unused ctx)
 		T_ASSERT_POSIX_ZERO(_pthread_workqueue_init_with_kevent(workqueue_fn, workqueue_write_fn, 0, 0), NULL);
 
 		struct kevent_qos_s events[] = {{
-			.ident = (uint64_t)shared.wr_fd,
-			.filter = EVFILT_WRITE,
-			.flags = EV_ADD | EV_UDATA_SPECIFIC | EV_DISPATCH | EV_VANISHED,
-			.fflags = NOTE_LOWAT,
-			.data = 1,
-			.qos = (int32_t)_pthread_qos_class_encode(EXPECTED_QOS,
-					0, 0)
-		}};
+							.ident = (uint64_t)shared.wr_fd,
+							.filter = EVFILT_WRITE,
+							.flags = EV_ADD | EV_UDATA_SPECIFIC | EV_DISPATCH | EV_VANISHED,
+							.fflags = NOTE_LOWAT,
+							.data = 1,
+							.qos = (int32_t)_pthread_qos_class_encode(EXPECTED_QOS,
+		    0, 0)
+						}};
 
 		for (;;) {
 			int kev = kevent_qos(-1, changes == 0 ? NULL : events, changes,
-					events, 1, NULL, NULL,
-					KEVENT_FLAG_WORKQ | KEVENT_FLAG_ERROR_EVENTS);
+			    events, 1, NULL, NULL,
+			    KEVENT_FLAG_WORKQ | KEVENT_FLAG_ERROR_EVENTS);
 			if (kev == -1 && errno == EINTR) {
 				changes = 0;
 				T_LOG("kevent_qos was interrupted");
@@ -423,29 +423,29 @@ write_to_fd(void * __unused ctx)
 		dispatch_source_t write_src;
 
 		T_ASSERT_MACH_SUCCESS(semaphore_create(mach_task_self(), &shared.wr_finished, SYNC_POLICY_FIFO, 0),
-		                      "semaphore_create shared.wr_finished");
+		    "semaphore_create shared.wr_finished");
 
 		T_QUIET;
 		T_ASSERT_NE_UINT(shared.wr_finished, (unsigned)MACH_PORT_NULL, "semaphore_create");
 
 		write_src = dispatch_source_create(DISPATCH_SOURCE_TYPE_WRITE,
-				(uintptr_t)shared.wr_fd, 0, NULL);
+		    (uintptr_t)shared.wr_fd, 0, NULL);
 		T_QUIET; T_ASSERT_NOTNULL(write_src,
-				"dispatch_source_create(DISPATCH_SOURCE_TYPE_WRITE ...)");
+		    "dispatch_source_create(DISPATCH_SOURCE_TYPE_WRITE ...)");
 
 		dispatch_block_t handler = dispatch_block_create_with_qos_class(
-				DISPATCH_BLOCK_ENFORCE_QOS_CLASS, EXPECTED_QOS, 0, ^{
-			// T_MAYFAIL;
-			// T_QUIET; T_ASSERT_EFFECTIVE_QOS_EQ(EXPECTED_QOS,
-					// "write handler block should run at correct QoS");
-			if (!handle_writing(shared.fd_pair, shared.wr_fd)) {
-				/* finished handling the fd, tear down the source */
-				dispatch_source_cancel(write_src);
-				dispatch_release(write_src);
-				T_LOG("signal shared.wr_finished");
-				semaphore_signal(shared.wr_finished);
-			}
-		});
+			DISPATCH_BLOCK_ENFORCE_QOS_CLASS, EXPECTED_QOS, 0, ^{
+				// T_MAYFAIL;
+				// T_QUIET; T_ASSERT_EFFECTIVE_QOS_EQ(EXPECTED_QOS,
+				// "write handler block should run at correct QoS");
+				if (!handle_writing(shared.fd_pair, shared.wr_fd)) {
+				        /* finished handling the fd, tear down the source */
+				        dispatch_source_cancel(write_src);
+				        dispatch_release(write_src);
+				        T_LOG("signal shared.wr_finished");
+				        semaphore_signal(shared.wr_finished);
+				}
+			});
 
 		dispatch_source_set_event_handler(write_src, handler);
 		dispatch_activate(write_src);
@@ -502,7 +502,7 @@ handle_reading(enum fd_pair fd_pair, int fd)
 
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(bytes_rd, "reading from file");
 	T_QUIET; T_ASSERT_LE(bytes_rd, (ssize_t)EXPECTED_LEN,
-			"read too much from file");
+	    "read too much from file");
 
 	if (bytes_rd == 0) {
 		T_LOG("read EOF from file");
@@ -511,16 +511,15 @@ handle_reading(enum fd_pair fd_pair, int fd)
 
 	read_buf[bytes_rd] = '\0';
 	strlcpy(&(final_string[final_length]), read_buf,
-			sizeof(final_string) - final_length);
+	    sizeof(final_string) - final_length);
 	final_length += (size_t)bytes_rd;
 
 	T_QUIET; T_ASSERT_LE(final_length, EXPECTED_LEN,
-			"should not read more from file than what can be sent");
+	    "should not read more from file than what can be sent");
 
 	/* FIFOs don't send EOF when the write side closes */
 	if (final_length == strlen(EXPECTED_STRING) &&
-			(fd_pair == FIFO_PAIR))
-	{
+	    (fd_pair == FIFO_PAIR)) {
 		T_LOG("read all expected bytes from FIFO");
 		return false;
 	}
@@ -532,7 +531,7 @@ workqueue_read_fn(void ** __unused buf, int * __unused count)
 {
 	// T_MAYFAIL;
 	// T_QUIET; T_ASSERT_EFFECTIVE_QOS_EQ(EXPECTED_QOS,
-			// "reader thread should be requested at correct QoS");
+	// "reader thread should be requested at correct QoS");
 	if (!handle_reading(shared.fd_pair, shared.rd_fd)) {
 		T_LOG("signal shared.rd_finished");
 		semaphore_signal(shared.rd_finished);
@@ -556,7 +555,7 @@ read_from_fd(int fd, enum fd_pair fd_pair, enum read_mode mode)
 	if (!(fd_flags & O_NONBLOCK)) {
 		T_QUIET;
 		T_ASSERT_POSIX_SUCCESS(fcntl(fd, F_SETFL,
-			fd_flags | O_NONBLOCK), NULL);
+		    fd_flags | O_NONBLOCK), NULL);
 	}
 
 	switch (mode) {
@@ -569,13 +568,13 @@ read_from_fd(int fd, enum fd_pair fd_pair, enum read_mode mode)
 			int pol = poll(fds, 1, READ_TIMEOUT_SECS * 1000);
 			T_QUIET; T_ASSERT_POSIX_SUCCESS(pol, "poll");
 			T_QUIET; T_ASSERT_NE(pol, 0,
-					"poll should not time out after %d seconds, read %zd out "
-					"of %zu bytes",
-					READ_TIMEOUT_SECS, final_length, strlen(EXPECTED_STRING));
+			    "poll should not time out after %d seconds, read %zd out "
+			    "of %zu bytes",
+			    READ_TIMEOUT_SECS, final_length, strlen(EXPECTED_STRING));
 			T_QUIET; T_ASSERT_FALSE(fds[0].revents & POLLERR,
-					"should not see an error on the device");
+			    "should not see an error on the device");
 			T_QUIET; T_ASSERT_FALSE(fds[0].revents & POLLNVAL,
-					"should not set up an invalid poll");
+			    "should not set up an invalid poll");
 
 			if (!handle_reading(fd_pair, fd)) {
 				break;
@@ -597,7 +596,7 @@ read_from_fd(int fd, enum fd_pair fd_pair, enum read_mode mode)
 			FD_ZERO(&err_fd);
 			FD_SET(fd, &err_fd);
 
-			int sel = select(fd + 1, &read_fd, NULL, NULL/*&err_fd*/, &tv);
+			int sel = select(fd + 1, &read_fd, NULL, NULL /*&err_fd*/, &tv);
 			if (sel == -1 && errno == EINTR) {
 				T_LOG("select interrupted");
 				continue;
@@ -607,12 +606,12 @@ read_from_fd(int fd, enum fd_pair fd_pair, enum read_mode mode)
 			T_QUIET; T_ASSERT_POSIX_SUCCESS(sel, "select");
 
 			T_QUIET; T_ASSERT_NE(sel, 0,
-				"select waited for %d seconds and timed out",
-				READ_TIMEOUT_SECS);
+			    "select waited for %d seconds and timed out",
+			    READ_TIMEOUT_SECS);
 
 			/* didn't fail or time out, therefore data is ready */
 			T_QUIET; T_ASSERT_NE(FD_ISSET(fd, &read_fd), 0,
-					"select should show reading fd as readable");
+			    "select should show reading fd as readable");
 
 			if (!handle_reading(fd_pair, fd)) {
 				break;
@@ -632,29 +631,29 @@ read_from_fd(int fd, enum fd_pair fd_pair, enum read_mode mode)
 		// prohibit ourselves from going multi-threaded see:rdar://33296008
 		_dispatch_prohibit_transition_to_multithreaded(true);
 		T_ASSERT_POSIX_ZERO(_pthread_workqueue_init_with_kevent(
-				workqueue_fn, workqueue_read_fn, 0, 0), NULL);
+			    workqueue_fn, workqueue_read_fn, 0, 0), NULL);
 
 		T_ASSERT_MACH_SUCCESS(semaphore_create(mach_task_self(), &shared.rd_finished, SYNC_POLICY_FIFO, 0),
-		                      "semaphore_create shared.rd_finished");
+		    "semaphore_create shared.rd_finished");
 
 		T_QUIET;
 		T_ASSERT_NE_UINT(shared.rd_finished, (unsigned)MACH_PORT_NULL, "semaphore_create");
 
 		int changes = 1;
 		struct kevent_qos_s events[] = {{
-			.ident = (uint64_t)shared.rd_fd,
-			.filter = EVFILT_READ,
-			.flags = EV_ADD | EV_UDATA_SPECIFIC | EV_DISPATCH | EV_VANISHED,
-			.fflags = NOTE_LOWAT,
-			.data = 1,
-			.qos = (int32_t)_pthread_qos_class_encode(EXPECTED_QOS,
-					0, 0)
-		}};
+							.ident = (uint64_t)shared.rd_fd,
+							.filter = EVFILT_READ,
+							.flags = EV_ADD | EV_UDATA_SPECIFIC | EV_DISPATCH | EV_VANISHED,
+							.fflags = NOTE_LOWAT,
+							.data = 1,
+							.qos = (int32_t)_pthread_qos_class_encode(EXPECTED_QOS,
+		    0, 0)
+						}};
 
 		for (;;) {
 			int kev = kevent_qos(-1, changes == 0 ? NULL : events, changes,
-					events, 1, NULL, NULL,
-					KEVENT_FLAG_WORKQ | KEVENT_FLAG_ERROR_EVENTS);
+			    events, 1, NULL, NULL,
+			    KEVENT_FLAG_WORKQ | KEVENT_FLAG_ERROR_EVENTS);
 			if (kev == -1 && errno == EINTR) {
 				changes = 0;
 				T_LOG("kevent_qos was interrupted");
@@ -673,30 +672,30 @@ read_from_fd(int fd, enum fd_pair fd_pair, enum read_mode mode)
 		dispatch_source_t read_src;
 
 		T_ASSERT_MACH_SUCCESS(semaphore_create(mach_task_self(), &shared.rd_finished, SYNC_POLICY_FIFO, 0),
-		                      "semaphore_create shared.rd_finished");
+		    "semaphore_create shared.rd_finished");
 
 		T_QUIET;
 		T_ASSERT_NE_UINT(shared.rd_finished, (unsigned)MACH_PORT_NULL, "semaphore_create");
 
 		read_src = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ,
-				(uintptr_t)fd, 0, NULL);
+		    (uintptr_t)fd, 0, NULL);
 		T_QUIET; T_ASSERT_NOTNULL(read_src,
-				"dispatch_source_create(DISPATCH_SOURCE_TYPE_READ)");
+		    "dispatch_source_create(DISPATCH_SOURCE_TYPE_READ)");
 
 		dispatch_block_t handler = dispatch_block_create_with_qos_class(
-				DISPATCH_BLOCK_ENFORCE_QOS_CLASS, EXPECTED_QOS, 0, ^{
-			// T_MAYFAIL;
-			// T_QUIET; T_ASSERT_EFFECTIVE_QOS_EQ(EXPECTED_QOS,
-					// "read handler block should run at correct QoS");
+			DISPATCH_BLOCK_ENFORCE_QOS_CLASS, EXPECTED_QOS, 0, ^{
+				// T_MAYFAIL;
+				// T_QUIET; T_ASSERT_EFFECTIVE_QOS_EQ(EXPECTED_QOS,
+				// "read handler block should run at correct QoS");
 
-			if (!handle_reading(fd_pair, fd)) {
-				/* finished handling the fd, tear down the source */
-				dispatch_source_cancel(read_src);
-				dispatch_release(read_src);
-				T_LOG("signal shared.rd_finished");
-				semaphore_signal(shared.rd_finished);
-			}
-		});
+				if (!handle_reading(fd_pair, fd)) {
+				        /* finished handling the fd, tear down the source */
+				        dispatch_source_cancel(read_src);
+				        dispatch_release(read_src);
+				        T_LOG("signal shared.rd_finished");
+				        semaphore_signal(shared.rd_finished);
+				}
+			});
 
 		dispatch_source_set_event_handler(read_src, handler);
 		dispatch_activate(read_src);
@@ -721,7 +720,7 @@ read_from_fd(int fd, enum fd_pair fd_pair, enum read_mode mode)
 	}
 
 	T_EXPECT_EQ_STR(final_string, EXPECTED_STRING,
-			"reader should receive valid string");
+	    "reader should receive valid string");
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(close(fd), NULL);
 }
 
@@ -733,7 +732,7 @@ fd_pair_init(enum fd_pair fd_pair, int *rd_fd, int *wr_fd)
 	switch (fd_pair) {
 	case PTY_PAIR:
 		T_ASSERT_POSIX_SUCCESS(openpty(rd_fd, wr_fd, NULL, NULL, NULL),
-				NULL);
+		    NULL);
 		break;
 
 	case FIFO_PAIR: {
@@ -741,7 +740,7 @@ fd_pair_init(enum fd_pair fd_pair, int *rd_fd, int *wr_fd)
 		T_QUIET; T_ASSERT_NOTNULL(mktemp(fifo_path), NULL);
 
 		T_ASSERT_POSIX_SUCCESS(mkfifo(fifo_path, 0700), "mkfifo(%s, 0700)",
-				fifo_path);
+		    fifo_path);
 		/*
 		 * Opening the read side of a pipe will block until the write
 		 * side opens -- use O_NONBLOCK.
@@ -764,7 +763,7 @@ fd_pair_init(enum fd_pair fd_pair, int *rd_fd, int *wr_fd)
 	case SOCKET_PAIR: {
 		int sock_fds[2];
 		T_ASSERT_POSIX_SUCCESS(socketpair(AF_UNIX, SOCK_STREAM, 0, sock_fds),
-				NULL);
+		    NULL);
 		*rd_fd = sock_fds[0];
 		*wr_fd = sock_fds[1];
 		break;
@@ -783,7 +782,7 @@ fd_pair_init(enum fd_pair fd_pair, int *rd_fd, int *wr_fd)
 
 static void
 drive_threads(enum fd_pair fd_pair, enum read_mode rd_mode,
-		enum write_mode wr_mode)
+    enum write_mode wr_mode)
 {
 	pthread_t thread;
 
@@ -794,11 +793,11 @@ drive_threads(enum fd_pair fd_pair, enum read_mode rd_mode,
 
 	shared.wr_kind = THREAD_WRITER;
 	T_ASSERT_MACH_SUCCESS(semaphore_create(mach_task_self(), &shared.wr_wait.sem, SYNC_POLICY_FIFO, 0),
-	                      "semaphore_create shared.wr_wait.sem");
+	    "semaphore_create shared.wr_wait.sem");
 
 	T_QUIET;
 	T_ASSERT_POSIX_ZERO(pthread_create(&thread, NULL, write_to_fd, NULL),
-			NULL);
+	    NULL);
 	T_LOG("created writer thread");
 
 	read_from_fd(shared.rd_fd, fd_pair, rd_mode);
@@ -852,69 +851,69 @@ T_HELPER_DECL(writer_helper, "Write asynchronously")
 #pragma mark tests
 
 #define WR_DECL_PROCESSES(desc_name, fd_pair, write_name, write_str, \
-				write_mode, read_name, read_mode) \
-		T_DECL(desc_name##_r##read_name##_w##write_name##_procs, "read changes to a " \
-				#desc_name " with " #read_name " and writing " #write_str \
-				" across two processes") \
-		{ \
-			drive_processes(fd_pair, read_mode, write_mode); \
-		}
+	    write_mode, read_name, read_mode) \
+	        T_DECL(desc_name##_r##read_name##_w##write_name##_procs, "read changes to a " \
+	                        #desc_name " with " #read_name " and writing " #write_str \
+	                        " across two processes") \
+	        { \
+	                drive_processes(fd_pair, read_mode, write_mode); \
+	        }
 #define WR_DECL_THREADS(desc_name, fd_pair, write_name, write_str, \
-				write_mode, read_name, read_mode) \
-		T_DECL(desc_name##_r##read_name##_w##write_name##_thds, "read changes to a " \
-				#desc_name " with " #read_name " and writing " #write_str) \
-		{ \
-			drive_threads(fd_pair, read_mode, write_mode); \
-		}
+	    write_mode, read_name, read_mode) \
+	        T_DECL(desc_name##_r##read_name##_w##write_name##_thds, "read changes to a " \
+	                        #desc_name " with " #read_name " and writing " #write_str) \
+	        { \
+	                drive_threads(fd_pair, read_mode, write_mode); \
+	        }
 
 #define WR_DECL(desc_name, fd_pair, write_name, write_str, write_mode, \
-		read_name, read_mode) \
-		WR_DECL_PROCESSES(desc_name, fd_pair, write_name, write_str, \
-				write_mode, read_name, read_mode) \
-		WR_DECL_THREADS(desc_name, fd_pair, write_name, write_str, \
-				write_mode, read_name, read_mode)
+	    read_name, read_mode) \
+	        WR_DECL_PROCESSES(desc_name, fd_pair, write_name, write_str, \
+	                        write_mode, read_name, read_mode) \
+	        WR_DECL_THREADS(desc_name, fd_pair, write_name, write_str, \
+	                        write_mode, read_name, read_mode)
 
 #define RD_DECL_SAFE(desc_name, fd_pair, read_name, read_mode) \
-		WR_DECL(desc_name, fd_pair, full, "the full string", FULL_WRITE, \
-				read_name, read_mode) \
-		WR_DECL(desc_name, fd_pair, inc, "incrementally", \
-				INCREMENTAL_WRITE, read_name, read_mode)
+	        WR_DECL(desc_name, fd_pair, full, "the full string", FULL_WRITE, \
+	                        read_name, read_mode) \
+	        WR_DECL(desc_name, fd_pair, inc, "incrementally", \
+	                        INCREMENTAL_WRITE, read_name, read_mode)
 
 #define RD_DECL_DISPATCH_ONLY(suffix, desc_name, fd_pair, read_name, \
-				read_mode) \
-		WR_DECL##suffix(desc_name, fd_pair, inc_dispatch, \
-				"incrementally with a dispatch source", \
-				DISPATCH_INCREMENTAL_WRITE, read_name, read_mode)
+	    read_mode) \
+	        WR_DECL##suffix(desc_name, fd_pair, inc_dispatch, \
+	                        "incrementally with a dispatch source", \
+	                        DISPATCH_INCREMENTAL_WRITE, read_name, read_mode)
 #define RD_DECL_WORKQ_ONLY(suffix, desc_name, fd_pair, read_name, \
-				read_mode) \
-		WR_DECL##suffix(desc_name, fd_pair, inc_workq, \
-				"incrementally with the workqueue", \
-				WORKQ_INCREMENTAL_WRITE, read_name, read_mode)
+	    read_mode) \
+	        WR_DECL##suffix(desc_name, fd_pair, inc_workq, \
+	                        "incrementally with the workqueue", \
+	                        WORKQ_INCREMENTAL_WRITE, read_name, read_mode)
 
 #define RD_DECL(desc_name, fd_pair, read_name, read_mode) \
-		RD_DECL_SAFE(desc_name, fd_pair, read_name, read_mode) \
-		RD_DECL_DISPATCH_ONLY(, desc_name, fd_pair, read_name, read_mode)
-		// RD_DECL_WORKQ_ONLY(, desc_name, fd_pair, read_name, read_mode)
+	        RD_DECL_SAFE(desc_name, fd_pair, read_name, read_mode) \
+	        RD_DECL_DISPATCH_ONLY(, desc_name, fd_pair, read_name, read_mode)
+// RD_DECL_WORKQ_ONLY(, desc_name, fd_pair, read_name, read_mode)
 
 /*
  * dispatch_source tests cannot share the same process as other workqueue
  * tests.
  */
 #define RD_DECL_DISPATCH(desc_name, fd_pair, read_name, read_mode) \
-		RD_DECL_SAFE(desc_name, fd_pair, read_name, read_mode) \
-		RD_DECL_DISPATCH_ONLY(, desc_name, fd_pair, read_name, read_mode) \
-		RD_DECL_WORKQ_ONLY(_PROCESSES, desc_name, fd_pair, read_name, \
-				read_mode)
+	        RD_DECL_SAFE(desc_name, fd_pair, read_name, read_mode) \
+	        RD_DECL_DISPATCH_ONLY(, desc_name, fd_pair, read_name, read_mode) \
+	        RD_DECL_WORKQ_ONLY(_PROCESSES, desc_name, fd_pair, read_name, \
+	                        read_mode)
 
 /*
  * Workqueue tests cannot share the same process as other workqueue or
  * dispatch_source tests.
-#define RD_DECL_WORKQ(desc_name, fd_pair, read_name, read_mode) \
-		RD_DECL_SAFE(desc_name, fd_pair, read_name, read_mode) \
-		RD_DECL_DISPATCH_ONLY(_PROCESSES, desc_name, fd_pair, read_name, \
-				read_mode) \
-		RD_DECL_WORKQ_ONLY(_PROCESSES, desc_name, fd_pair, read_name, \
-				read_mode)
+ #define RD_DECL_WORKQ(desc_name, fd_pair, read_name, read_mode) \
+ *               RD_DECL_SAFE(desc_name, fd_pair, read_name, read_mode) \
+ *               RD_DECL_DISPATCH_ONLY(_PROCESSES, desc_name, fd_pair, read_name, \
+ *                               read_mode) \
+ *               RD_DECL_WORKQ_ONLY(_PROCESSES, desc_name, fd_pair, read_name, \
+ *                               read_mode)
  */
 
 #define PAIR_DECL(desc_name, fd_pair) \
@@ -924,7 +923,7 @@ T_HELPER_DECL(writer_helper, "Write asynchronously")
 	RD_DECL(desc_name, fd_pair, kevent64, KEVENT64_READ) \
 	RD_DECL(desc_name, fd_pair, kevent_qos, KEVENT_QOS_READ) \
 	RD_DECL_DISPATCH(desc_name, fd_pair, dispatch_source, DISPATCH_READ)
-	// RD_DECL_WORKQ(desc_name, fd_pair, workq, WORKQ_READ)
+// RD_DECL_WORKQ(desc_name, fd_pair, workq, WORKQ_READ)
 
 PAIR_DECL(tty, PTY_PAIR)
 PAIR_DECL(pipe, PIPE_PAIR)

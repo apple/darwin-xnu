@@ -6,6 +6,8 @@
 
 #include <darwintest.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 /*
  * <rdar://problem/30231213> close() of kqueue FD races with kqueue_scan park
  *
@@ -56,7 +58,7 @@ run_test()
 
 	pthread_t thread;
 	int rv = pthread_create(&thread, NULL, poll_kqueue,
-	                        (void *)(uintptr_t)fd);
+	    (void *)(uintptr_t)fd);
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "pthread_create");
 
 	usleep(timeout_ms * 1000);
@@ -69,9 +71,9 @@ run_test()
 }
 
 T_DECL(kqueue_close_race, "Races kqueue close with kqueue process",
-       T_META_LTEPHASE(LTE_POSTINIT), T_META_TIMEOUT(5))
+    T_META_LTEPHASE(LTE_POSTINIT), T_META_TIMEOUT(5))
 {
-	for (uint32_t i = 1 ; i < 100 ; i++) {
+	for (uint32_t i = 1; i < 100; i++) {
 		run_test();
 	}
 }

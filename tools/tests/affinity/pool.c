@@ -45,88 +45,88 @@
  * use as input and output and what function to call for processing is
  * data-driven.
  */
-  
+
 pthread_mutex_t funnel;
-pthread_cond_t	barrier;
+pthread_cond_t  barrier;
 
-uint64_t	timer;
-int		threads;
-int		threads_ready = 0;
+uint64_t        timer;
+int             threads;
+int             threads_ready = 0;
 
-int		iterations = 10000;
-boolean_t	affinity = FALSE;
-boolean_t	halting = FALSE;
-int		verbosity = 1;
+int             iterations = 10000;
+boolean_t       affinity = FALSE;
+boolean_t       halting = FALSE;
+int             verbosity = 1;
 
 typedef struct work {
-	TAILQ_ENTRY(work)	link;
-	int			*data;
-	int			isize;
-	int			tag;
-	int			number;
+	TAILQ_ENTRY(work)       link;
+	int                     *data;
+	int                     isize;
+	int                     tag;
+	int                     number;
 } work_t;
 
 /*
  * A work queue, complete with pthread objects for its management
  */
 typedef struct work_queue {
-	pthread_mutex_t		mtx;
-	pthread_cond_t		cnd;
-	TAILQ_HEAD(, work)	queue;
-	unsigned int		waiters;
+	pthread_mutex_t         mtx;
+	pthread_cond_t          cnd;
+	TAILQ_HEAD(, work)      queue;
+	unsigned int            waiters;
 } work_queue_t;
 
 /* Worker functions take a integer array and size */
-typedef void (worker_fn_t)(int *, int); 
+typedef void (worker_fn_t)(int *, int);
 
 /* This struct controls the function of a stage */
 #define WORKERS_MAX 10
 typedef struct {
-	int			stagenum;
-	char			*name;
-	worker_fn_t		*fn;
-	work_queue_t		*input;		
-	work_queue_t		*output;		
-	work_queue_t		bufq;
-	int			work_todo;
+	int                     stagenum;
+	char                    *name;
+	worker_fn_t             *fn;
+	work_queue_t            *input;
+	work_queue_t            *output;
+	work_queue_t            bufq;
+	int                     work_todo;
 } stage_info_t;
 
 /* This defines a worker thread */
 typedef struct worker_info {
-	int			setnum;
-	stage_info_t		*stage;
-	pthread_t		thread;
+	int                     setnum;
+	stage_info_t            *stage;
+	pthread_t               thread;
 } worker_info_t;
 
-#define DBG(x...) do {				\
-	if (verbosity > 1) {			\
-		pthread_mutex_lock(&funnel);	\
-		printf(x);			\
-		pthread_mutex_unlock(&funnel);	\
-	}					\
+#define DBG(x...) do {                          \
+	if (verbosity > 1) {                    \
+	        pthread_mutex_lock(&funnel);    \
+	        printf(x);                      \
+	        pthread_mutex_unlock(&funnel);  \
+	}                                       \
 } while (0)
 
-#define mutter(x...) do {			\
-	if (verbosity > 0) {			\
-		printf(x);			\
-	}					\
+#define mutter(x...) do {                       \
+	if (verbosity > 0) {                    \
+	        printf(x);                      \
+	}                                       \
 } while (0)
 
-#define s_if_plural(x)	(((x) > 1) ? "s" : "")
+#define s_if_plural(x)  (((x) > 1) ? "s" : "")
 
 static void
 usage()
 {
 	fprintf(stderr,
-		"usage: pool [-a]    Turn affinity on (off)\n"
-		"            [-b B]  Number of buffers per producer (2)\n"
-		"            [-i I]  Number of buffers to produce (10000)\n"
-		"            [-s S]  Number of stages (2)\n"
-		"            [-p P]  Number of pages per buffer (256=1MB)]\n"
-		"            [-w]    Consumer writes data\n"
-		"            [-v V]  Verbosity level 0..2 (1)\n"
-		"            [N [M]] Number of producer and consumers (2)\n"
-	);
+	    "usage: pool [-a]    Turn affinity on (off)\n"
+	    "            [-b B]  Number of buffers per producer (2)\n"
+	    "            [-i I]  Number of buffers to produce (10000)\n"
+	    "            [-s S]  Number of stages (2)\n"
+	    "            [-p P]  Number of pages per buffer (256=1MB)]\n"
+	    "            [-w]    Consumer writes data\n"
+	    "            [-v V]  Verbosity level 0..2 (1)\n"
+	    "            [N [M]] Number of producer and consumers (2)\n"
+	    );
 	exit(1);
 }
 
@@ -134,7 +134,7 @@ usage()
 void
 writer_fn(int *data, int isize)
 {
-	int 	i;
+	int     i;
 
 	for (i = 0; i < isize; i++) {
 		data[i] = i;
@@ -145,8 +145,8 @@ writer_fn(int *data, int isize)
 void
 reader_fn(int *data, int isize)
 {
-	int 	i;
-	int	datum;
+	int     i;
+	int     datum;
 
 	for (i = 0; i < isize; i++) {
 		datum = data[i];
@@ -157,7 +157,7 @@ reader_fn(int *data, int isize)
 void
 reader_writer_fn(int *data, int isize)
 {
-	int 	i;
+	int     i;
 
 	for (i = 0; i < isize; i++) {
 		data[i] += 1;
@@ -167,16 +167,17 @@ reader_writer_fn(int *data, int isize)
 void
 affinity_set(int tag)
 {
-	kern_return_t			ret;
-	thread_affinity_policy_data_t	policy;
+	kern_return_t                   ret;
+	thread_affinity_policy_data_t   policy;
 	if (affinity) {
 		policy.affinity_tag = tag;
 		ret = thread_policy_set(
-				mach_thread_self(), THREAD_AFFINITY_POLICY,
-				(thread_policy_t) &policy,
-				THREAD_AFFINITY_POLICY_COUNT);
-		if (ret != KERN_SUCCESS)
+			mach_thread_self(), THREAD_AFFINITY_POLICY,
+			(thread_policy_t) &policy,
+			THREAD_AFFINITY_POLICY_COUNT);
+		if (ret != KERN_SUCCESS) {
 			printf("thread_policy_set(THREAD_AFFINITY_POLICY) returned %d\n", ret);
+		}
 	}
 }
 
@@ -187,22 +188,23 @@ affinity_set(int tag)
 void *
 manager_fn(void *arg)
 {
-	worker_info_t	*wp = (worker_info_t *) arg;
-	stage_info_t	*sp = wp->stage;
-	boolean_t	is_producer = (sp->stagenum == 0);
-	long		iteration = 0;
-	int		current_tag = 0;
+	worker_info_t   *wp = (worker_info_t *) arg;
+	stage_info_t    *sp = wp->stage;
+	boolean_t       is_producer = (sp->stagenum == 0);
+	long            iteration = 0;
+	int             current_tag = 0;
 
-	kern_return_t			ret;
-	thread_extended_policy_data_t	epolicy;
+	kern_return_t                   ret;
+	thread_extended_policy_data_t   epolicy;
 	epolicy.timeshare = FALSE;
 	ret = thread_policy_set(
-			mach_thread_self(), THREAD_EXTENDED_POLICY,
-			(thread_policy_t) &epolicy,
-			THREAD_EXTENDED_POLICY_COUNT);
-	if (ret != KERN_SUCCESS)
+		mach_thread_self(), THREAD_EXTENDED_POLICY,
+		(thread_policy_t) &epolicy,
+		THREAD_EXTENDED_POLICY_COUNT);
+	if (ret != KERN_SUCCESS) {
 		printf("thread_policy_set(THREAD_EXTENDED_POLICY) returned %d\n", ret);
-	
+	}
+
 	/*
 	 * If we're using affinity sets and we're a producer
 	 * set our tag to by our thread set number.
@@ -224,7 +226,7 @@ manager_fn(void *arg)
 		pthread_mutex_unlock(&funnel);
 		if (halting) {
 			printf("  all threads ready for process %d, "
-				"hit any key to start", getpid());
+			    "hit any key to start", getpid());
 			fflush(stdout);
 			(void) getchar();
 		}
@@ -236,7 +238,7 @@ manager_fn(void *arg)
 	}
 
 	do {
-		work_t		*workp;
+		work_t          *workp;
 
 		/*
 		 * Get a buffer from the input queue.
@@ -250,10 +252,11 @@ manager_fn(void *arg)
 				goto out;
 			}
 			workp = TAILQ_FIRST(&(sp->input->queue));
-			if (workp != NULL)
+			if (workp != NULL) {
 				break;
+			}
 			DBG("    %s[%d,%d] todo %d waiting for buffer\n",
-				sp->name, wp->setnum, sp->stagenum, sp->work_todo);
+			    sp->name, wp->setnum, sp->stagenum, sp->work_todo);
 			sp->input->waiters++;
 			pthread_cond_wait(&sp->input->cnd, &sp->input->mtx);
 			sp->input->waiters--;
@@ -273,7 +276,7 @@ manager_fn(void *arg)
 		}
 
 		DBG("  %s[%d,%d] todo %d work %p data %p\n",
-			sp->name, wp->setnum, sp->stagenum, iteration, workp, workp->data);
+		    sp->name, wp->setnum, sp->stagenum, iteration, workp, workp->data);
 
 		/* Do our stuff with the buffer */
 		(void) sp->fn(workp->data, workp->isize);
@@ -286,11 +289,10 @@ manager_fn(void *arg)
 		TAILQ_INSERT_TAIL(&(sp->output->queue), workp, link);
 		if (sp->output->waiters) {
 			DBG("    %s[%d,%d] todo %d signaling work\n",
-				sp->name, wp->setnum, sp->stagenum, iteration);
+			    sp->name, wp->setnum, sp->stagenum, iteration);
 			pthread_cond_signal(&sp->output->cnd);
 		}
 		pthread_mutex_unlock(&sp->output->mtx);
-
 	} while (1);
 
 out:
@@ -307,24 +309,24 @@ void (*consumer_fnp)(int *data, int isize) = &reader_fn;
 int
 main(int argc, char *argv[])
 {
-	int			i;
-	int			j;
-	int			k;
-	int			pages = 256; /* 1MB */
-	int			buffers = 2;
-	int			producers = 2;
-	int			consumers = 2;
-	int			stages = 2;
-	int			*status;
-	stage_info_t		*stage_info;
-	stage_info_t		*sp;
-	worker_info_t		*worker_info;
-	worker_info_t		*wp;
-	kern_return_t		ret;
-	int			c;
+	int                     i;
+	int                     j;
+	int                     k;
+	int                     pages = 256; /* 1MB */
+	int                     buffers = 2;
+	int                     producers = 2;
+	int                     consumers = 2;
+	int                     stages = 2;
+	int                     *status;
+	stage_info_t            *stage_info;
+	stage_info_t            *sp;
+	worker_info_t           *worker_info;
+	worker_info_t           *wp;
+	kern_return_t           ret;
+	int                     c;
 
 	/* Do switch parsing: */
-	while ((c = getopt (argc, argv, "ab:i:p:s:twv:")) != -1) {
+	while ((c = getopt(argc, argv, "ab:i:p:s:twv:")) != -1) {
 		switch (c) {
 		case 'a':
 			affinity = !affinity;
@@ -340,8 +342,9 @@ main(int argc, char *argv[])
 			break;
 		case 's':
 			stages = atoi(optarg);
-			if (stages >= WORKERS_MAX)
+			if (stages >= WORKERS_MAX) {
 				usage();
+			}
 			break;
 		case 't':
 			halting = TRUE;
@@ -359,38 +362,42 @@ main(int argc, char *argv[])
 		}
 	}
 	argc -= optind; argv += optind;
-	if (argc > 0)
+	if (argc > 0) {
 		producers = atoi(*argv);
+	}
 	argc--; argv++;
-	if (argc > 0)
+	if (argc > 0) {
 		consumers = atoi(*argv);
-	
+	}
+
 	pthread_mutex_init(&funnel, NULL);
 	pthread_cond_init(&barrier, NULL);
 
 	/*
- 	 * Fire up the worker threads.
+	 * Fire up the worker threads.
 	 */
 	threads = consumers * (stages - 1) + producers;
 	mutter("Launching %d producer%s with %d stage%s of %d consumer%s\n"
-		"  with %saffinity, consumer reads%s data\n",
-		producers, s_if_plural(producers),
-		stages - 1, s_if_plural(stages - 1),
-		consumers, s_if_plural(consumers),
-		affinity? "": "no ",
-		(consumer_fnp == &reader_writer_fn)? " and writes" : "");
-	if (pages < 256)
+	    "  with %saffinity, consumer reads%s data\n",
+	    producers, s_if_plural(producers),
+	    stages - 1, s_if_plural(stages - 1),
+	    consumers, s_if_plural(consumers),
+	    affinity? "": "no ",
+	    (consumer_fnp == &reader_writer_fn)? " and writes" : "");
+	if (pages < 256) {
 		mutter("  %dkB bytes per buffer, ", pages * 4);
-	else
+	} else {
 		mutter("  %dMB bytes per buffer, ", pages / 256);
+	}
 	mutter("%d buffer%s per producer ",
-		buffers, s_if_plural(buffers));
-	if (buffers * pages < 256)
+	    buffers, s_if_plural(buffers));
+	if (buffers * pages < 256) {
 		mutter("(total %dkB)\n", buffers * pages * 4);
-	else
+	} else {
 		mutter("(total %dMB)\n", buffers * pages / 256);
+	}
 	mutter("  processing %d buffer%s...\n",
-		iterations, s_if_plural(iterations));
+	    iterations, s_if_plural(iterations));
 
 	stage_info = (stage_info_t *) malloc(stages * sizeof(stage_info_t));
 	worker_info = (worker_info_t *) malloc(threads * sizeof(worker_info_t));
@@ -414,12 +421,12 @@ main(int argc, char *argv[])
 		sp->output = &stage_info[(i + 1) % stages].bufq;
 		stage_info[i].work_todo = iterations;
 	}
- 
+
 	/* Create the producers */
 	for (i = 0; i < producers; i++) {
-		work_t	*work_array;
-		int	*data;
-		int	isize;
+		work_t  *work_array;
+		int     *data;
+		int     isize;
 
 		isize = pages * 4096 / sizeof(int);
 		data = (int *) malloc(buffers * pages * 4096);
@@ -427,34 +434,36 @@ main(int argc, char *argv[])
 		/* Set up the empty work buffers */
 		work_array = (work_t *)  malloc(buffers * sizeof(work_t));
 		for (j = 0; j < buffers; j++) {
-			work_array[j].data = data + (isize * j);	
+			work_array[j].data = data + (isize * j);
 			work_array[j].isize = isize;
 			work_array[j].tag = 0;
 			TAILQ_INSERT_TAIL(&stage_info[0].bufq.queue, &work_array[j], link);
 			DBG("  empty work item %p for data %p\n",
-				&work_array[j], work_array[j].data);
+			    &work_array[j], work_array[j].data);
 		}
 		wp = &worker_info[i];
 		wp->setnum = i + 1;
 		wp->stage = &stage_info[0];
 		if (ret = pthread_create(&wp->thread,
-					 NULL,
-					 &manager_fn,
-					 (void *) wp))
+		    NULL,
+		    &manager_fn,
+		    (void *) wp)) {
 			err(1, "pthread_create %d,%d", 0, i);
+		}
 	}
 
 	/* Create consumers */
 	for (i = 1; i < stages; i++) {
 		for (j = 0; j < consumers; j++) {
-			wp = &worker_info[producers + (consumers*(i-1)) + j];
+			wp = &worker_info[producers + (consumers * (i - 1)) + j];
 			wp->setnum = j + 1;
 			wp->stage = &stage_info[i];
 			if (ret = pthread_create(&wp->thread,
-						NULL,
-						&manager_fn,
-						(void *) wp))
+			    NULL,
+			    &manager_fn,
+			    (void *) wp)) {
 				err(1, "pthread_create %d,%d", i, j);
+			}
 		}
 	}
 
@@ -462,8 +471,8 @@ main(int argc, char *argv[])
 	 * We sit back anf wait for the slaves to finish.
 	 */
 	for (k = 0; k < threads; k++) {
-		int	i;
-		int	j;
+		int     i;
+		int     j;
 
 		wp = &worker_info[k];
 		if (k < producers) {
@@ -473,8 +482,9 @@ main(int argc, char *argv[])
 			i = (k - producers) / consumers;
 			j = (k - producers) % consumers;
 		}
-		if(ret = pthread_join(wp->thread, (void **)&status))
-		    err(1, "pthread_join %d,%d", i, j);
+		if (ret = pthread_join(wp->thread, (void **)&status)) {
+			err(1, "pthread_join %d,%d", i, j);
+		}
 		DBG("Thread %d,%d status %d\n", i, j, status);
 	}
 
@@ -484,7 +494,7 @@ main(int argc, char *argv[])
 	timer = mach_absolute_time() - timer;
 	timer = timer / 1000000ULL;
 	printf("%d.%03d seconds elapsed.\n",
-		(int) (timer/1000ULL), (int) (timer % 1000ULL));
+	    (int) (timer / 1000ULL), (int) (timer % 1000ULL));
 
 	return 0;
 }

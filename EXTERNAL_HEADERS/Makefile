@@ -8,7 +8,8 @@ include $(MakeInc_def)
 
 INSTINC_SUBDIRS =	\
 	architecture	\
-	mach-o
+	mach-o			\
+	sys
 
 INSTINC_SUBDIRS_X86_64 =	\
 	architecture
@@ -32,9 +33,7 @@ KERNEL_FILES = \
 	stdatomic.h	\
 	stdbool.h	\
 	stddef.h	\
-	stdint.h
-
-KERNEL_FILES += \
+	stdint.h	\
 	ptrauth.h
 
 INSTALL_MI_LIST =

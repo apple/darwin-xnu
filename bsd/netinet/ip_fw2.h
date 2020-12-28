@@ -62,34 +62,34 @@
  */
 
 /*!
-	@defined KEV_IPFW_SUBCLASS
-	@discussion The kernel event subclass for IP Firewall.
-*/
-#define KEV_IPFW_SUBCLASS	1
+ *       @defined KEV_IPFW_SUBCLASS
+ *       @discussion The kernel event subclass for IP Firewall.
+ */
+#define KEV_IPFW_SUBCLASS       1
 
 /*!
-	@defined KEV_IPFW_ADD
-	@discussion The event code indicating a rule has been added.
-*/
-#define KEV_IPFW_ADD		1
+ *       @defined KEV_IPFW_ADD
+ *       @discussion The event code indicating a rule has been added.
+ */
+#define KEV_IPFW_ADD            1
 
 /*!
-	@defined KEV_IPFW_DEL
-	@discussion The event code indicating a rule has been removed.
-*/
-#define KEV_IPFW_DEL		2
+ *       @defined KEV_IPFW_DEL
+ *       @discussion The event code indicating a rule has been removed.
+ */
+#define KEV_IPFW_DEL            2
 
 /*!
-	@defined KEV_IPFW_FLUSH
-	@discussion The event code indicating the rule set has been flushed.
-*/
-#define KEV_IPFW_FLUSH		3
+ *       @defined KEV_IPFW_FLUSH
+ *       @discussion The event code indicating the rule set has been flushed.
+ */
+#define KEV_IPFW_FLUSH          3
 
 /*!
-	@defined KEV_IPFW_ENABLE
-	@discussion The event code indicating the enable flag has been changed 
-*/
-#define KEV_IPFW_ENABLE		4
+ *       @defined KEV_IPFW_ENABLE
+ *       @discussion The event code indicating the enable flag has been changed
+ */
+#define KEV_IPFW_ENABLE         4
 
 
 
@@ -112,86 +112,86 @@
  * to 256 different opcodes.
  */
 
-enum ipfw_opcodes {		/* arguments (4 byte each)	*/
+enum ipfw_opcodes {             /* arguments (4 byte each)	*/
 	O_NOP,
 
-	O_IP_SRC,		/* u32 = IP			*/
-	O_IP_SRC_MASK,		/* ip = IP/mask			*/
-	O_IP_SRC_ME,		/* none				*/
-	O_IP_SRC_SET,		/* u32=base, arg1=len, bitmap	*/
+	O_IP_SRC,               /* u32 = IP			*/
+	O_IP_SRC_MASK,          /* ip = IP/mask			*/
+	O_IP_SRC_ME,            /* none				*/
+	O_IP_SRC_SET,           /* u32=base, arg1=len, bitmap	*/
 
-	O_IP_DST,		/* u32 = IP			*/
-	O_IP_DST_MASK,		/* ip = IP/mask			*/
-	O_IP_DST_ME,		/* none				*/
-	O_IP_DST_SET,		/* u32=base, arg1=len, bitmap	*/
+	O_IP_DST,               /* u32 = IP			*/
+	O_IP_DST_MASK,          /* ip = IP/mask			*/
+	O_IP_DST_ME,            /* none				*/
+	O_IP_DST_SET,           /* u32=base, arg1=len, bitmap	*/
 
-	O_IP_SRCPORT,		/* (n)port list:mask 4 byte ea	*/
-	O_IP_DSTPORT,		/* (n)port list:mask 4 byte ea	*/
-	O_PROTO,		/* arg1=protocol		*/
+	O_IP_SRCPORT,           /* (n)port list:mask 4 byte ea	*/
+	O_IP_DSTPORT,           /* (n)port list:mask 4 byte ea	*/
+	O_PROTO,                /* arg1=protocol		*/
 
-	O_MACADDR2,		/* 2 mac addr:mask		*/
-	O_MAC_TYPE,		/* same as srcport		*/
+	O_MACADDR2,             /* 2 mac addr:mask		*/
+	O_MAC_TYPE,             /* same as srcport		*/
 
-	O_LAYER2,		/* none				*/
-	O_IN,			/* none				*/
-	O_FRAG,			/* none				*/
+	O_LAYER2,               /* none				*/
+	O_IN,                   /* none				*/
+	O_FRAG,                 /* none				*/
 
-	O_RECV,			/* none				*/
-	O_XMIT,			/* none				*/
-	O_VIA,			/* none				*/
+	O_RECV,                 /* none				*/
+	O_XMIT,                 /* none				*/
+	O_VIA,                  /* none				*/
 
-	O_IPOPT,		/* arg1 = 2*u8 bitmap		*/
-	O_IPLEN,		/* arg1 = len			*/
-	O_IPID,			/* arg1 = id			*/
+	O_IPOPT,                /* arg1 = 2*u8 bitmap		*/
+	O_IPLEN,                /* arg1 = len			*/
+	O_IPID,                 /* arg1 = id			*/
 
-	O_IPTOS,		/* arg1 = id			*/
-	O_IPPRECEDENCE,		/* arg1 = precedence << 5	*/
-	O_IPTTL,		/* arg1 = TTL			*/
+	O_IPTOS,                /* arg1 = id			*/
+	O_IPPRECEDENCE,         /* arg1 = precedence << 5	*/
+	O_IPTTL,                /* arg1 = TTL			*/
 
-	O_IPVER,		/* arg1 = version		*/
-	O_UID,			/* u32 = id			*/
-	O_GID,			/* u32 = id			*/
-	O_ESTAB,		/* none (tcp established)	*/
-	O_TCPFLAGS,		/* arg1 = 2*u8 bitmap		*/
-	O_TCPWIN,		/* arg1 = desired win		*/
-	O_TCPSEQ,		/* u32 = desired seq.		*/
-	O_TCPACK,		/* u32 = desired seq.		*/
-	O_ICMPTYPE,		/* u32 = icmp bitmap		*/
-	O_TCPOPTS,		/* arg1 = 2*u8 bitmap		*/
+	O_IPVER,                /* arg1 = version		*/
+	O_UID,                  /* u32 = id			*/
+	O_GID,                  /* u32 = id			*/
+	O_ESTAB,                /* none (tcp established)	*/
+	O_TCPFLAGS,             /* arg1 = 2*u8 bitmap		*/
+	O_TCPWIN,               /* arg1 = desired win		*/
+	O_TCPSEQ,               /* u32 = desired seq.		*/
+	O_TCPACK,               /* u32 = desired seq.		*/
+	O_ICMPTYPE,             /* u32 = icmp bitmap		*/
+	O_TCPOPTS,              /* arg1 = 2*u8 bitmap		*/
 
-	O_VERREVPATH,		/* none				*/
+	O_VERREVPATH,           /* none				*/
 
-	O_PROBE_STATE,		/* none				*/
-	O_KEEP_STATE,		/* none				*/
-	O_LIMIT,		/* ipfw_insn_limit		*/
-	O_LIMIT_PARENT,		/* dyn_type, not an opcode.	*/
+	O_PROBE_STATE,          /* none				*/
+	O_KEEP_STATE,           /* none				*/
+	O_LIMIT,                /* ipfw_insn_limit		*/
+	O_LIMIT_PARENT,         /* dyn_type, not an opcode.	*/
 
 	/*
 	 * These are really 'actions'.
 	 */
 
-	O_LOG,			/* ipfw_insn_log		*/
-	O_PROB,			/* u32 = match probability	*/
+	O_LOG,                  /* ipfw_insn_log		*/
+	O_PROB,                 /* u32 = match probability	*/
 
-	O_CHECK_STATE,		/* none				*/
-	O_ACCEPT,		/* none				*/
-	O_DENY,			/* none 			*/
-	O_REJECT,		/* arg1=icmp arg (same as deny)	*/
-	O_COUNT,		/* none				*/
-	O_SKIPTO,		/* arg1=next rule number	*/
-	O_PIPE,			/* arg1=pipe number		*/
-	O_QUEUE,		/* arg1=queue number		*/
-	O_DIVERT,		/* arg1=port number		*/
-	O_TEE,			/* arg1=port number		*/
-	O_FORWARD_IP,		/* fwd sockaddr			*/
-	O_FORWARD_MAC,		/* fwd mac			*/
+	O_CHECK_STATE,          /* none				*/
+	O_ACCEPT,               /* none				*/
+	O_DENY,                 /* none                         */
+	O_REJECT,               /* arg1=icmp arg (same as deny)	*/
+	O_COUNT,                /* none				*/
+	O_SKIPTO,               /* arg1=next rule number	*/
+	O_PIPE,                 /* arg1=pipe number		*/
+	O_QUEUE,                /* arg1=queue number		*/
+	O_DIVERT,               /* arg1=port number		*/
+	O_TEE,                  /* arg1=port number		*/
+	O_FORWARD_IP,           /* fwd sockaddr			*/
+	O_FORWARD_MAC,          /* fwd mac			*/
 
 	/*
 	 * More opcodes.
 	 */
-	O_IPSEC,		/* has ipsec history		*/
+	O_IPSEC,                /* has ipsec history		*/
 
-	O_LAST_OPCODE		/* not an opcode!		*/
+	O_LAST_OPCODE           /* not an opcode!		*/
 };
 
 /*
@@ -221,47 +221,47 @@ enum ipfw_opcodes {		/* arguments (4 byte each)	*/
  * this needs to be fixed.
  *
  */
-typedef struct	_ipfw_insn {	/* template for instructions */
-	enum ipfw_opcodes	opcode:8;
-	u_int8_t	len;	/* numer of 32-byte words */
-#define	F_NOT		0x80
-#define	F_OR		0x40
-#define	F_LEN_MASK	0x3f
-#define	F_LEN(cmd)	((cmd)->len & F_LEN_MASK)
+typedef struct  _ipfw_insn {    /* template for instructions */
+	enum ipfw_opcodes       opcode:8;
+	u_int8_t        len;    /* numer of 32-byte words */
+#define F_NOT           0x80
+#define F_OR            0x40
+#define F_LEN_MASK      0x3f
+#define F_LEN(cmd)      ((cmd)->len & F_LEN_MASK)
 
-	u_int16_t	arg1;
+	u_int16_t       arg1;
 } ipfw_insn;
 
 /*
  * The F_INSN_SIZE(type) computes the size, in 4-byte words, of
  * a given type.
  */
-#define	F_INSN_SIZE(t)	((sizeof (t))/sizeof(u_int32_t))
+#define F_INSN_SIZE(t)  ((sizeof (t))/sizeof(u_int32_t))
 
 /*
  * This is used to store an array of 16-bit entries (ports etc.)
  */
-typedef struct	_ipfw_insn_u16 {
+typedef struct  _ipfw_insn_u16 {
 	ipfw_insn o;
-	u_int16_t ports[2];	/* there may be more */
+	u_int16_t ports[2];     /* there may be more */
 } ipfw_insn_u16;
 
 /*
  * This is used to store an array of 32-bit entries
  * (uid, single IPv4 addresses etc.)
  */
-typedef struct	_ipfw_insn_u32 {
+typedef struct  _ipfw_insn_u32 {
 	ipfw_insn o;
-	u_int32_t d[1];	/* one or more */
+	u_int32_t d[1]; /* one or more */
 } ipfw_insn_u32;
 
 /*
  * This is used to store IP addr-mask pairs.
  */
-typedef struct	_ipfw_insn_ip {
+typedef struct  _ipfw_insn_ip {
 	ipfw_insn o;
-	struct in_addr	addr;
-	struct in_addr	mask;
+	struct in_addr  addr;
+	struct in_addr  mask;
 } ipfw_insn_ip;
 
 /*
@@ -275,16 +275,16 @@ typedef struct  _ipfw_insn_sa {
 /*
  * This is used for MAC addr-mask pairs.
  */
-typedef struct	_ipfw_insn_mac {
+typedef struct  _ipfw_insn_mac {
 	ipfw_insn o;
-	u_char addr[12];	/* dst[6] + src[6] */
-	u_char mask[12];	/* dst[6] + src[6] */
+	u_char addr[12];        /* dst[6] + src[6] */
+	u_char mask[12];        /* dst[6] + src[6] */
 } ipfw_insn_mac;
 
 /*
  * This is used for interface match rules (recv xx, xmit xx).
  */
-typedef struct	_ipfw_insn_if {
+typedef struct  _ipfw_insn_if {
 	ipfw_insn o;
 	union {
 		struct in_addr ip;
@@ -301,22 +301,22 @@ typedef struct	_ipfw_insn_if {
  * be unaligned in the overall structure, so it needs to be
  * manipulated with care.
  */
-typedef struct	_ipfw_insn_pipe {
-	ipfw_insn	o;
-	void		*pipe_ptr;	/* XXX */
+typedef struct  _ipfw_insn_pipe {
+	ipfw_insn       o;
+	void            *pipe_ptr;      /* XXX */
 } ipfw_insn_pipe;
 
 /*
  * This is used for limit rules.
  */
-typedef struct	_ipfw_insn_limit {
+typedef struct  _ipfw_insn_limit {
 	ipfw_insn o;
 	u_int8_t _pad;
-	u_int8_t limit_mask;	/* combination of DYN_* below	*/
-#define	DYN_SRC_ADDR	0x1
-#define	DYN_SRC_PORT	0x2
-#define	DYN_DST_ADDR	0x4
-#define	DYN_DST_PORT	0x8
+	u_int8_t limit_mask;    /* combination of DYN_* below	*/
+#define DYN_SRC_ADDR    0x1
+#define DYN_SRC_PORT    0x2
+#define DYN_DST_ADDR    0x4
+#define DYN_DST_PORT    0x8
 
 	u_int16_t conn_limit;
 } ipfw_insn_limit;
@@ -325,17 +325,17 @@ typedef struct	_ipfw_insn_limit {
  * This is used for log instructions.
  */
 typedef struct  _ipfw_insn_log {
-        ipfw_insn o;
-	u_int32_t max_log;	/* how many do we log -- 0 = all */
-	u_int32_t log_left;	/* how many left to log 	*/
+	ipfw_insn o;
+	u_int32_t max_log;      /* how many do we log -- 0 = all */
+	u_int32_t log_left;     /* how many left to log         */
 } ipfw_insn_log;
 
 /* Version of this API */
-#define IP_FW_VERSION_NONE 0 
-#define IP_FW_VERSION_0 10	/* old ipfw */
-#define IP_FW_VERSION_1 20	/* ipfw in Jaguar/Panther */
-#define IP_FW_VERSION_2 30	/* ipfw2 */
-#define IP_FW_CURRENT_API_VERSION IP_FW_VERSION_2 
+#define IP_FW_VERSION_NONE 0
+#define IP_FW_VERSION_0 10      /* old ipfw */
+#define IP_FW_VERSION_1 20      /* ipfw in Jaguar/Panther */
+#define IP_FW_VERSION_2 30      /* ipfw2 */
+#define IP_FW_CURRENT_API_VERSION IP_FW_VERSION_2
 
 /*
  * Here we have the structure representing an ipfw rule.
@@ -358,40 +358,40 @@ typedef struct  _ipfw_insn_log {
  *	(at ACTION_PTR(r)) MUST be O_LOG
  *
  * NOTE: we use a simple linked list of rules because we never need
- * 	to delete a rule without scanning the list. We do not use
+ *      to delete a rule without scanning the list. We do not use
  *	queue(3) macros for portability and readability.
  */
 
 struct ip_fw {
-	u_int32_t version;		/* Version of this structure. MUST be set */
-							/* by clients. Should always be */
-							/* set to IP_FW_CURRENT_API_VERSION. */
-	void *context;			/* Context that is usable by user processes to */
-							/* identify this rule. */
-	struct ip_fw	*next;		/* linked list of rules		*/
-	struct ip_fw	*next_rule;	/* ptr to next [skipto] rule	*/
+	u_int32_t version;              /* Version of this structure. MUST be set */
+	/* by clients. Should always be */
+	/* set to IP_FW_CURRENT_API_VERSION. */
+	void *context;                  /* Context that is usable by user processes to */
+	/* identify this rule. */
+	struct ip_fw    *next;          /* linked list of rules		*/
+	struct ip_fw    *next_rule;     /* ptr to next [skipto] rule	*/
 	/* 'next_rule' is used to pass up 'set_disable' status		*/
 
-	u_int16_t	act_ofs;	/* offset of action in 32-bit units */
-	u_int16_t	cmd_len;	/* # of 32-bit words in cmd	*/
-	u_int16_t	rulenum;	/* rule number			*/
-	u_int8_t	set;		/* rule set (0..31)		*/
-	u_int32_t	set_masks[2];	/* masks for manipulating sets atomically */
-#define	RESVD_SET	31	/* set for default and persistent rules */
-	u_int8_t	_pad;		/* padding			*/
+	u_int16_t       act_ofs;        /* offset of action in 32-bit units */
+	u_int16_t       cmd_len;        /* # of 32-bit words in cmd	*/
+	u_int16_t       rulenum;        /* rule number			*/
+	u_int8_t        set;            /* rule set (0..31)		*/
+	u_int32_t       set_masks[2];   /* masks for manipulating sets atomically */
+#define RESVD_SET       31      /* set for default and persistent rules */
+	u_int8_t        _pad;           /* padding			*/
 
 	/* These fields are present in all rules.			*/
-	u_int64_t	pcnt;		/* Packet counter		*/
-	u_int64_t	bcnt;		/* Byte counter			*/
-	u_int32_t	timestamp;	/* tv_sec of last match		*/
-	
-	u_int32_t	reserved_1;	/* reserved - set to 0 */
-	u_int32_t	reserved_2;	/* reserved - set to 0 */
+	u_int64_t       pcnt;           /* Packet counter		*/
+	u_int64_t       bcnt;           /* Byte counter			*/
+	u_int32_t       timestamp;      /* tv_sec of last match		*/
 
-	ipfw_insn	cmd[1];		/* storage for commands		*/
+	u_int32_t       reserved_1;     /* reserved - set to 0 */
+	u_int32_t       reserved_2;     /* reserved - set to 0 */
+
+	ipfw_insn       cmd[1];         /* storage for commands		*/
 };
 
-#define ACTION_PTR(rule)				\
+#define ACTION_PTR(rule)                                \
 	(ipfw_insn *)( (u_int32_t *)((rule)->cmd) + ((rule)->act_ofs) )
 
 #define RULESIZE(rule)  (sizeof(struct ip_fw) + \
@@ -402,12 +402,12 @@ struct ip_fw {
  * parts of the code.
  */
 struct ipfw_flow_id {
-	u_int32_t	dst_ip;
-	u_int32_t	src_ip;
-	u_int16_t	dst_port;
-	u_int16_t	src_port;
-	u_int8_t	proto;
-	u_int8_t	flags;	/* protocol-specific flags */
+	u_int32_t       dst_ip;
+	u_int32_t       src_ip;
+	u_int16_t       dst_port;
+	u_int16_t       src_port;
+	u_int8_t        proto;
+	u_int8_t        flags;  /* protocol-specific flags */
 };
 
 /*
@@ -420,8 +420,8 @@ typedef struct _ipfw_dyn_rule ipfw_dyn_rule;
 #include <netinet/ip_flowid.h>
 
 /*
- * Note: 
- * The internal version of "struct _ipfw_dyn_rule" differs from 
+ * Note:
+ * The internal version of "struct _ipfw_dyn_rule" differs from
  * its external version because the field "id" is of type
  * "struct ip_flow_id" in the internal version. The type of the
  * field "id" for the external version is "ipfw_dyn_rule for
@@ -429,66 +429,66 @@ typedef struct _ipfw_dyn_rule ipfw_dyn_rule;
  */
 
 struct _ipfw_dyn_rule {
-	ipfw_dyn_rule	*next;		/* linked list of rules.	*/
-	struct ip_fw *rule;		/* pointer to rule		*/
+	ipfw_dyn_rule   *next;          /* linked list of rules.	*/
+	struct ip_fw *rule;             /* pointer to rule		*/
 	/* 'rule' is used to pass up the rule number (from the parent)	*/
 
-	ipfw_dyn_rule *parent;		/* pointer to parent rule	*/
-	u_int64_t	pcnt;		/* packet match counter		*/
-	u_int64_t	bcnt;		/* byte match counter		*/
-	struct ip_flow_id id;		/* (masked) flow id		*/
-	u_int32_t	expire;		/* expire time			*/
-	u_int32_t	bucket;		/* which bucket in hash table	*/
-	u_int32_t	state;		/* state of this rule (typically a
-					 * combination of TCP flags)
-					 */
-	u_int32_t	ack_fwd;	/* most recent ACKs in forward	*/
-	u_int32_t	ack_rev;	/* and reverse directions (used	*/
-					/* to generate keepalives)	*/
-	u_int16_t	dyn_type;	/* rule type			*/
-	u_int16_t	count;		/* refcount			*/
+	ipfw_dyn_rule *parent;          /* pointer to parent rule	*/
+	u_int64_t       pcnt;           /* packet match counter		*/
+	u_int64_t       bcnt;           /* byte match counter		*/
+	struct ip_flow_id id;           /* (masked) flow id		*/
+	u_int32_t       expire;         /* expire time			*/
+	u_int32_t       bucket;         /* which bucket in hash table	*/
+	u_int32_t       state;          /* state of this rule (typically a
+	                                 * combination of TCP flags)
+	                                 */
+	u_int32_t       ack_fwd;        /* most recent ACKs in forward	*/
+	u_int32_t       ack_rev;        /* and reverse directions (used	*/
+	                                /* to generate keepalives)	*/
+	u_int16_t       dyn_type;       /* rule type			*/
+	u_int16_t       count;          /* refcount			*/
 };
 #else /* XNU_KERNEL_PRIVATE */
 struct _ipfw_dyn_rule {
-	ipfw_dyn_rule	*next;		/* linked list of rules.	*/
-	struct ip_fw *rule;		/* pointer to rule		*/
+	ipfw_dyn_rule   *next;          /* linked list of rules.	*/
+	struct ip_fw *rule;             /* pointer to rule		*/
 	/* 'rule' is used to pass up the rule number (from the parent)	*/
 
-	ipfw_dyn_rule *parent;		/* pointer to parent rule	*/
-	u_int64_t	pcnt;		/* packet match counter		*/
-	u_int64_t	bcnt;		/* byte match counter		*/
-	struct ipfw_flow_id id;		/* (masked) flow id		*/
-	u_int32_t	expire;		/* expire time			*/
-	u_int32_t	bucket;		/* which bucket in hash table	*/
-	u_int32_t	state;		/* state of this rule (typically a
-					 * combination of TCP flags)
-					 */
-	u_int32_t	ack_fwd;	/* most recent ACKs in forward	*/
-	u_int32_t	ack_rev;	/* and reverse directions (used	*/
-					/* to generate keepalives)	*/
-	u_int16_t	dyn_type;	/* rule type			*/
-	u_int16_t	count;		/* refcount			*/
+	ipfw_dyn_rule *parent;          /* pointer to parent rule	*/
+	u_int64_t       pcnt;           /* packet match counter		*/
+	u_int64_t       bcnt;           /* byte match counter		*/
+	struct ipfw_flow_id id;         /* (masked) flow id		*/
+	u_int32_t       expire;         /* expire time			*/
+	u_int32_t       bucket;         /* which bucket in hash table	*/
+	u_int32_t       state;          /* state of this rule (typically a
+	                                 * combination of TCP flags)
+	                                 */
+	u_int32_t       ack_fwd;        /* most recent ACKs in forward	*/
+	u_int32_t       ack_rev;        /* and reverse directions (used	*/
+	                                /* to generate keepalives)	*/
+	u_int16_t       dyn_type;       /* rule type			*/
+	u_int16_t       count;          /* refcount			*/
 };
 #endif /* XNU_KERNEL_PRIVATE */
 
 /*
  * Definitions for IP option names.
  */
-#define	IP_FW_IPOPT_LSRR	0x01
-#define	IP_FW_IPOPT_SSRR	0x02
-#define	IP_FW_IPOPT_RR		0x04
-#define	IP_FW_IPOPT_TS		0x08
+#define IP_FW_IPOPT_LSRR        0x01
+#define IP_FW_IPOPT_SSRR        0x02
+#define IP_FW_IPOPT_RR          0x04
+#define IP_FW_IPOPT_TS          0x08
 
 /*
  * Definitions for TCP option names.
  */
-#define	IP_FW_TCPOPT_MSS	0x01
-#define	IP_FW_TCPOPT_WINDOW	0x02
-#define	IP_FW_TCPOPT_SACK	0x04
-#define	IP_FW_TCPOPT_TS		0x08
-#define	IP_FW_TCPOPT_CC		0x10
+#define IP_FW_TCPOPT_MSS        0x01
+#define IP_FW_TCPOPT_WINDOW     0x02
+#define IP_FW_TCPOPT_SACK       0x04
+#define IP_FW_TCPOPT_TS         0x08
+#define IP_FW_TCPOPT_CC         0x10
 
-#define	ICMP_REJECT_RST		0x100	/* fake ICMP code (send a TCP RST) */
+#define ICMP_REJECT_RST         0x100   /* fake ICMP code (send a TCP RST) */
 
 /*
  * Main firewall chains definitions and global var's definitions.
@@ -496,64 +496,64 @@ struct _ipfw_dyn_rule {
 #ifdef BSD_KERNEL_PRIVATE
 
 #pragma pack(4)
-struct ip_fw_32{
-        u_int32_t version;              /* Version of this structure. MUST be set */
- 										/* by clients. Should always be */
-										/* set to IP_FW_CURRENT_API_VERSION. */
-		user32_addr_t 	context;		/* Context that is usable by user processes to */
-										/* identify this rule. */
-        user32_addr_t	next;			/* linked list of rules         */
-        user32_addr_t	next_rule;/* ptr to next [skipto] rule    */
-										/* 'next_rule' is used to pass up 'set_disable' status          */
+struct ip_fw_32 {
+	u_int32_t version;              /* Version of this structure. MUST be set */
+	/* by clients. Should always be */
+	/* set to IP_FW_CURRENT_API_VERSION. */
+	user32_addr_t   context;                        /* Context that is usable by user processes to */
+	/* identify this rule. */
+	user32_addr_t   next;                   /* linked list of rules         */
+	user32_addr_t   next_rule;/* ptr to next [skipto] rule    */
+	/* 'next_rule' is used to pass up 'set_disable' status          */
 
-        u_int16_t       act_ofs;		/* offset of action in 32-bit units */
-        u_int16_t       cmd_len;        /* # of 32-bit words in cmd     */
-        u_int16_t       rulenum;        /* rule number                  */
-        u_int8_t        set;            /* rule set (0..31)             */
-        u_int32_t       set_masks[2];   /* masks for manipulating sets atomically */
+	u_int16_t       act_ofs;                /* offset of action in 32-bit units */
+	u_int16_t       cmd_len;        /* # of 32-bit words in cmd     */
+	u_int16_t       rulenum;        /* rule number                  */
+	u_int8_t        set;            /* rule set (0..31)             */
+	u_int32_t       set_masks[2];   /* masks for manipulating sets atomically */
 #define RESVD_SET       31      /* set for default and persistent rules */
-        u_int8_t        _pad;           /* padding                      */
+	u_int8_t        _pad;           /* padding                      */
 
-        /* These fields are present in all rules.                       */
-        u_int64_t       pcnt;           /* Packet counter               */
-        u_int64_t       bcnt;           /* Byte counter                 */
-        u_int32_t       timestamp;      /* tv_sec of last match         */
+	/* These fields are present in all rules.                       */
+	u_int64_t       pcnt;           /* Packet counter               */
+	u_int64_t       bcnt;           /* Byte counter                 */
+	u_int32_t       timestamp;      /* tv_sec of last match         */
 
-        u_int32_t       reserved_1;     /* reserved - set to 0 */
-        u_int32_t       reserved_2;     /* reserved - set to 0 */
+	u_int32_t       reserved_1;     /* reserved - set to 0 */
+	u_int32_t       reserved_2;     /* reserved - set to 0 */
 
-        ipfw_insn       cmd[1];         /* storage for commands         */
+	ipfw_insn       cmd[1];         /* storage for commands         */
 };
 
 #pragma pack()
 
-struct ip_fw_64{
-        u_int32_t version;              /* Version of this structure. MUST be set */
-										/* by clients. Should always be */
-										/* set to IP_FW_CURRENT_API_VERSION. */
-		__uint64_t context __attribute__((aligned(8))); /* Context that is usable by user processes to */
-                                                        /* identify this rule. */
-        user64_addr_t	next;          /* linked list of rules         */
-        user64_addr_t	next_rule;     /* ptr to next [skipto] rule    */
-        /* 'next_rule' is used to pass up 'set_disable' status          */
+struct ip_fw_64 {
+	u_int32_t version;              /* Version of this structure. MUST be set */
+	/* by clients. Should always be */
+	/* set to IP_FW_CURRENT_API_VERSION. */
+	__uint64_t context __attribute__((aligned(8)));         /* Context that is usable by user processes to */
+	/* identify this rule. */
+	user64_addr_t   next;          /* linked list of rules         */
+	user64_addr_t   next_rule;     /* ptr to next [skipto] rule    */
+	/* 'next_rule' is used to pass up 'set_disable' status          */
 
-        u_int16_t       act_ofs;        /* offset of action in 32-bit units */
-        u_int16_t       cmd_len;        /* # of 32-bit words in cmd     */
-        u_int16_t       rulenum;        /* rule number                  */
-        u_int8_t        set;            /* rule set (0..31)             */
-        u_int32_t       set_masks[2];   /* masks for manipulating sets atomically */
+	u_int16_t       act_ofs;        /* offset of action in 32-bit units */
+	u_int16_t       cmd_len;        /* # of 32-bit words in cmd     */
+	u_int16_t       rulenum;        /* rule number                  */
+	u_int8_t        set;            /* rule set (0..31)             */
+	u_int32_t       set_masks[2];   /* masks for manipulating sets atomically */
 #define RESVD_SET       31      /* set for default and persistent rules */
-        u_int8_t        _pad;           /* padding                      */
+	u_int8_t        _pad;           /* padding                      */
 
-        /* These fields are present in all rules.                       */
-        u_int64_t       pcnt __attribute__((aligned(8)));	/* Packet counter               */
-        u_int64_t       bcnt __attribute__((aligned(8)));      /* Byte counter                 */
-        u_int32_t       timestamp;      /* tv_sec of last match         */
+	/* These fields are present in all rules.                       */
+	u_int64_t       pcnt __attribute__((aligned(8)));       /* Packet counter               */
+	u_int64_t       bcnt __attribute__((aligned(8)));      /* Byte counter                 */
+	u_int32_t       timestamp;      /* tv_sec of last match         */
 
-        u_int32_t       reserved_1;     /* reserved - set to 0 */
-        u_int32_t       reserved_2;     /* reserved - set to 0 */
+	u_int32_t       reserved_1;     /* reserved - set to 0 */
+	u_int32_t       reserved_2;     /* reserved - set to 0 */
 
-        ipfw_insn       cmd[1];         /* storage for commands         */
+	ipfw_insn       cmd[1];         /* storage for commands         */
 };
 
 
@@ -562,58 +562,58 @@ typedef struct _ipfw_dyn_rule_32 ipfw_dyn_rule_32;
 
 #pragma pack(4)
 struct _ipfw_dyn_rule_32 {
-        user32_addr_t	next;			/* linked list of rules.        */
-        user32_addr_t	rule;			/* pointer to rule              */
-        /* 'rule' is used to pass up the rule number (from the parent)  */
+	user32_addr_t   next;                   /* linked list of rules.        */
+	user32_addr_t   rule;                   /* pointer to rule              */
+	/* 'rule' is used to pass up the rule number (from the parent)  */
 
-        user32_addr_t	parent;          /* pointer to parent rule       */
-        u_int64_t       pcnt;           /* packet match counter         */
-        u_int64_t       bcnt;           /* byte match counter           */
-        struct ipfw_flow_id id;         /* (masked) flow id             */
-        u_int32_t       expire;         /* expire time                  */
-        u_int32_t       bucket;         /* which bucket in hash table   */
-        u_int32_t       state;          /* state of this rule (typically a
-                                         * combination of TCP flags)
-                                         */
-        u_int32_t       ack_fwd;        /* most recent ACKs in forward  */
-        u_int32_t       ack_rev;        /* and reverse directions (used */
-                                        /* to generate keepalives)      */
-        u_int16_t       dyn_type;       /* rule type                    */
-        u_int16_t       count;          /* refcount                     */
+	user32_addr_t   parent;          /* pointer to parent rule       */
+	u_int64_t       pcnt;           /* packet match counter         */
+	u_int64_t       bcnt;           /* byte match counter           */
+	struct ipfw_flow_id id;         /* (masked) flow id             */
+	u_int32_t       expire;         /* expire time                  */
+	u_int32_t       bucket;         /* which bucket in hash table   */
+	u_int32_t       state;          /* state of this rule (typically a
+	                                 * combination of TCP flags)
+	                                 */
+	u_int32_t       ack_fwd;        /* most recent ACKs in forward  */
+	u_int32_t       ack_rev;        /* and reverse directions (used */
+	                                /* to generate keepalives)      */
+	u_int16_t       dyn_type;       /* rule type                    */
+	u_int16_t       count;          /* refcount                     */
 };
 
 #pragma pack()
 
 struct _ipfw_dyn_rule_64 {
-        user64_addr_t	next;          /* linked list of rules.        */
-        user64_addr_t	rule;             /* pointer to rule              */
-        /* 'rule' is used to pass up the rule number (from the parent)  */
+	user64_addr_t   next;          /* linked list of rules.        */
+	user64_addr_t   rule;             /* pointer to rule              */
+	/* 'rule' is used to pass up the rule number (from the parent)  */
 
-        user64_addr_t	parent;          /* pointer to parent rule       */
-        u_int64_t       pcnt;           /* packet match counter         */
-        u_int64_t       bcnt;           /* byte match counter           */
-        struct ipfw_flow_id id;         /* (masked) flow id             */
-        u_int32_t       expire;         /* expire time                  */
-        u_int32_t       bucket;         /* which bucket in hash table   */
-        u_int32_t       state;          /* state of this rule (typically a
-                                         * combination of TCP flags)
-                                         */
-        u_int32_t       ack_fwd;        /* most recent ACKs in forward  */
-        u_int32_t       ack_rev;        /* and reverse directions (used */
-                                        /* to generate keepalives)      */
-        u_int16_t       dyn_type;       /* rule type                    */
-        u_int16_t       count;          /* refcount                     */
+	user64_addr_t   parent;          /* pointer to parent rule       */
+	u_int64_t       pcnt;           /* packet match counter         */
+	u_int64_t       bcnt;           /* byte match counter           */
+	struct ipfw_flow_id id;         /* (masked) flow id             */
+	u_int32_t       expire;         /* expire time                  */
+	u_int32_t       bucket;         /* which bucket in hash table   */
+	u_int32_t       state;          /* state of this rule (typically a
+	                                 * combination of TCP flags)
+	                                 */
+	u_int32_t       ack_fwd;        /* most recent ACKs in forward  */
+	u_int32_t       ack_rev;        /* and reverse directions (used */
+	                                /* to generate keepalives)      */
+	u_int16_t       dyn_type;       /* rule type                    */
+	u_int16_t       count;          /* refcount                     */
 };
 
 
 typedef struct  _ipfw_insn_pipe_64 {
-        ipfw_insn       o;
-        user64_addr_t	pipe_ptr;      /* XXX */
+	ipfw_insn       o;
+	user64_addr_t   pipe_ptr;      /* XXX */
 } ipfw_insn_pipe_64;
 
-typedef struct  _ipfw_insn_pipe_32{
-        ipfw_insn       o;
-        user32_addr_t	pipe_ptr;      /* XXX */
+typedef struct  _ipfw_insn_pipe_32 {
+	ipfw_insn       o;
+	user32_addr_t   pipe_ptr;      /* XXX */
 } ipfw_insn_pipe_32;
 
 
@@ -621,9 +621,9 @@ typedef struct  _ipfw_insn_pipe_32{
 
 #if IPFIREWALL
 
-#define	IP_FW_PORT_DYNT_FLAG	0x10000
-#define	IP_FW_PORT_TEE_FLAG	0x20000
-#define	IP_FW_PORT_DENY_FLAG	0x40000
+#define IP_FW_PORT_DYNT_FLAG    0x10000
+#define IP_FW_PORT_TEE_FLAG     0x20000
+#define IP_FW_PORT_DENY_FLAG    0x40000
 
 #ifdef PRIVATE
 #include <netinet/ip_flowid.h>
@@ -639,7 +639,7 @@ struct sockopt;
 struct dn_flow_set;
 
 void flush_pipe_ptrs(struct dn_flow_set *match); /* used by dummynet */
-void ipfw_init(void);	/* called from raw_ip.c: load_ipfw() */
+void ipfw_init(void);   /* called from raw_ip.c: load_ipfw() */
 
 typedef int ip_fw_chk_t (struct ip_fw_args *args);
 typedef int ip_fw_ctl_t (struct sockopt *);
@@ -647,7 +647,7 @@ extern ip_fw_chk_t *ip_fw_chk_ptr;
 extern ip_fw_ctl_t *ip_fw_ctl_ptr;
 extern int fw_one_pass;
 extern int fw_enable;
-#define	IPFW_LOADED	(ip_fw_chk_ptr != NULL)
+#define IPFW_LOADED     (ip_fw_chk_ptr != NULL)
 #endif /* IPFIREWALL */
 #endif /* BSD_KERNEL_PRIVATE */
 

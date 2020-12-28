@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -83,47 +83,47 @@ union nethostaddr {
 	mbuf_t had_nam;
 };
 
-#define	NFSRVCACHESIZ	64
+#define NFSRVCACHESIZ   64
 
 struct nfsrvcache {
-	TAILQ_ENTRY(nfsrvcache) rc_lru;		/* LRU chain */
-	LIST_ENTRY(nfsrvcache) rc_hash;		/* Hash chain */
-	u_int32_t	rc_xid;				/* rpc id number */
+	TAILQ_ENTRY(nfsrvcache) rc_lru;         /* LRU chain */
+	LIST_ENTRY(nfsrvcache) rc_hash;         /* Hash chain */
+	u_int32_t       rc_xid;                         /* rpc id number */
 	union {
-		mbuf_t ru_repmb;		/* Reply mbuf list OR */
-		int ru_repstat;			/* Reply status */
+		mbuf_t ru_repmb;                /* Reply mbuf list OR */
+		int ru_repstat;                 /* Reply status */
 	} rc_un;
-	sa_family_t rc_family;			/* address family */
-	union nethostaddr rc_haddr;		/* Host address */
-	u_int32_t rc_proc;			/* rpc proc number */
-	u_char	rc_state;		/* Current state of request */
-	u_char	rc_flag;		/* Flag bits */
+	sa_family_t rc_family;                  /* address family */
+	union nethostaddr rc_haddr;             /* Host address */
+	u_int32_t rc_proc;                      /* rpc proc number */
+	u_char  rc_state;               /* Current state of request */
+	u_char  rc_flag;                /* Flag bits */
 };
 
-#define	rc_reply	rc_un.ru_repmb
-#define	rc_status	rc_un.ru_repstat
-#define	rc_inetaddr	rc_haddr.had_inetaddr
-#define	rc_inet6addr	rc_haddr.had_inet6addr
-#define	rc_nam		rc_haddr.had_nam
+#define rc_reply        rc_un.ru_repmb
+#define rc_status       rc_un.ru_repstat
+#define rc_inetaddr     rc_haddr.had_inetaddr
+#define rc_inet6addr    rc_haddr.had_inet6addr
+#define rc_nam          rc_haddr.had_nam
 
 /* Cache entry states */
-#define	RC_UNUSED	0
-#define	RC_INPROG	1
-#define	RC_DONE		2
+#define RC_UNUSED       0
+#define RC_INPROG       1
+#define RC_DONE         2
 
 /* Return values */
-#define	RC_DROPIT	0
-#define	RC_REPLY	1
-#define	RC_DOIT		2
-#define	RC_CHECKIT	3
+#define RC_DROPIT       0
+#define RC_REPLY        1
+#define RC_DOIT         2
+#define RC_CHECKIT      3
 
 /* Flag bits */
-#define	RC_LOCKED	0x01
-#define	RC_WANTED	0x02
-#define	RC_REPSTATUS	0x04
-#define	RC_REPMBUF	0x08
-#define	RC_INETADDR	0x20
-#define	RC_NAM		0x40
+#define RC_LOCKED       0x01
+#define RC_WANTED       0x02
+#define RC_REPSTATUS    0x04
+#define RC_REPMBUF      0x08
+#define RC_INETADDR     0x20
+#define RC_NAM          0x40
 
 extern lck_grp_t *nfsrv_reqcache_lck_grp;
 extern lck_mtx_t *nfsrv_reqcache_mutex;

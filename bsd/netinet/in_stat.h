@@ -34,8 +34,8 @@
 #include <stdint.h>
 
 typedef struct activity_bitmap {
-	uint64_t	start;		/* Start timestamp using uptime */
-	uint64_t	bitmap[2];	/* 128 bit map, each bit == 8 sec */
+	uint64_t        start;          /* Start timestamp using uptime */
+	uint64_t        bitmap[2];      /* 128 bit map, each bit == 8 sec */
 } activity_bitmap_t;
 
 #endif /* PRIVATE */

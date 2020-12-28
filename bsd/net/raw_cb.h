@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -71,20 +71,20 @@
  */
 struct rawcb {
 	LIST_ENTRY(rawcb) list;
-	struct	socket *rcb_socket;	/* back pointer to socket */
-	struct	sockaddr *rcb_faddr;	/* destination address */
-	struct	sockaddr *rcb_laddr;	/* socket's address */
-	struct	sockproto rcb_proto;	/* protocol family, protocol */
-	uint32_t	reserved[4];		/* for future use */
+	struct  socket *rcb_socket;     /* back pointer to socket */
+	struct  sockaddr *rcb_faddr;    /* destination address */
+	struct  sockaddr *rcb_laddr;    /* socket's address */
+	struct  sockproto rcb_proto;    /* protocol family, protocol */
+	uint32_t        reserved[4];            /* for future use */
 };
 
-#define	sotorawcb(so)		((struct rawcb *)(so)->so_pcb)
+#define sotorawcb(so)           ((struct rawcb *)(so)->so_pcb)
 
 /*
  * Nominal space allocated to a raw socket.
  */
-#define	RAWSNDQ		8192
-#define	RAWRCVQ		8192
+#define RAWSNDQ         8192
+#define RAWRCVQ         8192
 
 extern LIST_HEAD(rawcb_list_head, rawcb) rawcb_list;
 
@@ -98,6 +98,6 @@ extern void raw_input(struct mbuf *, struct sockproto *, struct sockaddr *,
     struct sockaddr *);
 __END_DECLS
 
-extern	struct pr_usrreqs raw_usrreqs;
+extern  struct pr_usrreqs raw_usrreqs;
 #endif /* BSD_KERNEL_PRIVATE */
 #endif /* _NET_RAW_CB_H_ */

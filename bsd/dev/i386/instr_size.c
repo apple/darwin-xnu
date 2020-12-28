@@ -27,11 +27,6 @@
 /*	Copyright (c) 1988 AT&T	*/
 /*	  All Rights Reserved	*/
 
-
-/*
- * #pragma ident	"@(#)instr_size.c	1.14	05/07/08 SMI"
- */
-
 #include <sys/dtrace.h>
 #include <sys/dtrace_glue.h>
 
@@ -82,7 +77,7 @@ dtrace_dis_get_byte(void *p)
  * reported as having no memory impact.
  */
 /* ARGSUSED2 */
-static int
+static __attribute__((noinline)) int
 dtrace_dis_isize(uchar_t *instr, dis_isize_t which, model_t model, int *rmindex)
 {
 	int sz;

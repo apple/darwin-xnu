@@ -66,8 +66,9 @@ extern int fbt_invop(uintptr_t, uintptr_t *, uintptr_t);
 extern void fbt_provide_module(void *, struct modctl *);
 extern int fbt_enable (void *arg, dtrace_id_t id, void *parg);
 
-extern int fbt_module_excluded(struct modctl*);
-extern int fbt_excluded(const char *);
+extern bool fbt_module_excluded(struct modctl*);
+extern bool fbt_excluded(const char *);
 
+extern void fbt_blacklist_init(void);
 extern void fbt_provide_probe(struct modctl *ctl, const char *modname, const char *name, machine_inst_t *instr, machine_inst_t *limit);
 #endif /* _FBT_H */

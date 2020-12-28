@@ -2,8 +2,6 @@ OPTIONS/fb				optional fb
 
 OPTIONS/debug			optional debug
 
-OPTIONS/gprof		optional gprof
-
 osfmk/vm/vm_apple_protect.c	 standard
 
 #osfmk/x86_64/hi_res_clock_map.c 	optional hi_res_clock
@@ -85,12 +83,6 @@ osfmk/i386/acpi.c		standard
 
 osfmk/i386/mtrr.c		optional    config_mtrr
 
-
-#osfmk/profiling/x86_64/profile-md.c	optional gprof
-#osfmk/profiling/x86_64/profile-asm.s	optional gprof
-#osfmk/profiling/profile-kgmon.c		optional gprof
-#osfmk/profiling/profile-mk.c		optional gprof
-
 osfmk/kdp/ml/x86_64/kdp_machdep.c	optional	mach_kdp
 osfmk/kdp/ml/x86_64/kdp_vm.c		optional	mach_kdp
 osfmk/kdp/ml/i386/kdp_x86_common.c	optional	mach_kdp
@@ -122,3 +114,4 @@ osfmk/i386/startup64.c		standard
 osfmk/x86_64/idt64.s		standard
 
 osfmk/i386/panic_hooks.c	standard
+osfmk/x86_64/machine_remote_time.c 		optional config_mach_bridge_send_time

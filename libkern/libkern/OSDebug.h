@@ -2,7 +2,7 @@
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -42,7 +42,7 @@ __BEGIN_DECLS
 
 extern int log_leaks;
 
-/* Use kernel_debug() to log a backtrace */ 
+/* Use kernel_debug() to log a backtrace */
 extern void trace_backtrace(unsigned int debugid, unsigned int debugid2, unsigned long size, unsigned long data);
 /* Report a message with a 4 entry backtrace - very slow */
 extern void OSReportWithBacktrace(const char *str, ...);
@@ -52,18 +52,18 @@ extern unsigned OSBacktrace(void **bt, unsigned maxAddrs);
 extern void OSPrintBacktrace(void);
 
 /*! @function OSKernelStackRemaining
-    @abstract Returns bytes available below the current stack frame.
-    @discussion Returns bytes available below the current stack frame. Safe for interrupt or thread context.
-    @result Approximate byte count available. */
+ *   @abstract Returns bytes available below the current stack frame.
+ *   @discussion Returns bytes available below the current stack frame. Safe for interrupt or thread context.
+ *   @result Approximate byte count available. */
 
 vm_offset_t OSKernelStackRemaining( void );
 
 __END_DECLS
 
-#define TRACE_MACHLEAKS(a,b,c,d)	\
-do {					\
-    if (log_leaks)			\
-        trace_backtrace(a,b,c,d);	\
+#define TRACE_MACHLEAKS(a, b, c, d)        \
+do {                                    \
+    if (log_leaks)                      \
+	trace_backtrace(a,b,c,d);       \
 } while(0)
 
 #endif /* !_OS_OSDEBBUG_H */

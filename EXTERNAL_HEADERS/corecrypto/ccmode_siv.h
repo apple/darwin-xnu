@@ -56,7 +56,7 @@ CC_INLINE size_t ccsiv_block_size(const struct ccmode_siv *mode)
 CC_INLINE size_t ccsiv_ciphertext_size(const struct ccmode_siv *mode,
                                        size_t plaintext_size)
 {
-    return plaintext_size+mode->cbc->block_size;
+    return plaintext_size + mode->cbc->block_size;
 }
 
 CC_INLINE size_t ccsiv_plaintext_size(const struct ccmode_siv *mode,
@@ -65,7 +65,7 @@ CC_INLINE size_t ccsiv_plaintext_size(const struct ccmode_siv *mode,
     if (ciphertext_size<mode->cbc->block_size) {
         return 0; // error
     }
-    return ciphertext_size-mode->cbc->block_size;
+    return ciphertext_size - mode->cbc->block_size;
 }
 
 // Supported key sizes are 32, 48, 64 bytes
@@ -99,7 +99,6 @@ CC_INLINE int ccsiv_crypt(const struct ccmode_siv *mode, ccsiv_ctx *ctx,
 }
 
 // Clear all context for reuse.
-// Key is clear to avoid leaking it
 CC_INLINE int ccsiv_reset(const struct ccmode_siv *mode, ccsiv_ctx *ctx)
 {
     return mode->reset(ctx);

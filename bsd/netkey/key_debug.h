@@ -34,29 +34,29 @@
 #include <sys/appleapiopts.h>
 
 /* debug flags */
-#define KEYDEBUG_STAMP		0x00000001 /* path */
-#define KEYDEBUG_DATA		0x00000002 /* data */
-#define KEYDEBUG_DUMP		0x00000004 /* dump */
+#define KEYDEBUG_STAMP          0x00000001 /* path */
+#define KEYDEBUG_DATA           0x00000002 /* data */
+#define KEYDEBUG_DUMP           0x00000004 /* dump */
 
-#define KEYDEBUG_KEY		0x00000010 /* key processing */
-#define KEYDEBUG_ALG		0x00000020 /* ciph & auth algorithm */
-#define KEYDEBUG_IPSEC		0x00000040 /* ipsec processing */
+#define KEYDEBUG_KEY            0x00000010 /* key processing */
+#define KEYDEBUG_ALG            0x00000020 /* ciph & auth algorithm */
+#define KEYDEBUG_IPSEC          0x00000040 /* ipsec processing */
 
-#define KEYDEBUG_KEY_STAMP	(KEYDEBUG_KEY | KEYDEBUG_STAMP)
-#define KEYDEBUG_KEY_DATA	(KEYDEBUG_KEY | KEYDEBUG_DATA)
-#define KEYDEBUG_KEY_DUMP	(KEYDEBUG_KEY | KEYDEBUG_DUMP)
-#define KEYDEBUG_ALG_STAMP	(KEYDEBUG_ALG | KEYDEBUG_STAMP)
-#define KEYDEBUG_ALG_DATA	(KEYDEBUG_ALG | KEYDEBUG_DATA)
-#define KEYDEBUG_ALG_DUMP	(KEYDEBUG_ALG | KEYDEBUG_DUMP)
-#define KEYDEBUG_IPSEC_STAMP	(KEYDEBUG_IPSEC | KEYDEBUG_STAMP)
-#define KEYDEBUG_IPSEC_DATA	(KEYDEBUG_IPSEC | KEYDEBUG_DATA)
-#define KEYDEBUG_IPSEC_DUMP	(KEYDEBUG_IPSEC | KEYDEBUG_DUMP)
+#define KEYDEBUG_KEY_STAMP      (KEYDEBUG_KEY | KEYDEBUG_STAMP)
+#define KEYDEBUG_KEY_DATA       (KEYDEBUG_KEY | KEYDEBUG_DATA)
+#define KEYDEBUG_KEY_DUMP       (KEYDEBUG_KEY | KEYDEBUG_DUMP)
+#define KEYDEBUG_ALG_STAMP      (KEYDEBUG_ALG | KEYDEBUG_STAMP)
+#define KEYDEBUG_ALG_DATA       (KEYDEBUG_ALG | KEYDEBUG_DATA)
+#define KEYDEBUG_ALG_DUMP       (KEYDEBUG_ALG | KEYDEBUG_DUMP)
+#define KEYDEBUG_IPSEC_STAMP    (KEYDEBUG_IPSEC | KEYDEBUG_STAMP)
+#define KEYDEBUG_IPSEC_DATA     (KEYDEBUG_IPSEC | KEYDEBUG_DATA)
+#define KEYDEBUG_IPSEC_DUMP     (KEYDEBUG_IPSEC | KEYDEBUG_DUMP)
 
 #if 0
-#define KEYDEBUG(lev,arg) \
+#define KEYDEBUG(lev, arg) \
 	do { if ((key_debug_level & (lev)) == (lev)) { arg; } } while (0)
 #else
-#define KEYDEBUG(lev,arg)
+#define KEYDEBUG(lev, arg)
 #endif
 
 struct sadb_msg;
@@ -89,4 +89,3 @@ extern void ipsec_bindump(caddr_t, int);
 
 
 #endif /* _NETKEY_KEY_DEBUG_H_ */
-

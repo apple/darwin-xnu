@@ -27,7 +27,7 @@
  */
 
 #ifndef _NET_FLOWHASH_H_
-#define	_NET_FLOWHASH_H_
+#define _NET_FLOWHASH_H_
 
 #include <sys/types.h>
 
@@ -39,7 +39,7 @@ extern "C" {
  * If 32-bit hash value is too large, use this macro to truncate
  * it to n-bit; masking is a faster operation than modulus.
  */
-#define	HASHMASK(n)	((1UL << (n)) - 1)
+#define HASHMASK(n)     ((1UL << (n)) - 1)
 
 /*
  * Returns 32-bit hash value.  Hashes which are capable of returning

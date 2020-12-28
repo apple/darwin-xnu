@@ -32,13 +32,17 @@
 #include <sys/param.h>
 
 enum {
-	PERSONA_INVALID = 0,
-	PERSONA_GUEST   = 1,
-	PERSONA_MANAGED = 2,
-	PERSONA_PRIV    = 3,
-	PERSONA_SYSTEM  = 4,
+	PERSONA_INVALID      = 0,
+	PERSONA_GUEST        = 1,
+	PERSONA_MANAGED      = 2,
+	PERSONA_PRIV         = 3,
+	PERSONA_SYSTEM       = 4,
+	PERSONA_DEFAULT      = 5,
+	PERSONA_SYSTEM_PROXY = 6,
+	PERSONA_SYS_EXT      = 7,
+	PERSONA_ENTERPRISE   = 8,
 
-	PERSONA_TYPE_MAX = PERSONA_SYSTEM,
+	PERSONA_TYPE_MAX     = PERSONA_ENTERPRISE,
 };
 
 #define PERSONA_ID_NONE ((uid_t)-1)
@@ -52,7 +56,7 @@ struct kpersona_info {
 	uint32_t persona_ngroups;
 	gid_t    persona_groups[NGROUPS];
 	uid_t    persona_gmuid;
-	char     persona_name[MAXLOGNAME+1];
+	char     persona_name[MAXLOGNAME + 1];
 
 	/* TODO: MAC policies?! */
 };
@@ -62,11 +66,16 @@ struct kpersona_info {
 
 
 #define PERSONA_OP_ALLOC    1
-#define PERSONA_OP_DEALLOC  2
-#define PERSONA_OP_GET      3
-#define PERSONA_OP_INFO     4
-#define PERSONA_OP_PIDINFO  5
-#define PERSONA_OP_FIND     6
+#define PERSONA_OP_PALLOC   2
+#define PERSONA_OP_DEALLOC  3
+#define PERSONA_OP_GET      4
+#define PERSONA_OP_INFO     5
+#define PERSONA_OP_PIDINFO  6
+#define PERSONA_OP_FIND     7
+#define PERSONA_OP_GETPATH  8
+#define PERSONA_OP_FIND_BY_TYPE  9
+
+#define PERSONA_MGMT_ENTITLEMENT "com.apple.private.persona-mgmt"
 
 #ifndef KERNEL
 /*
@@ -92,6 +101,29 @@ struct kpersona_info {
 int kpersona_alloc(struct kpersona_info *info, uid_t *id);
 
 /*
+ * kpersona_palloc: Allocate a new in-kernel persona with a directory
+ *                 pathname
+ *
+ * Parameters:
+ *       info: Pointer to persona info structure describing the
+ *             attributes of the persona to create / allocate.
+ *
+ *       path: Pointer to directory name that stores persona specific
+ *             data. Assumes path buffer length = MAXPATHLEN and is a
+ *             null-terminated string.
+ *
+ *         id: output: set to the ID of the created persona
+ *
+ * Note:
+ *      The 'persona_id' field of the 'info' parameter is ignored.
+ *
+ * Return:
+ *        != 0: ERROR
+ *        == 0: Success
+ */
+int kpersona_palloc(struct kpersona_info *info, uid_t *id, char path[MAXPATHLEN]);
+
+/*
  * kpersona_dealloc: delete / destroy an in-kernel persona
  *
  * Parameters:
@@ -103,13 +135,15 @@ int kpersona_alloc(struct kpersona_info *info, uid_t *id);
  */
 int kpersona_dealloc(uid_t id);
 
-
 /*
  * kpersona_get: retrieve the persona with which the current thread is running
  *
+ * To find the proc's persona id use kpersona_pidinfo
+ *
  * Parameters:
- *         id: output: will be filled with current thread's persona
- *             (or current processes persona) on success.
+ *         id: output: will be filled with the persona id from the voucher adopted
+ *             on the current thread. If that voucher contains no persona information
+ *             or there is no such voucher, then it defaults to the proc's persona id.
  *
  * Return:
  *        < 0: Thread is not running under any persona
@@ -117,12 +151,29 @@ int kpersona_dealloc(uid_t id);
  */
 int kpersona_get(uid_t *id);
 
+/*
+ * kpersona_get_path: retrieve the given persona's path
+ *
+ * Parameters:
+ *         id: ID of the persona
+ *
+ *         path: output: filled in with path on success.
+ *               Assumes path buffer length = MAXPATHLEN
+ *
+ * Return:
+ *        < 0: Error
+ *          0: Success
+ */
+int kpersona_getpath(uid_t id, char path[MAXPATHLEN]);
 
 /*
  * kpersona_info: gather info about the given persona
  *
  * Parameters:
  *         id: ID of the persona to investigate
+ *             If set to 0, it uses persona id from the voucher adopted on the current
+ *             thread. If that voucher contains no persona information or there is no
+ *             such voucher, then it defaults to the proc's persona id.
  *
  *       info: output: filled in with persona attributes on success.
  *
@@ -131,7 +182,6 @@ int kpersona_get(uid_t *id);
  *          0: Success
  */
 int kpersona_info(uid_t id, struct kpersona_info *info);
-
 
 /*
  * kpersona_pidinfo: gather persona info about the given PID
@@ -147,7 +197,6 @@ int kpersona_info(uid_t id, struct kpersona_info *info);
  */
 int kpersona_pidinfo(pid_t pid, struct kpersona_info *info);
 
-
 /*
  * kpersona_find: lookup the kernel's UUID of a persona
  *
@@ -159,6 +208,8 @@ int kpersona_pidinfo(pid_t pid, struct kpersona_info *info);
  *             Set this to -1 to find personas by 'name'
  *
  *         id: output: the ID(s) matching the input parameters
+ *             This can be NULL
+ *
  *      idlen: input - size of 'id' buffer (in number of IDs)
  *             output - the total required size of the 'id' buffer
  *                      (in number of IDs) - may be larger than input size
@@ -170,6 +221,24 @@ int kpersona_pidinfo(pid_t pid, struct kpersona_info *info);
  *        >= 0: The number of IDs found to match the input parameters
  */
 int kpersona_find(const char *name, uid_t uid, uid_t *id, size_t *idlen);
+
+/*
+ * kpersona_find_by_type: lookup the persona ids by type
+ *
+ * Parameters:
+ *  persona_type: Type of persona id (see enum)
+ *
+ *           id: output: the ID(s) matching the input parameters
+ *               This can be NULL
+ *
+ *        idlen: input - size of 'id' buffer (in number of IDs)
+ *               output - the total required size of the 'id' buffer
+ *                      (in number of IDs) - may be larger than input size
+ * Return:
+ *         < 0: ERROR
+ *        >= 0: The number of IDs found to match the input parameters
+ */
+int kpersona_find_by_type(int persona_type, uid_t *id, size_t *idlen);
 #endif /* !KERNEL */
 
 #ifdef KERNEL_PRIVATE
@@ -200,7 +269,8 @@ struct persona {
 
 	uid_t        pna_id;
 	int          pna_type;
-	char         pna_login[MAXLOGNAME+1];
+	char         pna_login[MAXLOGNAME + 1];
+	char         *pna_path;
 
 	kauth_cred_t pna_cred;
 	uid_t        pna_pgid;
@@ -230,38 +300,46 @@ struct persona {
 	LCK_MTX_ASSERT(&(persona)->pna_lock, LCK_MTX_ASSERT_OWNED)
 
 #ifdef PERSONA_DEBUG
-static inline const char *persona_desc(struct persona *persona, int locked)
+static inline const char *
+persona_desc(struct persona *persona, int locked)
 {
-	if (!persona)
+	if (!persona) {
 		return "<none>";
+	}
 
-	if (persona->pna_desc[0] != 0)
+	if (persona->pna_desc[0] != 0) {
 		return persona->pna_desc;
+	}
 
-	if (!locked)
+	if (!locked) {
 		persona_lock(persona);
-	if (persona->pna_desc[0] != 0)
+	}
+	if (persona->pna_desc[0] != 0) {
 		goto out_unlock;
+	}
 
 	char *p = &persona->pna_desc[0];
 	char *end = p + sizeof(persona->pna_desc) - 1;
 
 	*end = 0;
-	p += snprintf(p, end - p, "%s/%d:%d",
-		      persona->pna_login,
-		      kauth_cred_getuid(persona->pna_cred),
-		      kauth_cred_getgid(persona->pna_cred));
+	p += scnprintf(p, end - p, "%s/%d:%d",
+	    persona->pna_login,
+	    kauth_cred_getuid(persona->pna_cred),
+	    kauth_cred_getgid(persona->pna_cred));
 
-	if (p <= end)
+	if (p <= end) {
 		*p = 0;
+	}
 out_unlock:
-	if (!locked)
+	if (!locked) {
 		persona_unlock(persona);
+	}
 
 	return persona->pna_desc;
 }
 #else /* !PERSONA_DEBUG */
-static inline const char *persona_desc(struct persona *persona, int locked)
+static inline const char *
+persona_desc(struct persona *persona, int locked)
 {
 	(void)persona;
 	(void)locked;
@@ -277,9 +355,9 @@ struct persona;
 __BEGIN_DECLS
 
 #ifndef _KAUTH_CRED_T
-#define	_KAUTH_CRED_T
+#define _KAUTH_CRED_T
 typedef struct ucred *kauth_cred_t;
-#endif	/* !_KAUTH_CRED_T */
+#endif  /* !_KAUTH_CRED_T */
 
 /* returns the persona ID for the given pesona structure */
 uid_t persona_get_id(struct persona *persona);
@@ -294,13 +372,32 @@ kauth_cred_t persona_get_cred(struct persona *persona);
 struct persona *persona_lookup(uid_t id);
 
 /*
- * returns non-zero on error, on success returns 0 and updates 'plen' to
- * total found (could be more than original value of 'plen')
+ * Search for personas based on name or uid
+ *
+ * Parameters:
+ *       name: Local login name of the persona.
+ *             Set this to NULL to find personas by 'uid'.
+ *
+ *        uid: UID of the persona.
+ *             Set this to -1 to find personas by 'name'
+ *
+ *    persona: output - array of persona pointers. Each non-NULL value
+ *             must* be released with persona_put. This can be NULL.
+ *
+ *       plen: input - size of 'persona' buffer (in number of pointers)
+ *             output - the total required size of the 'persona' buffer (could be larger than input value)
+ *
+ * Return:
+ *           0: Success
+ *        != 0: failure (BSD errno value ESRCH or EINVAL)
  */
 int persona_find(const char *login, uid_t uid,
-		 struct persona **persona, size_t *plen);
+    struct persona **persona, size_t *plen);
 
-/* returns a reference to the persona tied to the current thread */
+/* returns a reference that must be released with persona_put() */
+struct persona *persona_proc_get(pid_t pid);
+
+/* returns a reference to the persona tied to the current thread (also uses adopted voucher) */
 struct persona *current_persona_get(void);
 
 /* get a reference to a persona structure */
@@ -308,6 +405,25 @@ struct persona *persona_get(struct persona *persona);
 
 /* release a reference to a persona structure */
 void persona_put(struct persona *persona);
+
+/*
+ * Search for personas of a given type, 'persona_type'.
+ *
+ * Parameters:
+ *   persona_type: Type of persona (see enum)
+ *
+ *        persona: output - array of persona pointers. Each non-NULL value
+ *        must* be released with persona_put. This can be NULL.
+ *
+ *           plen: input - size of 'persona' buffer (in number of pointers)
+ *                 output - the total required size of the 'persona' buffer (could be larger than input value)
+ *
+ * Return:
+ *           0: Success
+ *        != 0: failure (BSD errno value ESRCH or EINVAL)
+ */
+int persona_find_by_type(int persona_type, struct persona **persona,
+    size_t *plen);
 
 #ifdef XNU_KERNEL_PRIVATE
 
@@ -318,38 +434,43 @@ void persona_put(struct persona *persona);
  * In-kernel persona API
  */
 extern uint32_t g_max_personas;
-extern struct persona *g_system_persona;
 
 void personas_bootstrap(void);
 
 struct persona *persona_alloc(uid_t id, const char *login,
-			      int type, int *error);
+    int type, char *path, int *error);
 
 int persona_init_begin(struct persona *persona);
 void persona_init_end(struct persona *persona, int error);
 
 struct persona *persona_lookup_and_invalidate(uid_t id);
+int persona_verify_and_set_uniqueness(struct persona *persona);
+boolean_t persona_is_unique(struct persona *persona);
 
-static inline int proc_has_persona(proc_t p)
+static inline int
+proc_has_persona(proc_t p)
 {
-	if (p && p->p_persona)
+	if (p && p->p_persona) {
 		return 1;
+	}
 	return 0;
 }
 
-static inline uid_t persona_id_from_proc(proc_t p)
+static inline uid_t
+persona_id_from_proc(proc_t p)
 {
-	if (p && p->p_persona)
+	if (p && p->p_persona) {
 		return p->p_persona->pna_id;
+	}
 	return PERSONA_ID_NONE;
 }
 
 int persona_proc_inherit(proc_t child, proc_t parent);
 
 int persona_proc_adopt_id(proc_t p, uid_t id,
-			  kauth_cred_t auth_override);
+    kauth_cred_t auth_override);
 int persona_proc_adopt(proc_t p, struct persona *persona,
-		       kauth_cred_t auth_override);
+    kauth_cred_t auth_override);
 int persona_proc_drop(proc_t p);
 
 int persona_set_cred(struct persona *persona, kauth_cred_t cred);
@@ -365,19 +486,24 @@ int persona_get_groups(struct persona *persona, unsigned *ngroups, gid_t *groups
 
 uid_t persona_get_gmuid(struct persona *persona);
 
-int persona_get_login(struct persona *persona, char login[MAXLOGNAME+1]);
+int persona_get_login(struct persona *persona, char login[MAXLOGNAME + 1]);
 
 /* returns a reference that must be released with persona_put() */
 struct persona *persona_proc_get(pid_t pid);
 
+int persona_find_all(const char *login, uid_t uid, int persona_type,
+    struct persona **persona, size_t *plen);
+
 #else /* !CONFIG_PERSONAS */
 
-static inline int proc_has_persona(__unused proc_t p)
+static inline int
+proc_has_persona(__unused proc_t p)
 {
 	return 0;
 }
 
-static inline uid_t persona_id_from_proc(__unused proc_t p)
+static inline uid_t
+persona_id_from_proc(__unused proc_t p)
 {
 	return PERSONA_ID_NONE;
 }

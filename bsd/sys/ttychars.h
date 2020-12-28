@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1997 Apple Computer, Inc. All Rights Reserved */
@@ -74,26 +74,25 @@
  */
 
 struct ttychars {
-	char	tc_erase;	/* erase last character */
-	char	tc_kill;	/* erase entire line */
-	char	tc_intrc;	/* interrupt */
-	char	tc_quitc;	/* quit */
-	char	tc_startc;	/* start output */
-	char	tc_stopc;	/* stop output */
-	char	tc_eofc;	/* end-of-file */
-	char	tc_brkc;	/* input delimiter (like nl) */
-	char	tc_suspc;	/* stop process signal */
-	char	tc_dsuspc;	/* delayed stop process signal */
-	char	tc_rprntc;	/* reprint line */
-	char	tc_flushc;	/* flush output (toggles) */
-	char	tc_werasc;	/* word erase */
-	char	tc_lnextc;	/* literal next character */
+	char    tc_erase;       /* erase last character */
+	char    tc_kill;        /* erase entire line */
+	char    tc_intrc;       /* interrupt */
+	char    tc_quitc;       /* quit */
+	char    tc_startc;      /* start output */
+	char    tc_stopc;       /* stop output */
+	char    tc_eofc;        /* end-of-file */
+	char    tc_brkc;        /* input delimiter (like nl) */
+	char    tc_suspc;       /* stop process signal */
+	char    tc_dsuspc;      /* delayed stop process signal */
+	char    tc_rprntc;      /* reprint line */
+	char    tc_flushc;      /* flush output (toggles) */
+	char    tc_werasc;      /* word erase */
+	char    tc_lnextc;      /* literal next character */
 };
 #ifdef USE_OLD_TTY
-#include <sys/ttydefaults.h>	/* to pick up character defaults */
+#include <sys/ttydefaults.h>    /* to pick up character defaults */
 #endif
 
 #endif /* __APPLE_API_UNSTABLE */
 
 #endif /* !_SYS_TTYCHARS_H_ */
-

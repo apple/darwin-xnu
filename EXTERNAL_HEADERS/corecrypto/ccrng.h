@@ -13,24 +13,27 @@
 
 #include <corecrypto/cc.h>
 
-#define CCRNG_STATE_COMMON                                                          \
+#define CCRNG_STATE_COMMON \
     int (*generate)(struct ccrng_state *rng, size_t outlen, void *out);
 
-/* default state structure. Do not instantiate, ccrng() returns a reference to this structure */
+/*!
+ @type      struct ccrng_state
+ @abstract  Default state structure. Do not instantiate. ccrng() returns a reference to this structure
+ */
 struct ccrng_state {
     CCRNG_STATE_COMMON
 };
 
 /*!
  @function   ccrng
- @abstract   initializes a AES-CTR mode cryptographic random number generator and returns the statically alocated rng object. 
-             Getting a pointer to a ccrng has never been simpler! 
+ @abstract   Initializes an AES-CTR mode cryptographic random number generator and returns the statically-allocated rng object.
+             Getting a pointer to a ccrng has never been simpler!
              Call this function, get an rng object and then pass the object to ccrng_generate() to generate randoms.
              ccrng() may be called more than once. It returns pointer to the same object on all calls.
 
  @result  a cryptographically secure random number generator or NULL if fails
- 
- @discussion 
+
+ @discussion
  - It is significantly faster than using the system /dev/random
  - FIPS Compliant: NIST SP800-80A + FIPS 140-2
  - Seeded from the system entropy.
@@ -42,7 +45,29 @@ struct ccrng_state {
 
 struct ccrng_state *ccrng(int *error);
 
-//call this macro with the rng argument set to output of the call to the ccrng() function
-#define ccrng_generate(rng, outlen, out) ((rng)->generate((struct ccrng_state *)(rng), (outlen), (out)))
+/*!
+ @function   ccrng_generate
+ @abstract   Generate `outlen` bytes of output, stored in `out`, using ccrng_state `rng`.
+
+ @param rng  `struct ccrng_state` representing the state of the RNG.
+ @param outlen  Amount of random bytes to generate.
+ @param out  Pointer to memory where random bytes are stored, of size at least `outlen`.
+
+ @result 0 on success and nonzero on failure.
+ */
+#define ccrng_generate(rng, outlen, out) \
+    ((rng)->generate((struct ccrng_state *)(rng), (outlen), (out)))
+
+/*!
+  @function ccrng_uniform
+  @abstract Generate a random value in @p [0, bound).
+
+  @param rng   The state of the RNG.
+  @param bound The exclusive upper bound on the output.
+  @param rand  A pointer to a single @p uint64_t to store the result.
+
+  @result Returns zero iff the operation is successful.
+ */
+int ccrng_uniform(struct ccrng_state *rng, uint64_t bound, uint64_t *rand);
 
 #endif /* _CORECRYPTO_CCRNG_H_ */

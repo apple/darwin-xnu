@@ -15,13 +15,13 @@ WARNFLAGS = -Wall
 LDFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -lstdc++
 
 kextsymboltool: $(OBJS)
-	@echo "$(ColorH)HOST_LD$(Color0)       $(ColorF)$@$(Color0)"
+	$(call makelog,$(ColorH)HOST_LD$(Color0)       $(ColorF)$@$(Color0))
 	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
-	@echo "$(ColorH)HOST_CODESIGN$(Color0) $(ColorF)$@$(Color0)"
+	$(call makelog,$(ColorH)HOST_CODESIGN$(Color0) $(ColorF)$@$(Color0))
 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
 
 %.o: %.c
-	@echo "$(ColorH)HOST_CC$(Color0)       $(ColorF)$@$(Color0)"
+	$(call makelog,$(ColorH)HOST_CC$(Color0)       $(ColorF)$@$(Color0))
 	$(_v)$(HOST_CC) $(WARNFLAGS) $(CFLAGS) -c -o $@ $<
 
 do_build_setup:: kextsymboltool

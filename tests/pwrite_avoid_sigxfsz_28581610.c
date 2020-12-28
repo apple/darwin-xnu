@@ -11,7 +11,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define TMP_FILE_PATH "/tmp/test_pwrite"
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
+#define TMP_FILE_PATH "/tmp/test_pwrite_28581610"
 
 static sigjmp_buf xfsz_jmpbuf;
 
@@ -24,7 +26,7 @@ xfsz_signal(__unused int signo)
 }
 
 T_DECL(pwrite, "Tests avoiding SIGXFSZ with pwrite and odd offsets",
-	   	T_META_ASROOT(true))
+    T_META_ASROOT(true))
 {
 	int fd, x;
 	off_t ret;
@@ -56,40 +58,40 @@ T_DECL(pwrite, "Tests avoiding SIGXFSZ with pwrite and odd offsets",
 	for (x = 0; offs[x] != 0; x++) {
 		ret = ftruncate(fd, offs[x]);
 		T_ASSERT_TRUE(((ret == -1) && (errno == EINVAL)),
-			   	"negative offset %d", offs[x]);
+		    "negative offset %d", offs[x]);
 	}
 
 	T_SETUPEND;
 
 	/* we want to get the EFBIG errno but without a SIGXFSZ signal */
-    T_EXPECTFAIL;
+	T_EXPECTFAIL;
 	if (!sigsetjmp(xfsz_jmpbuf, 1)) {
 		signal(SIGXFSZ, xfsz_signal);
 		ret = pwrite(fd, buffer, sizeof buffer, LONG_MAX);
 		T_ASSERT_TRUE(((ret == -1) && (errno == EFBIG)),
-				"large offset %d", 13);
+		    "large offset %d", 13);
 	} else {
 		signal(SIGXFSZ, SIG_DFL);
 		T_FAIL("%s unexpected SIGXFSZ with offset %lX",
-                "<rdar://problem/28581610>", LONG_MAX);
+		    "<rdar://problem/28581610>", LONG_MAX);
 	}
 
 	/* Negative offsets are invalid, no SIGXFSZ signals required */
 	for (x = 0; offs[x] != 0; x++) {
-        /* only -1 gives the correct result */
-        if (-1 != offs[x]) {
-            T_EXPECTFAIL;
-        }
+		/* only -1 gives the correct result */
+		if (-1 != offs[x]) {
+			T_EXPECTFAIL;
+		}
 
 		if (!sigsetjmp(xfsz_jmpbuf, 1)) {
 			signal(SIGXFSZ, xfsz_signal);
 			ret = pwrite(fd, buffer, sizeof buffer, offs[x]);
 			T_ASSERT_TRUE(((ret == -1) && (errno == EINVAL)),
-					"negative offset %d", offs[x]);
+			    "negative offset %d", offs[x]);
 		} else {
 			signal(SIGXFSZ, SIG_DFL);
 			T_FAIL("%s unexpected SIGXFSZ with negative offset %d",
-                   "<rdar://problem/28581610>", offs[x]);
+			    "<rdar://problem/28581610>", offs[x]);
 		}
 	}
 

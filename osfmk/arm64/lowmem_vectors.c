@@ -38,13 +38,13 @@
  */
 
 extern vm_offset_t vm_kernel_stext;
-extern void	*version;
-extern void	*kmod;
-extern void	*kdp_trans_off;
-extern void	*osversion;
-extern void	*flag_kdp_trigger_reboot;
-extern void	*manual_pkt;
-extern struct vm_object pmap_object_store;	/* store pt pages */
+extern void     *version;
+extern void     *kmod;
+extern void     *kdp_trans_off;
+extern void     *osversion;
+extern void     *flag_kdp_trigger_reboot;
+extern void     *manual_pkt;
+extern struct vm_object pmap_object_store;      /* store pt pages */
 
 lowglo lowGlo __attribute__ ((aligned(PAGE_MAX_SIZE))) = {
 	// Increment the major version for changes that break the current Astris
@@ -54,7 +54,7 @@ lowglo lowGlo __attribute__ ((aligned(PAGE_MAX_SIZE))) = {
 	.lgLayoutMajorVersion = 3,
 	.lgLayoutMinorVersion = 0,
 	.lgLayoutMagic = LOWGLO_LAYOUT_MAGIC,
-	.lgVerCode = { 'K','r','a','k','e','n',' ',' ' },
+	.lgVerCode = { 'K', 'r', 'a', 'k', 'e', 'n', ' ', ' ' },
 	.lgZero = 0,
 	.lgStext = 0, // To be filled in below
 	.lgVersion = (uint64_t) &version,
@@ -78,19 +78,22 @@ lowglo lowGlo __attribute__ ((aligned(PAGE_MAX_SIZE))) = {
 	.lgPageShift = ARM_PGSHIFT
 };
 
-void patch_low_glo(void)
+void
+patch_low_glo(void)
 {
 	lowGlo.lgStext = (uint64_t)vm_kernel_stext;
 }
 
-void patch_low_glo_static_region(uint64_t address, uint64_t size)
+void
+patch_low_glo_static_region(uint64_t address, uint64_t size)
 {
 	lowGlo.lgStaticAddr = address;
 	lowGlo.lgStaticSize = size;
 }
 
 
-void patch_low_glo_vm_page_info(void * start_addr, void * end_addr, uint32_t first_ppnum)
+void
+patch_low_glo_vm_page_info(void * start_addr, void * end_addr, uint32_t first_ppnum)
 {
 	lowGlo.lgPmapMemStartAddr = (uint64_t)start_addr;
 	lowGlo.lgPmapMemEndAddr = (uint64_t)end_addr;

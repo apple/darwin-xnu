@@ -80,7 +80,7 @@ static uint64_t cpu_checkin_last_commit;
 #define CPU_CHECKIN_MIN_INTERVAL_US     4000 /* 4ms */
 #define CPU_CHECKIN_MIN_INTERVAL_MAX_US USEC_PER_SEC /* 1s */
 static uint64_t cpu_checkin_min_interval;
-uint32_t cpu_checkin_min_interval_us;
+static uint32_t cpu_checkin_min_interval_us;
 
 #if __LP64__
 static_assert(MAX_CPUS <= 32);
@@ -122,15 +122,22 @@ void
 cpu_quiescent_counter_set_min_interval_us(uint32_t new_value_us)
 {
 	/* clamp to something vaguely sane */
-	if (new_value_us > CPU_CHECKIN_MIN_INTERVAL_MAX_US)
+	if (new_value_us > CPU_CHECKIN_MIN_INTERVAL_MAX_US) {
 		new_value_us = CPU_CHECKIN_MIN_INTERVAL_MAX_US;
+	}
 
 	cpu_checkin_min_interval_us = new_value_us;
 
 	uint64_t abstime = 0;
 	clock_interval_to_absolutetime_interval(cpu_checkin_min_interval_us,
-	                                        NSEC_PER_USEC, &abstime);
+	    NSEC_PER_USEC, &abstime);
 	cpu_checkin_min_interval = abstime;
+}
+
+uint32_t
+cpu_quiescent_counter_get_min_interval_us(void)
+{
+	return cpu_checkin_min_interval_us;
 }
 
 
@@ -150,7 +157,7 @@ cpu_quiescent_counter_commit(uint64_t ctime)
 
 	cpu_checkin_last_commit = ctime;
 
-	old_state = os_atomic_and(&cpu_quiescing_checkin_state, ~CPU_CHECKIN_MASK, release);
+	old_state = os_atomic_andnot(&cpu_quiescing_checkin_state, CPU_CHECKIN_MASK, release);
 
 	KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_QUIESCENT_COUNTER), old_gen, old_state, ctime, 0);
 }
@@ -179,10 +186,10 @@ cpu_quiescent_counter_join(__unused uint64_t ctime)
 	__assert_only int cpuid = processor->cpu_id;
 
 	assert(processor->cpu_quiesce_state == CPU_QUIESCE_COUNTER_NONE ||
-	       processor->cpu_quiesce_state == CPU_QUIESCE_COUNTER_LEFT);
+	    processor->cpu_quiesce_state == CPU_QUIESCE_COUNTER_LEFT);
 
 	assert((os_atomic_load(&cpu_quiescing_checkin_state, relaxed) &
-	        (cpu_expected_bit(cpuid) | cpu_checked_in_bit(cpuid))) == 0);
+	    (cpu_expected_bit(cpuid) | cpu_checked_in_bit(cpuid))) == 0);
 
 	processor->cpu_quiesce_state = CPU_QUIESCE_COUNTER_PENDING_JOIN;
 
@@ -207,7 +214,7 @@ cpu_quiescent_counter_ast(void)
 
 	/* We had better not already be joined. */
 	assert((os_atomic_load(&cpu_quiescing_checkin_state, relaxed) &
-	        (cpu_expected_bit(cpuid) | cpu_checked_in_bit(cpuid))) == 0);
+	    (cpu_expected_bit(cpuid) | cpu_checked_in_bit(cpuid))) == 0);
 
 	/*
 	 * No release barrier needed because we have no prior state to publish.
@@ -230,9 +237,9 @@ cpu_quiescent_counter_ast(void)
 	checkin_mask_t old_mask, new_mask;
 	os_atomic_rmw_loop(&cpu_quiescing_checkin_state, old_mask, new_mask, acquire, {
 		if (old_mask == 0) {
-			new_mask = old_mask | cpu_expected_bit(cpuid);
+		        new_mask = old_mask | cpu_expected_bit(cpuid);
 		} else {
-			new_mask = old_mask | cpu_expected_bit(cpuid) | cpu_checked_in_bit(cpuid);
+		        new_mask = old_mask | cpu_expected_bit(cpuid) | cpu_checked_in_bit(cpuid);
 		}
 	});
 }
@@ -255,7 +262,7 @@ cpu_quiescent_counter_leave(uint64_t ctime)
 	int cpuid = processor->cpu_id;
 
 	assert(processor->cpu_quiesce_state == CPU_QUIESCE_COUNTER_JOINED ||
-	       processor->cpu_quiesce_state == CPU_QUIESCE_COUNTER_PENDING_JOIN);
+	    processor->cpu_quiesce_state == CPU_QUIESCE_COUNTER_PENDING_JOIN);
 
 	/* We no longer need the cpu_quiescent_counter_ast callback to be armed */
 	ast_off(AST_UNQUIESCE);
@@ -271,8 +278,8 @@ cpu_quiescent_counter_leave(uint64_t ctime)
 
 	checkin_mask_t mask = cpu_checked_in_bit(cpuid) | cpu_expected_bit(cpuid);
 
-	checkin_mask_t orig_state = os_atomic_and_orig(&cpu_quiescing_checkin_state,
-	                                               ~mask, acq_rel);
+	checkin_mask_t orig_state = os_atomic_andnot_orig(&cpu_quiescing_checkin_state,
+	    mask, acq_rel);
 
 	assert((orig_state & cpu_expected_bit(cpuid)));
 
@@ -310,12 +317,14 @@ cpu_quiescent_counter_checkin(uint64_t ctime)
 	assert(processor->cpu_quiesce_state != CPU_QUIESCE_COUNTER_NONE);
 
 	/* If we're not joined yet, we don't need to check in */
-	if (__probable(processor->cpu_quiesce_state != CPU_QUIESCE_COUNTER_JOINED))
+	if (__probable(processor->cpu_quiesce_state != CPU_QUIESCE_COUNTER_JOINED)) {
 		return;
+	}
 
 	/* If we've checked in recently, we don't need to check in yet. */
-	if (__probable((ctime - processor->cpu_quiesce_last_checkin) <= cpu_checkin_min_interval))
+	if (__probable((ctime - processor->cpu_quiesce_last_checkin) <= cpu_checkin_min_interval)) {
 		return;
+	}
 
 	processor->cpu_quiesce_last_checkin = ctime;
 
@@ -332,13 +341,13 @@ cpu_quiescent_counter_checkin(uint64_t ctime)
 	}
 
 	checkin_mask_t orig_state = os_atomic_or_orig(&cpu_quiescing_checkin_state,
-	                                              cpu_checked_in_bit(cpuid), acq_rel);
+	    cpu_checked_in_bit(cpuid), acq_rel);
 
 	checkin_mask_t new_state = orig_state | cpu_checked_in_bit(cpuid);
 
 	if (cpu_quiescent_counter_needs_commit(new_state)) {
 		assertf(!cpu_quiescent_counter_needs_commit(orig_state),
-		        "old: 0x%lx, new: 0x%lx", orig_state, new_state);
+		    "old: 0x%lx, new: 0x%lx", orig_state, new_state);
 		cpu_quiescent_counter_commit(ctime);
 	}
 }
@@ -361,4 +370,3 @@ cpu_quiescent_counter_assert_ast(void)
 	assert((state & cpu_expected_bit(cpuid)));
 }
 #endif /* MACH_ASSERT */
-

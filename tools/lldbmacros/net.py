@@ -1,16 +1,30 @@
 
 """ Please make sure you read the README COMPLETELY BEFORE reading anything below.
-    It is very critical that you read coding guidelines in Section E in README file. 
+    It is very critical that you read coding guidelines in Section E in README file.
 """
-
 from xnu import *
 from utils import *
 from string import *
 from socket import *
+import tempfile
 
 import xnudefines
 from netdefines import *
 from routedefines import *
+
+def GetDlilIfFlagsAsString(dlil_if_flags):
+    """ Return a formatted string description of the dlil interface flags
+    """
+    out_string = ""
+    flags = (unsigned)(dlil_if_flags & 0xffff)
+    i = 0
+    num = 1
+    while num <= flags:
+        if flags & num:
+            out_string += dlil_if_flags_strings[i] + ","
+        i += 1
+        num = num << 1
+    return rstrip(out_string, ",")
 
 def GetIfFlagsAsString(if_flags):
     """ Return a formatted string description of the interface flags
@@ -21,7 +35,7 @@ def GetIfFlagsAsString(if_flags):
     num = 1
     while num <= flags:
         if flags & num:
-            out_string += if_flags_strings[i] + "," 
+            out_string += if_flags_strings[i] + ","
         i += 1
         num = num << 1
     return rstrip(out_string, ",")
@@ -36,6 +50,7 @@ def ShowIfConfiguration(ifnet):
     format_string = "{0: <s}: flags={1: <x} <{2: <s}> index {3: <d} mtu {4: <d}"
     if iface :
         out_string += format_string.format(iface.if_xname, (iface.if_flags & 0xffff), GetIfFlagsAsString(iface.if_flags), iface.if_index, iface.if_data.ifi_mtu)
+        out_string += "\n\tdlil flags=" + hex(dlifnet.dl_if_flags)+ " <" + GetDlilIfFlagsAsString(dlifnet.dl_if_flags) + ">"
         out_string += "\n\t(struct ifnet *)" + hex(ifnet)
         if iface.if_snd.ifcq_len :
             out_string += "\n\t" + str(iface.if_snd.ifcq_len)
@@ -52,6 +67,51 @@ def GetIfConfiguration(ifname):
         if str(ifnet.if_xname) == ifname :
             return ifnet
     return None
+
+# Macro: net_get_always_on_pktap
+@lldb_command('net_get_always_on_pktap')
+def NetGetAlwaysOnPktap(cmd_args=None):
+    """ Dump the always-on packet capture to /tmp/dump.pktap
+    """
+    for i in range(0, 10):
+        ifnet = GetIfConfiguration("pktap"+str(i))
+        if not ifnet:
+            continue
+        if ifnet.if_bpf == 0:
+            ifnet = None
+            continue
+        if ifnet.if_bpf.bif_dlist.bd_headdrop == 0:
+            ifnet = None
+            continue
+
+        break
+
+    if not ifnet:
+        print "Could not find a pktap interface"
+        return
+
+    bpf_d = ifnet.if_bpf.bif_dlist
+
+    f = tempfile.NamedTemporaryFile(prefix="dump-", suffix=".pktap", dir="/tmp/", mode="wb", delete=False)
+
+    err = lldb.SBError()
+
+    if bpf_d.bd_hbuf != 0:
+        addr = bpf_d.bd_hbuf[0]._sbval19k84obscure747.AddressOf().GetValueAsUnsigned()
+        buf = LazyTarget.GetProcess().ReadMemory(addr, unsigned(bpf_d.bd_hlen), err)
+        if err.fail:
+            print "Error, getting sbuf"
+        f.write(buf)
+
+    addr = bpf_d.bd_sbuf[0]._sbval19k84obscure747.AddressOf().GetValueAsUnsigned()
+    buf = LazyTarget.GetProcess().ReadMemory(addr, unsigned(bpf_d.bd_slen), err)
+    if err.fail:
+        print "Error, getting sbuf"
+    f.write(buf)
+
+    print f.name
+    f.close()
+# EndMacro: net_get_always_on_pktap
 
 # Macro: ifconfig
 @lldb_command('ifconfig')
@@ -70,9 +130,20 @@ def ShowIfconfig(cmd_args=None) :
             print GetIfaddrs(ifnet)
 # EndMacro: ifconfig
 
+#Macro: ifconfig_dlil
+@lldb_command('ifconfig_dlil')
+def ShowIfconfigDlil(cmd_args=None) :
+    """ Display ifconfig-like output for DLIL interface list, print (struct ifnet *) pointer and dlil info for further inspection
+    """
+    dlil_ifnets = kern.globals.dlil_ifnet_head
+    for dlil_ifnet in IterateTAILQ_HEAD(dlil_ifnets, "dl_if_link"):
+        ShowIfConfiguration(dlil_ifnet)
+        print GetIfaddrs(Cast(dlil_ifnet, 'ifnet *'))
+# EndMacro: ifconfig_dlil
+
 def GetAddressAsStringColonHex(addr, count):
     out_string = ""
-    i = 0 
+    i = 0
     addr_format_string = "{0:02x}"
     while (i < count):
         if (i == 0):
@@ -92,7 +163,7 @@ def GetSocketAddrAsStringUnix(sockaddr):
     if (sock_unix == 0):
         return "(null)"
     else:
-        if (len(str(sock_unix.sun_path)) > 0): 
+        if (len(str(sock_unix.sun_path)) > 0):
             return str(sock_unix.sun_path)
         else:
             return "\"\""
@@ -100,7 +171,7 @@ def GetSocketAddrAsStringUnix(sockaddr):
 def GetInAddrAsString(ia):
     out_string = ""
     inaddr = Cast(ia, 'in_addr *')
-    
+
     packed_value = struct.pack('I', unsigned(ia.s_addr))
     out_string = inet_ntoa(packed_value)
     return out_string
@@ -115,7 +186,7 @@ def GetIn6AddrAsString(ia):
 
 def GetSocketAddrAsStringInet(sockaddr):
     sock_in = Cast(sockaddr, 'sockaddr_in *')
-    return GetInAddrAsString(sock_in.sin_addr)
+    return GetInAddrAsString(addressof(sock_in.sin_addr))
 
 def GetSocketAddrAsStringInet6(sockaddr):
     sock_in6 = Cast(sockaddr, 'sockaddr_in6 *')
@@ -132,7 +203,7 @@ def GetSocketAddrAsStringLink(sockaddr):
         else:
             out_string += GetAddressAsStringColonHex(addressof(sock_link.sdl_data[sock_link.sdl_nlen]), sock_link.sdl_alen)
     return out_string
-    
+
 def GetSocketAddrAsStringAT(sockaddr):
     out_string = ""
     sock_addr = Cast(sockaddr, 'sockaddr *')
@@ -206,7 +277,7 @@ def GetCapabilitiesAsString(flags):
     num = 1
     while num <= flags:
         if flags & num:
-            out_string += if_capenable_strings[i] + "," 
+            out_string += if_capenable_strings[i] + ","
         i += 1
         num = num << 1
     return rstrip(out_string, ",")
@@ -260,7 +331,7 @@ def ShowDlilIfnetConfiguration(dlil_ifnet, show_all) :
 @lldb_command('showifnets')
 def ShowIfnets(cmd_args=None) :
     """ Display ifconfig-like output for all attached and detached interfaces
-    """                                      
+    """
     showall = 0
     if cmd_args != None and len(cmd_args) > 0 :
         showall = 1
@@ -394,9 +465,9 @@ def GetSocketProtocolAsString(sock):
 def GetInAddr4to6AsString(inaddr):
     out_string = ""
     if (inaddr is not None):
-        ia = Cast(inaddr, 'char *')
-        inaddr_format_string = "{0: <d}.{1: <d}.{2: <d}.{3: <d}"
-        out_string += inaddr_format_string.format(ia[0], ia[1], ia[2], ia[3])
+        ia = Cast(inaddr, 'unsigned char *')
+        inaddr_format_string = "{0:d}:{1:d}:{2:d}:{3:d}"
+        out_string += inaddr_format_string.format(unsigned(ia[0]), unsigned(ia[1]), unsigned(ia[2]), unsigned(ia[3]))
     return out_string
 
 def GetInPortAsString(port):
@@ -419,11 +490,11 @@ def GetIPv4SocketAsString(sock) :
     else:
         out_string += "inpcb: " + hex(pcb)
         out_string += GetSocketProtocolAsString(sock)
-        
-        out_string += GetInAddr4to6AsString(addressof(pcb.inp_dependladdr.inp46_local))
+
+        out_string += GetInAddr4to6AsString(addressof(pcb.inp_dependladdr.inp46_local.ia46_addr4))
         out_string += GetInPortAsString(addressof(pcb.inp_lport))
         out_string += " -> "
-        out_string += GetInAddr4to6AsString(addressof(pcb.inp_dependfaddr.inp46_foreign))
+        out_string += GetInAddr4to6AsString(addressof(pcb.inp_dependfaddr.inp46_foreign.ia46_addr4))
         out_string += GetInPortAsString(addressof(pcb.inp_fport))
     return out_string
 
@@ -435,7 +506,7 @@ def GetIPv6SocketAsString(sock) :
     else:
         out_string += "inpcb: " + hex(pcb) + " "
         out_string += GetSocketProtocolAsString(sock)
- 
+
         out_string += GetIn6AddrAsString((pcb.inp_dependladdr.inp6_local.__u6_addr.__u6_addr8))
         out_string += GetInPortAsString(addressof(pcb.inp_lport))
         out_string += " -> "
@@ -472,6 +543,7 @@ def GetSocket(socket) :
             out_string += GetIPv4SocketAsString(so)
         if (domain.dom_family == 30):
             out_string += GetIPv6SocketAsString(so)
+        out_string += " s=" + str(int(so.so_snd.sb_cc)) + " r=" + str(int(so.so_rcv.sb_cc)) + " usecnt=" + str(int(so.so_usecount)) + "] "
     else:
         out_string += "(null)"
     return out_string
@@ -506,85 +578,84 @@ def ShowSocket(cmd_args=None) :
         return
 # EndMacro: showsocket
 
+def GetProcSockets(proc, total_snd_cc, total_rcv_cc):
+    """ Given a proc_t pointer, display information about its sockets
+    """
+    out_string = ""
+
+    if proc is None:
+        out_string += "Unknown value passed as argument."
+    else:
+        snd_cc = 0
+        rcv_cc = 0
+        sock_fd_seen = 0
+        count = 0
+        """struct  filedesc *"""
+        proc_filedesc = proc.p_fd
+        """struct  fileproc **"""
+        proc_ofiles = proc_filedesc.fd_ofiles
+        """ high-water mark of fd_ofiles """
+        proc_lastfile = unsigned(proc_filedesc.fd_lastfile)
+        if proc_filedesc.fd_nfiles != 0:
+            while count <= proc_lastfile:
+                if (unsigned(proc_ofiles[count]) != 0 and proc_ofiles[count].f_fglob != 0):
+                        fg = proc_ofiles[count].f_fglob
+                        if (int(fg.fg_ops.fo_type) == 2):
+                            if (proc_filedesc.fd_ofileflags[count] & 4):
+                                out_string += "U: "
+                            else:
+                                out_string += " "
+                            out_string += "fd = " + str(count) + " "
+                            if (fg.fg_data != 0):
+                                out_string += GetSocket(unsigned(fg.fg_data))
+                                out_string += "\n"
+
+                                so = kern.GetValueFromAddress(unsigned(fg.fg_data), 'socket *')
+                                snd_cc += int(so.so_snd.sb_cc)
+                                total_snd_cc[0] += int(so.so_snd.sb_cc)
+                                rcv_cc += int(so.so_rcv.sb_cc)
+                                total_rcv_cc[0] += int(so.so_rcv.sb_cc)
+                                sock_fd_seen += 1
+                            else:
+                                out_string += ""
+                count += 1
+        out_string += "total sockets " + str(int(sock_fd_seen)) + " snd_cc " + str(int(snd_cc)) + " rcv_cc " + str(int(rcv_cc)) + "\n"
+    return out_string
+
+
 # Macro: showprocsockets
 @lldb_command('showprocsockets')
 def ShowProcSockets(cmd_args=None):
     """ Given a proc_t pointer, display information about its sockets
     """
+    total_snd_cc = [0]
+    total_rcv_cc = [0]
     out_string = ""
-    
     if cmd_args != None and len(cmd_args) > 0 :
         proc = kern.GetValueFromAddress(cmd_args[0], 'proc *')
-        proc_fd = proc.p_fd
 
         if not proc:
             print "Unknown value passed as argument."
             return
         else:
-            count = 0
-            fpp = Cast(proc_fd.fd_ofiles, 'fileproc **')
-            while (count < proc_fd.fd_nfiles):
-                fp = Cast(dereference(fpp), 'fileproc *')
-                if (fp != 0):
-                    fg = Cast(fp.f_fglob, 'fileglob *')
-                    if (int(fg.fg_ops.fo_type) == 2):
-                        if (proc_fd.fd_ofileflags[count] & 4):
-                            out_string += "U: "
-                        else:
-                            out_string += " "
-                        out_string += "fd = " + str(count) + " " 
-                        if (fg.fg_data != 0):
-                            out_string += GetSocket(unsigned(fg.fg_data))
-                            out_string += "\n"
-                        else:
-                            out_string += ""
-                fpp = kern.GetValueFromAddress(unsigned(fpp + 8), 'fileproc **')
-                count += 1
-        print out_string
+            print GetProcInfo(proc)
+            print GetProcSockets(proc, total_snd_cc, total_rcv_cc)
     else:
         print "Missing argument 0 in user function."
 # EndMacro: showprocsockets
 
-def GetProcSockets(proc):
-    """ Given a proc_t pointer, display information about its sockets
-    """
-    out_string = ""
-    proc_fd = proc.p_fd
-
-    if proc is None:
-        out_string += "Unknown value passed as argument."
-    else:
-        count = 0
-        fpp = Cast(proc_fd.fd_ofiles, 'fileproc **')
-        while (count < proc_fd.fd_nfiles):
-            fp = Cast(dereference(fpp), 'fileproc *')
-            if (fp != 0):
-                fg = Cast(fp.f_fglob, 'fileglob *')
-                if (int(fg.fg_ops.fo_type) == 2):
-                    if (proc_fd.fd_ofileflags[count] & 4):
-                        out_string += "U: "
-                    else:
-                        out_string += " "
-                    out_string += "fd = " + str(count) + " " 
-                    if (fg.fg_data != 0):
-                        out_string += GetSocket(unsigned(fg.fg_data))
-                        out_string += "\n"
-                    else:
-                        out_string += ""
-            fpp = kern.GetValueFromAddress(unsigned(fpp + 8), 'fileproc **')
-            count += 1
-    return out_string
-    
-    
 # Macro: showallprocsockets
 @lldb_command('showallprocsockets')
 def ShowAllProcSockets(cmd_args=None):
     """Display information about the sockets of all the processes
     """
+    total_snd_cc = [0]
+    total_rcv_cc = [0]
     for proc in kern.procs:
         print "================================================================================"
         print GetProcInfo(proc)
-        print GetProcSockets(proc)
+        print GetProcSockets(proc, total_snd_cc, total_rcv_cc)
+    print ("total_snd_cc: " + str(int(total_snd_cc[0])) + " total_rcv_cc: " + str(int(total_rcv_cc[0])) + "\n")
 # EndMacro: showallprocsockets
 
 
@@ -596,7 +667,7 @@ def GetRtEntryPrDetailsAsString(rte):
     dst_string_format = "{0:<18s}"
     if (dst.sa_family == AF_INET):
         out_string += dst_string_format.format(GetSocketAddrAsStringInet(dst)) + " "
-    else: 
+    else:
         if (dst.sa_family == AF_INET6):
             out_string += dst_string_format.format(GetSocketAddrAsStringInet6(dst)) + " "
             isv6 = 1
@@ -696,7 +767,7 @@ def GetRtEntryPrDetailsAsString(rte):
     out_string += str(int(rt.rt_ifp.if_unit))
     out_string += "\n"
     return out_string
-    
+
 
 RNF_ROOT = 2
 def GetRtTableAsString(rt_tables):
@@ -737,26 +808,26 @@ def GetRtInetAsString():
     rt_tables = kern.globals.rt_tables[2]
     if (kern.ptrsize == 8):
         rt_table_header_format_string = "{0:<18s} {1: <16s} {2:<20s} {3:<16s} {4:<8s} {5:<8s} {6:<8s}"
-        print rt_table_header_format_string.format("rtentry", " dst", "gw", "parent", "Refs", "Use", "flags/if") 
+        print rt_table_header_format_string.format("rtentry", " dst", "gw", "parent", "Refs", "Use", "flags/if")
         print rt_table_header_format_string.format("-" * 18, "-" * 16, "-" * 16, "-" * 16, "-" * 8, "-" * 8, "-" * 8)
         print GetRtTableAsString(rt_tables)
     else:
         rt_table_header_format_string = "{0:<8s} {1:<16s} {2:<18s} {3:<8s} {4:<8s} {5:<8s} {6:<8s}"
-        print rt_table_header_format_string.format("rtentry", "dst", "gw", "parent", "Refs", "Use", "flags/if") 
-        print rt_table_header_format_string.format("-" * 8, "-" * 16, "-" * 16, "-" * 8, "-" * 8, "-" * 8, "-" * 8) 
+        print rt_table_header_format_string.format("rtentry", "dst", "gw", "parent", "Refs", "Use", "flags/if")
+        print rt_table_header_format_string.format("-" * 8, "-" * 16, "-" * 16, "-" * 8, "-" * 8, "-" * 8, "-" * 8)
         print GetRtTableAsString(rt_tables)
 
 def GetRtInet6AsString():
     rt_tables = kern.globals.rt_tables[30]
     if (kern.ptrsize == 8):
         rt_table_header_format_string = "{0:<18s} {1: <16s} {2:<20s} {3:<16s} {4:<8s} {5:<8s} {6:<8s}"
-        print rt_table_header_format_string.format("rtentry", " dst", "gw", "parent", "Refs", "Use", "flags/if") 
+        print rt_table_header_format_string.format("rtentry", " dst", "gw", "parent", "Refs", "Use", "flags/if")
         print rt_table_header_format_string.format("-" * 18, "-" * 16, "-" * 16, "-" * 16, "-" * 8, "-" * 8, "-" * 8)
         print GetRtTableAsString(rt_tables)
     else:
         rt_table_header_format_string = "{0:<8s} {1:<16s} {2:<18s} {3:<8s} {4:<8s} {5:<8s} {6:<8s}"
-        print rt_table_header_format_string.format("rtentry", "dst", "gw", "parent", "Refs", "Use", "flags/if") 
-        print rt_table_header_format_string.format("-" * 8, "-" * 16, "-" * 18, "-" * 8, "-" * 8, "-" * 8, "-" * 8) 
+        print rt_table_header_format_string.format("rtentry", "dst", "gw", "parent", "Refs", "Use", "flags/if")
+        print rt_table_header_format_string.format("-" * 8, "-" * 16, "-" * 18, "-" * 8, "-" * 8, "-" * 8, "-" * 8)
         print GetRtTableAsString(rt_tables)
 
 # Macro: show_rt_inet
@@ -764,7 +835,7 @@ def GetRtInet6AsString():
 def ShowRtInet(cmd_args=None):
     """ Display the IPv4 routing table
     """
-    print GetRtInetAsString() 
+    print GetRtInetAsString()
 # EndMacro: show_rt_inet
 
 # Macro: show_rt_inet6
@@ -824,7 +895,7 @@ def ShowRtEntryDebug(cmd_args=None):
                 out_string += "\n"
             ix += 1
         cnt += 1
-    
+
     cnt = 0
     while (cnt < RTD_TRACE_HIST_SIZE):
         ix = 0
@@ -838,7 +909,7 @@ def ShowRtEntryDebug(cmd_args=None):
                 out_string += "\n"
             ix += 1
         cnt += 1
- 
+
     out_string += "\nTotal locks : " + str(int(rtd.rtd_lock_cnt))
     out_string += "\nTotal unlocks : " + str(int(rtd.rtd_unlock_cnt))
 
@@ -855,7 +926,7 @@ def ShowRtEntryDebug(cmd_args=None):
                 out_string += "\n"
             ix += 1
         cnt += 1
- 
+
     cnt = 0
     while (cnt < RTD_TRACE_HIST_SIZE):
         ix = 0
@@ -1474,20 +1545,23 @@ def GetInPcb(pcb, proto):
 
     if (proto == IPPROTO_TCP):
         out_string +=  " tcp"
+    elif (proto == IPPROTO_UDP):
+        out_string += " udp"
+    elif (proto == IPPROTO_RAW):
+        out_string += " raw"
     else:
-        if (proto == IPPROTO_UDP):
-            out_string += " udp"
-        else:
-            out_string += str(proto) +  "."
+        out_string += str(proto) +  "."
+
     if (pcb.inp_vflag & INP_IPV4):
         out_string += "4 "
     if (pcb.inp_vflag & INP_IPV6):
         out_string += "6 "
 
     if (pcb.inp_vflag & INP_IPV4):
-        out_string += "                                      "
+        out_string += "                                       "
         out_string += GetInAddrAsString(addressof(pcb.inp_dependladdr.inp46_local.ia46_addr4))
     else:
+        out_string += "  "
         out_string += GetIn6AddrAsString((pcb.inp_dependladdr.inp6_local.__u6_addr.__u6_addr8))
 
     out_string += " "
@@ -1495,7 +1569,7 @@ def GetInPcb(pcb, proto):
     out_string += " "
 
     if (pcb.inp_vflag & INP_IPV4):
-        out_string += "                                      "
+        out_string += "                                 "
         out_string += GetInAddrAsString(addressof(pcb.inp_dependfaddr.inp46_foreign.ia46_addr4))
     else:
         out_string += GetIn6AddrAsString((pcb.inp_dependfaddr.inp6_foreign.__u6_addr.__u6_addr8))
@@ -1507,6 +1581,7 @@ def GetInPcb(pcb, proto):
     if (proto == IPPROTO_TCP):
         out_string += GetTcpState(pcb.inp_ppcb)
 
+    out_string += "\n\t"
     if (pcb.inp_flags & INP_RECVOPTS):
         out_string += "recvopts "
     if (pcb.inp_flags & INP_RECVRETOPTS):
@@ -1577,27 +1652,58 @@ def GetInPcb(pcb, proto):
         out_string += "in_fctree "
     if (pcb.inp_flags2 & INP2_WANT_APP_POLICY):
         out_string += "want_app_policy "
-          
+
+    out_string += "\n\t"
     so = pcb.inp_socket
     if (so != 0):
-        out_string += "[so=" + str(so) + " s=" + str(int(so.so_snd.sb_cc)) + " r=" + str(int(so.so_rcv.sb_cc)) + " usecnt=" + str(int(so.so_usecount)) + "] "
+        out_string += "so=" + str(so) + " s=" + str(int(so.so_snd.sb_cc)) + " r=" + str(int(so.so_rcv.sb_cc)) + " usecnt=" + str(int(so.so_usecount)) + ", "
 
     if (pcb.inp_state == 0 or pcb.inp_state == INPCB_STATE_INUSE):
-        out_string += "inuse, "
+        out_string += "inuse"
     else:
         if (pcb.inp_state == INPCB_STATE_DEAD):
-            out_string += "dead, "
+            out_string += "dead"
         else:
-            out_string += "unknown (" + str(int(pcb.inp_state)) + "), "
+            out_string += "unknown (" + str(int(pcb.inp_state)) + ")"
 
     return out_string
 
+def CalcMbufInList(mpkt, pkt_cnt, buf_byte_cnt, mbuf_cnt, mbuf_cluster_cnt):
+    while (mpkt != 0):
+        mp = mpkt
+        mpkt = mpkt.m_hdr.mh_nextpkt
+        pkt_cnt[0] +=1
+        while (mp != 0):
+            mbuf_cnt[0] += 1
+            buf_byte_cnt[int(mp.m_hdr.mh_type)] += 256
+            buf_byte_cnt[Mbuf_Type.MT_LAST] += 256
+            if (mp.m_hdr.mh_flags & 0x01):
+                mbuf_cluster_cnt[0] += 1
+                buf_byte_cnt[int(mp.m_hdr.mh_type)] += mp.M_dat.MH.MH_dat.MH_ext.ext_size
+                buf_byte_cnt[Mbuf_Type.MT_LAST] += mp.M_dat.MH.MH_dat.MH_ext.ext_size
+            mp = mp.m_hdr.mh_next
+
+def CalcMbufInSB(so, snd_cc, snd_buf, rcv_cc, rcv_buf, snd_record_cnt, rcv_record_cnt, snd_mbuf_cnt, rcv_mbuf_cnt, snd_mbuf_cluster_cnt, rcv_mbuf_cluster_cnt):
+    snd_cc[0] += so.so_snd.sb_cc
+    mpkt = so.so_snd.sb_mb
+    CalcMbufInList(mpkt, snd_record_cnt, snd_buf, snd_mbuf_cnt, snd_mbuf_cluster_cnt)
+    rcv_cc[0] += so.so_rcv.sb_cc
+    mpkt = so.so_rcv.sb_mb
+    CalcMbufInList(mpkt, rcv_record_cnt, rcv_buf, rcv_mbuf_cnt, rcv_mbuf_cluster_cnt)
+
 def GetPcbInfo(pcbi, proto):
+    tcp_reassqlen = 0
     out_string = ""
-    snd_cc = 0
-    snd_buf = unsigned(0)
-    rcv_cc = 0
-    rcv_buf = unsigned(0)
+    snd_mbuf_cnt = [0]
+    snd_mbuf_cluster_cnt = [0]
+    snd_record_cnt = [0]
+    snd_cc = [0]
+    snd_buf = [0] * (Mbuf_Type.MT_LAST + 1)
+    rcv_mbuf_cnt = [0]
+    rcv_mbuf_cluster_cnt = [0]
+    rcv_record_cnt = [0]
+    rcv_cc = [0]
+    rcv_buf = [0] * (Mbuf_Type.MT_LAST + 1)
     pcbseen = 0
     out_string += "lastport " + str(int(pcbi.ipi_lastport)) + " lastlow " + str(int(pcbi.ipi_lastlow)) + " lasthi " + str(int(pcbi.ipi_lasthi)) + "\n"
     out_string += "active pcb count is " + str(int(pcbi.ipi_count)) + "\n"
@@ -1605,41 +1711,52 @@ def GetPcbInfo(pcbi, proto):
     out_string += "hash size is " + str(int(hashsize)) + "\n"
     out_string += str(pcbi.ipi_hashbase) + " has the following inpcb(s):\n"
     if (kern.ptrsize == 8):
-        out_string += "pcb            proto  source                     address  port  destination               address  port\n"
+        out_string += "pcb                proto  source                                        port  destination                                 port\n"
     else:
         out_string += "pcb            proto  source           address  port  destination         address  port\n\n"
 
-    i = 0
-    hashbase = pcbi.ipi_hashbase
-    while (i < hashsize):
-        head = hashbase[i]
+    if proto == IPPROTO_RAW:
+        head = cast(pcbi.ipi_listhead, 'inpcbhead *')
         pcb = cast(head.lh_first, 'inpcb *')
         while pcb != 0:
             pcbseen += 1
             out_string += GetInPcb(pcb, proto) + "\n"
             so = pcb.inp_socket
             if so != 0:
-                snd_cc += so.so_snd.sb_cc
-                mp = so.so_snd.sb_mb
-                while mp != 0:
-                    snd_buf += 256
-                    if (mp.m_hdr.mh_flags & 0x01):
-                        snd_buf += mp.M_dat.MH.MH_dat.MH_ext.ext_size
-                    mp = mp.m_hdr.mh_next
-                rcv_cc += so.so_rcv.sb_cc
-                mp = so.so_rcv.sb_mb
-                while mp != 0:
-                    rcv_buf += 256
-                    if (mp.m_hdr.mh_flags & 0x01):
-                        rcv_buf += mp.M_dat.MH.MH_dat.MH_ext.ext_size
-                    mp = mp.m_hdr.mh_next
-            pcb = cast(pcb.inp_hash.le_next, 'inpcb *')
-        i += 1
-    
-    out_string += "total seen " + str(int(pcbseen)) + " snd_cc " + str(int(snd_cc)) + " rcv_cc " + str(int(rcv_cc)) + "\n"
-    out_string += "total snd_buf " + str(int(snd_buf)) + " rcv_buf " + str(int(rcv_buf)) + "\n"
-    out_string  += "port hash base is " + hex(pcbi.ipi_porthashbase) + "\n"
-    
+                CalcMbufInSB(so, snd_cc, snd_buf, rcv_cc, rcv_buf, snd_record_cnt, rcv_record_cnt, snd_mbuf_cnt, rcv_mbuf_cnt, snd_mbuf_cluster_cnt, rcv_mbuf_cluster_cnt)
+            pcb = cast(pcb.inp_list.le_next, 'inpcb *')
+    else:
+        i = 0
+        hashbase = pcbi.ipi_hashbase
+        while (i < hashsize):
+            head = hashbase[i]
+            pcb = cast(head.lh_first, 'inpcb *')
+            while pcb != 0:
+                pcbseen += 1
+                out_string += GetInPcb(pcb, proto) + "\n"
+                so = pcb.inp_socket
+                if so != 0:
+                    CalcMbufInSB(so, snd_cc, snd_buf, rcv_cc, rcv_buf, snd_record_cnt, rcv_record_cnt, snd_mbuf_cnt, rcv_mbuf_cnt, snd_mbuf_cluster_cnt, rcv_mbuf_cluster_cnt)
+                if proto == IPPROTO_TCP and pcb.inp_ppcb:
+                    tcpcb = cast(pcb.inp_ppcb, 'tcpcb *')
+                    tcp_reassqlen += tcpcb.t_reassqlen
+
+                pcb = cast(pcb.inp_hash.le_next, 'inpcb *')
+            i += 1
+
+    out_string += "total pcbs seen: " + str(int(pcbseen)) + "\n"
+    out_string += "total send mbuf count: " + str(int(snd_mbuf_cnt[0])) + " receive mbuf count: " + str(int(rcv_mbuf_cnt[0])) + "\n"
+    out_string += "total send mbuf cluster count: " + str(int(snd_mbuf_cluster_cnt[0])) + " receive mbuf cluster count: " + str(int(rcv_mbuf_cluster_cnt[0])) + "\n"
+    out_string += "total send record count: " + str(int(snd_record_cnt[0])) + " receive record count: " + str(int(rcv_record_cnt[0])) + "\n"
+    out_string += "total snd_cc (total bytes in send buffers): " + str(int(snd_cc[0])) + " rcv_cc (total bytes in receive buffers): " + str(int(rcv_cc[0])) + "\n"
+    out_string += "total snd_buf bytes " + str(int(snd_buf[Mbuf_Type.MT_LAST])) + " rcv_buf bytes " + str(int(rcv_buf[Mbuf_Type.MT_LAST])) + "\n"
+    for x in range(Mbuf_Type.MT_LAST):
+        if (snd_buf[x] != 0 or rcv_buf[x] != 0):
+            out_string += "total snd_buf bytes of type " + Mbuf_Type.reverse_mapping[x] + " : " + str(int(snd_buf[x])) + " total recv_buf bytes of type " + Mbuf_Type.reverse_mapping[x] + " : " + str(int(rcv_buf[x])) + "\n"
+    out_string += "port hash base is " + hex(pcbi.ipi_porthashbase) + "\n"
+    if proto == IPPROTO_TCP:
+        out_string += "TCP reassembly queue length: " + str(tcp_reassqlen) + "\n"
+
     i = 0
     hashbase = pcbi.ipi_porthashbase
     while (i < hashsize):
@@ -1659,7 +1776,7 @@ def GetInPcbPort(ppcb):
     out_string += hex(ppcb) + ": lport "
     out_string += Getntohs(ppcb.phd_port)
     return out_string
-    
+
 
 def Getntohs(port):
     out_string = ""
@@ -1697,23 +1814,26 @@ def ShowKernEventPcbInfo(cmd_args=None):
 def GetKernControlPcbInfo(ctl_head):
     out_string = ""
     kctl = Cast(ctl_head.tqh_first, 'kctl *')
-    if (kern.ptrsize == 8):    
-        kcb_format_string = "0x{0:<16x} {1:4d} {2:10d}\n"
+    if (kern.ptrsize == 8):
+        kcb_format_string = "0x{0:<16x} {1:10d} {2:10d} {3:10d}\n"
     else:
-        kcb_format_string = "0x{0:<8x} {1:4d} {2:10d}\n"
+        kcb_format_string = "0x{0:<8x} {1:10d} {2:10d} {3:10d}\n"
     while unsigned(kctl) != 0:
         kctl_name = "controller: " + str(kctl.name) + "\n"
         out_string += kctl_name
         kcb = Cast(kctl.kcb_head.tqh_first, 'ctl_cb *')
         if unsigned(kcb) != 0:
             if (kern.ptrsize == 8):
-                out_string += "socket               unit       usecount\n"
-                out_string += "------               ----       --------\n"
+                out_string += "socket               usecount     snd_cc     rcv_cc\n"
+                out_string += "------               --------     ------     ------\n"
             else:
-                out_string += "socket       unit       usecount\n"
-                out_string += "------       ----       --------\n"
+                out_string += "socket       usecount     snd_cc     rcv_cc\n"
+                out_string += "------       --------     ------     ------\n"
         while unsigned(kcb) != 0:
-            out_string += kcb_format_string.format(kcb.so, kcb.unit, kcb.usecount)   
+            so = Cast(kcb.so, 'socket *')
+            snd_cc = so.so_snd.sb_cc
+            rcv_cc = so.so_rcv.sb_cc
+            out_string += kcb_format_string.format(kcb.so, kcb.usecount, snd_cc, rcv_cc)
             kcb = kcb.next.tqe_next
         out_string += "\n"
         kctl = kctl.next.tqe_next
@@ -1741,6 +1861,14 @@ def ShowUdpPcbInfo(cmd_args=None):
     """
     print GetPcbInfo(addressof(kern.globals.udbinfo), IPPROTO_UDP)
 # EndMacro:  show_udp_pcbinfo
+
+# Macro: show_rip_pcbinfo
+@lldb_command('show_rip_pcbinfo')
+def ShowRipPcbInfo(cmd_args=None):
+    """ Display the list of Raw IP protocol control block information
+    """
+    print GetPcbInfo(addressof(kern.globals.ripcbinfo), IPPROTO_RAW)
+# EndMacro:  show_rip_pcbinfo
 
 # Macro: show_tcp_timewaitslots
 @lldb_command('show_tcp_timewaitslots')

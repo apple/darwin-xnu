@@ -37,4 +37,3 @@ kern_config_is_development(void)
 	return false;
 #endif
 }
-

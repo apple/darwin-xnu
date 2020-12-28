@@ -734,6 +734,66 @@ class Tests: XCTestCase {
         XCTAssert(dict.value(forKeyPath: "kcdata_crashinfo.task_snapshots.0.crashed_threadid")  as? Int == 42)
     }
 
+    func testDispatchQueueLabel() {
+        let buffer = NSMutableData(capacity:1000)!
+
+        var item = kcdata_item()
+        let dql = "houston.we.had.a.problem"
+        var payload32 : UInt32
+
+        item.type = KCDATA_BUFFER_BEGIN_STACKSHOT
+        item.flags = 0
+        item.size = 0
+        buffer.append(&item, length: MemoryLayout<kcdata_item>.size)
+
+        item.type = UInt32(KCDATA_TYPE_CONTAINER_BEGIN)
+        item.flags = 0
+        item.size = UInt32(MemoryLayout<UInt32>.size)
+        buffer.append(&item, length: MemoryLayout<kcdata_item>.size)
+        payload32 = UInt32(STACKSHOT_KCCONTAINER_TASK)
+        buffer.append(&payload32, length:MemoryLayout<UInt32>.size)
+
+        item.type = UInt32(KCDATA_TYPE_CONTAINER_BEGIN)
+        item.flags = 0
+        item.size = UInt32(MemoryLayout<UInt32>.size)
+        buffer.append(&item, length: MemoryLayout<kcdata_item>.size)
+        payload32 = UInt32(STACKSHOT_KCCONTAINER_THREAD)
+        buffer.append(&payload32, length:MemoryLayout<UInt32>.size)
+
+        item.type = UInt32(STACKSHOT_KCTYPE_THREAD_DISPATCH_QUEUE_LABEL)
+        item.flags = 0
+        item.size = UInt32(dql.utf8.count + 1)
+        buffer.append(&item, length: MemoryLayout<kcdata_item>.size)
+        dql.utf8CString.withUnsafeBufferPointer({
+            buffer.append($0.baseAddress!, length:dql.utf8.count + 1)
+        })
+
+        item.type = UInt32(KCDATA_TYPE_CONTAINER_END)
+        item.flags = 0
+        item.size = UInt32(MemoryLayout<UInt32>.size)
+        buffer.append(&item, length: MemoryLayout<kcdata_item>.size)
+        payload32 = UInt32(STACKSHOT_KCCONTAINER_THREAD)
+        buffer.append(&payload32, length:MemoryLayout<UInt32>.size)
+
+        item.type = UInt32(KCDATA_TYPE_CONTAINER_END)
+        item.flags = 0
+        item.size = UInt32(MemoryLayout<UInt32>.size)
+        buffer.append(&item, length: MemoryLayout<kcdata_item>.size)
+        payload32 = UInt32(STACKSHOT_KCCONTAINER_TASK)
+        buffer.append(&payload32, length:MemoryLayout<UInt32>.size)
+
+
+        item.type = KCDATA_TYPE_BUFFER_END
+        item.flags = 0
+        item.size = 0
+        buffer.append(&item, length: MemoryLayout<kcdata_item>.size)
+
+        guard let dict = try? self.parseBuffer(buffer)
+            else { XCTFail(); return; }
+
+        XCTAssert(dict.value(forKeyPath: "kcdata_stackshot.task_snapshots.0.thread_snapshots.0.dispatch_queue_label")  as? String == dql)
+    }
+
     func testRepeatedContainer() {
         //repeated container of same name and key shoudl fail
 
@@ -1348,6 +1408,10 @@ class Tests: XCTestCase {
         self.testSampleStackshot("stackshot-sample-coalitions")
     }
 
+    func testSampleTurnstileInfo() {
+        self.testSampleStackshot("stackshot-sample-turnstileinfo")
+    }
+
     func testStackshotSharedcacheV2() {
         self.testSampleStackshot("stackshot-sample-sharedcachev2")
     }
@@ -1398,6 +1462,10 @@ class Tests: XCTestCase {
     
     func testStackshotWithSharedCacheLayout() {
         self.testSampleStackshot("stackshot-with-shared-cache-layout")
+    }
+
+    func testStackshotDispatchQueueLabel() {
+        self.testSampleStackshot("stackshot-sample-dispatch-queue-label")
     }
 
     func testTrivial() {

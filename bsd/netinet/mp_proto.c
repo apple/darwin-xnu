@@ -43,24 +43,24 @@ extern struct domain mpdomain_s;
 static void mp_dinit(struct domain *);
 
 static struct protosw mpsw = {
-	.pr_type =		SOCK_STREAM,
-	.pr_protocol =		IPPROTO_TCP,
-	.pr_flags =		PR_CONNREQUIRED|PR_MULTICONN|PR_EVCONNINFO|
-				PR_WANTRCVD|PR_PCBLOCK|PR_PROTOLOCK|
-				PR_PRECONN_WRITE|PR_DATA_IDEMPOTENT,
-	.pr_ctloutput =		mptcp_ctloutput,
-	.pr_init =		mptcp_init,
-	.pr_usrreqs =		&mptcp_usrreqs,
-	.pr_lock =		mptcp_lock,
-	.pr_unlock =		mptcp_unlock,
-	.pr_getlock =		mptcp_getlock,
+	.pr_type =              SOCK_STREAM,
+	.pr_protocol =          IPPROTO_TCP,
+	.pr_flags =             PR_CONNREQUIRED | PR_MULTICONN | PR_EVCONNINFO |
+    PR_WANTRCVD | PR_PCBLOCK | PR_PROTOLOCK |
+    PR_PRECONN_WRITE | PR_DATA_IDEMPOTENT,
+	.pr_ctloutput =         mptcp_ctloutput,
+	.pr_init =              mptcp_init,
+	.pr_usrreqs =           &mptcp_usrreqs,
+	.pr_lock =              mptcp_lock,
+	.pr_unlock =            mptcp_unlock,
+	.pr_getlock =           mptcp_getlock,
 };
 
 struct domain mpdomain_s = {
-	.dom_family =		PF_MULTIPATH,
-	.dom_flags =		DOM_REENTRANT,
-	.dom_name =		"multipath",
-	.dom_init =		mp_dinit,
+	.dom_family =           PF_MULTIPATH,
+	.dom_flags =            DOM_REENTRANT,
+	.dom_name =             "multipath",
+	.dom_init =             mp_dinit,
 };
 
 /* Initialize the PF_MULTIPATH domain, and add in the pre-defined protos */

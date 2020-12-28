@@ -25,8 +25,8 @@
  */
 
 #ifndef _MACH_SDT_H
-#define	_MACH_SDT_H
+#define _MACH_SDT_H
 
 #include <mach/machine/sdt.h>
 
-#endif	/* _MACH_SDT_H */
+#endif  /* _MACH_SDT_H */

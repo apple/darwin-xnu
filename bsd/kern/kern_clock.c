@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -79,10 +79,6 @@
 #include <sys/vm.h>
 #include <sys/sysctl.h>
 
-#ifdef GPROF
-#include <sys/gmon.h>
-#endif
-
 #include <kern/thread.h>
 #include <kern/ast.h>
 #include <kern/assert.h>
@@ -101,7 +97,7 @@ int tvtohz(struct timeval *tv);
  * times per second, is used to do scheduling and timeout calculations.
  * The second timer does resource utilization estimation statistically
  * based on the state of the machine phz times a second. Both functions
- * can be performed by a single clock (ie hz == phz), however the 
+ * can be performed by a single clock (ie hz == phz), however the
  * statistics will be much more prone to errors. Ideally a machine
  * would have separate clocks measuring time spent in user state, system
  * state, interrupt state, and idle state. These clocks would allow a non-
@@ -128,11 +124,11 @@ int             tick = (1000000 / 100);  /* GET RID OF THIS !!! */
  */
 void
 timeout(
-	timeout_fcn_t			fcn,
-	void					*param,
-	int						interval)
+	timeout_fcn_t                   fcn,
+	void                                    *param,
+	int                                             interval)
 {
-	uint64_t		deadline;
+	uint64_t                deadline;
 
 	clock_interval_to_deadline(interval, NSEC_PER_SEC / hz, &deadline);
 	thread_call_func_delayed((thread_call_func_t)fcn, param, deadline);
@@ -148,13 +144,13 @@ timeout(
  */
 void
 timeout_with_leeway(
-	timeout_fcn_t			fcn,
-	void					*param,
-	int						interval,
-	int						leeway_interval)
+	timeout_fcn_t                   fcn,
+	void                                    *param,
+	int                                             interval,
+	int                                             leeway_interval)
 {
-	uint64_t		deadline;
-	uint64_t		leeway;
+	uint64_t                deadline;
+	uint64_t                leeway;
 
 	clock_interval_to_deadline(interval, NSEC_PER_SEC / hz, &deadline);
 
@@ -170,8 +166,8 @@ timeout_with_leeway(
  */
 void
 untimeout(
-	timeout_fcn_t		fcn,
-	void			*param)
+	timeout_fcn_t           fcn,
+	void                    *param)
 {
 	thread_call_func_cancel((thread_call_func_t)fcn, param, FALSE);
 }
@@ -186,14 +182,14 @@ untimeout(
  */
 void
 bsd_timeout(
-	timeout_fcn_t			fcn,
-	void					*param,
+	timeout_fcn_t                   fcn,
+	void                                    *param,
 	struct timespec         *ts)
 {
-	uint64_t		deadline = 0;
+	uint64_t                deadline = 0;
 
 	if (ts && (ts->tv_sec || ts->tv_nsec)) {
-		nanoseconds_to_absolutetime((uint64_t)ts->tv_sec * NSEC_PER_SEC + ts->tv_nsec,  &deadline );
+		nanoseconds_to_absolutetime((uint64_t)ts->tv_sec * NSEC_PER_SEC + ts->tv_nsec, &deadline );
 		clock_absolutetime_interval_to_deadline( deadline, &deadline );
 	}
 	thread_call_func_delayed((thread_call_func_t)fcn, param, deadline);
@@ -206,8 +202,8 @@ bsd_timeout(
  */
 void
 bsd_untimeout(
-	timeout_fcn_t		fcn,
-	void			*param)
+	timeout_fcn_t           fcn,
+	void                    *param)
 {
 	thread_call_func_cancel((thread_call_func_t)fcn, param, FALSE);
 }
@@ -236,16 +232,17 @@ hzto(struct timeval *tv)
 	 * Maximum value for any timeout in 10ms ticks is 250 days.
 	 */
 	sec = tv->tv_sec - now.tv_sec;
-	if (sec <= 0x7fffffff / 1000 - 1000)
+	if (sec <= 0x7fffffff / 1000 - 1000) {
 		ticks = ((tv->tv_sec - now.tv_sec) * 1000 +
-			(tv->tv_usec - now.tv_usec) / 1000)
-				/ (tick / 1000);
-	else if (sec <= 0x7fffffff / hz)
+		    (tv->tv_usec - now.tv_usec) / 1000)
+		    / (tick / 1000);
+	} else if (sec <= 0x7fffffff / hz) {
 		ticks = sec * hz;
-	else
+	} else {
 		ticks = 0x7fffffff;
+	}
 
-	return (ticks);
+	return ticks;
 }
 
 /*
@@ -267,8 +264,8 @@ sysctl_clockrate
 }
 
 SYSCTL_PROC(_kern, KERN_CLOCKRATE, clockrate,
-		CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED,
-		0, 0, sysctl_clockrate, "S,clockinfo", "");
+    CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED,
+    0, 0, sysctl_clockrate, "S,clockinfo", "");
 
 
 /*
@@ -313,70 +310,22 @@ tvtohz(struct timeval *tv)
 			usec -= 1000000;
 		}
 		printf("tvotohz: negative time difference %ld sec %ld usec\n",
-		       sec, usec);
+		    sec, usec);
 #endif
 		ticks = 1;
-	} else if (sec <= LONG_MAX / 1000000)
+	} else if (sec <= LONG_MAX / 1000000) {
 		ticks = (sec * 1000000 + (unsigned long)usec + (tick - 1))
-			/ tick + 1;
-	else if (sec <= LONG_MAX / hz)
+		    / tick + 1;
+	} else if (sec <= LONG_MAX / hz) {
 		ticks = sec * hz
-			+ ((unsigned long)usec + (tick - 1)) / tick + 1;
-	else
+		    + ((unsigned long)usec + (tick - 1)) / tick + 1;
+	} else {
 		ticks = LONG_MAX;
-	if (ticks > INT_MAX)
+	}
+	if (ticks > INT_MAX) {
 		ticks = INT_MAX;
-	return ((int)ticks);
-}
-
-
-/*
- * Start profiling on a process.
- *
- * Kernel profiling passes kernel_proc which never exits and hence
- * keeps the profile clock running constantly.
- */
-void
-startprofclock(struct proc *p)
-{
-	if ((p->p_flag & P_PROFIL) == 0)
-		OSBitOrAtomic(P_PROFIL, &p->p_flag);
-}
-
-/*
- * Stop profiling on a process.
- */
-void
-stopprofclock(struct proc *p)
-{
-	if (p->p_flag & P_PROFIL)
-		OSBitAndAtomic(~((uint32_t)P_PROFIL), &p->p_flag);
-}
-
-/* TBD locking user profiling is not resolved yet */
-void
-bsd_uprofil(struct time_value *syst, user_addr_t pc)
-{
-	struct proc *p = current_proc();
-	int		ticks;
-	struct timeval	*tv;
-	struct timeval st;
-
-	if (p == NULL)
-	        return;
-	if ( !(p->p_flag & P_PROFIL))
-	        return;
-
-	st.tv_sec = syst->seconds;
-	st.tv_usec = syst->microseconds;
-
-	tv = &(p->p_stats->p_ru.ru_stime);
-
-	ticks = ((tv->tv_sec - st.tv_sec) * 1000 +
-		(tv->tv_usec - st.tv_usec) / 1000) /
-		(tick / 1000);
-	if (ticks)
-		addupc_task(p, pc, ticks);
+	}
+	return (int)ticks;
 }
 
 /* TBD locking user profiling is not resolved yet */
@@ -386,15 +335,17 @@ get_procrustime(time_value_t *tv)
 	struct proc *p = current_proc();
 	struct timeval st;
 
-	if (p == NULL) 
+	if (p == NULL) {
 		return;
-	if ( !(p->p_flag & P_PROFIL))
-	        return;
+	}
+	if (!(p->p_flag & P_PROFIL)) {
+		return;
+	}
 
 	//proc_lock(p);
 	st = p->p_stats->p_ru.ru_stime;
 	//proc_unlock(p);
-	
+
 	tv->seconds = st.tv_sec;
 	tv->microseconds = st.tv_usec;
 }

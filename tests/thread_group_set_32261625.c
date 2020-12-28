@@ -2,6 +2,8 @@
 #include <ktrace.h>
 #include <sys/kdebug.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 #define TEST_EVENTID (0xfedcbb00)
 
 static void*

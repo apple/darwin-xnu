@@ -49,13 +49,12 @@ kperf_mp_broadcast_other_running(struct kperf_timer *trigger)
 
 		/* do not IPI processors that are not scheduling threads */
 		if (processor == PROCESSOR_NULL ||
-				processor->state != PROCESSOR_RUNNING ||
-				processor->active_thread == THREAD_NULL)
-		{
+		    processor->state != PROCESSOR_RUNNING ||
+		    processor->active_thread == THREAD_NULL) {
 #if DEVELOPMENT || DEBUG
 			BUF_VERB(PERF_TM_SKIPPED, i,
-					processor != PROCESSOR_NULL ? processor->state : 0,
-					processor != PROCESSOR_NULL ? processor->active_thread : 0);
+			    processor != PROCESSOR_NULL ? processor->state : 0,
+			    processor != PROCESSOR_NULL ? processor->active_thread : 0);
 #endif /* DEVELOPMENT || DEBUG */
 			continue;
 		}
@@ -68,13 +67,13 @@ kperf_mp_broadcast_other_running(struct kperf_timer *trigger)
 
 		/* nor processors that have not responded to the last IPI */
 		uint64_t already_pending = atomic_fetch_or_explicit(
-				&trigger->pending_cpus, i_bit,
-				memory_order_relaxed);
+			&trigger->pending_cpus, i_bit,
+			memory_order_relaxed);
 		if (already_pending & i_bit) {
 #if DEVELOPMENT || DEBUG
 			BUF_VERB(PERF_TM_PENDING, i_bit, already_pending);
 			atomic_fetch_add_explicit(&kperf_pending_ipis, 1,
-					memory_order_relaxed);
+			    memory_order_relaxed);
 #endif /* DEVELOPMENT || DEBUG */
 			continue;
 		}

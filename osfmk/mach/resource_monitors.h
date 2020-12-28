@@ -47,7 +47,7 @@ typedef uint64_t resource_notify_flags_t;
 #define kRNFatalLimitFlag           (1ULL << 32)
 
 /* For the disk writes I/O monitor.
-   The default is logical writes.  */
+ *  The default is logical writes.  */
 #define kRNPhysicalWritesFlag       (1ULL < 1)
 
 /* TEMPORARY compatibility, to be removed */
@@ -65,8 +65,8 @@ typedef uint64_t resource_notify_flags_t;
  */
 #define MAXCOMLEN 16
 
-typedef char command_t[MAXCOMLEN+1];
-typedef char proc_name_t[2*MAXCOMLEN+1];
+typedef char command_t[MAXCOMLEN + 1];
+typedef char proc_name_t[2*MAXCOMLEN + 1];
 typedef char posix_path_t[PATH_MAX];
 
 __END_DECLS

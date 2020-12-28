@@ -85,15 +85,6 @@ struct ccdigest_info {
 #define ccdigest_u64(_state_)            (&((ccdigest_state_t)(_state_))->state.u64)
 #define ccdigest_ccn(_state_)            (&((ccdigest_state_t)(_state_))->state.ccn)
 
-/* We could just use memcpy instead of this special macro, but this allows us
-   to use the optimized ccn_set() assembly routine if we have one, which for
-   32 bit arm is about 200% quicker than generic memcpy(). */
-#if CCN_SET_ASM && CCN_UNIT_SIZE <= 4
-#define ccdigest_copy_state(_di_, _dst_, _src_) ccn_set((_di_)->state_size / CCN_UNIT_SIZE, _dst_, _src_)
-#else
-#define ccdigest_copy_state(_di_, _dst_, _src_) CC_MEMCPY(_dst_, _src_, (_di_)->state_size)
-#endif
-
 void ccdigest_init(const struct ccdigest_info *di, ccdigest_ctx_t ctx);
 void ccdigest_update(const struct ccdigest_info *di, ccdigest_ctx_t ctx,
                      size_t len, const void *data);
@@ -117,9 +108,6 @@ void ccdigest(const struct ccdigest_info *di, size_t len,
 #define CC_DIGEST_OID_SHA256    OID_DEF("\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x01")
 #define CC_DIGEST_OID_SHA384    OID_DEF("\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x02")
 #define CC_DIGEST_OID_SHA512    OID_DEF("\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x03")
-#define CC_DIGEST_OID_RMD128    OID_DEF("\x06\x06\x28\xCF\x06\x03\x00\x32")
 #define CC_DIGEST_OID_RMD160    OID_DEF("\x06\x05\x2B\x24\x03\x02\x01")
-#define CC_DIGEST_OID_RMD256    OID_DEF("\x06\x05\x2B\x24\x03\x02\x03")
-#define CC_DIGEST_OID_RMD320    OID_DEF(NULL)
 
 #endif /* _CORECRYPTO_CCDIGEST_H_ */

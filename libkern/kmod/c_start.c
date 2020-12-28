@@ -2,7 +2,7 @@
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,25 +22,25 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
-    Subtle combination of files and libraries make up the C++ runtime system for kernel modules.  We are dependant on the KernelModule kmod.make and CreateKModInfo.perl scripts to be exactly instep with both this library module and the libkmod module as well.
-
-    If you do any maintenance on any of the following files make sure great care is taken to keep them in Sync.
-    KernelModule.bproj/kmod.make
-    KernelModule.bproj/CreateKModInfo.perl
-    KernelModule.bproj/kmodc++/pure.c
-    KernelModule.bproj/kmodc++/cplus_start.c
-    KernelModule.bproj/kmodc++/cplus_start.c
-    KernelModule.bproj/kmodc/c_start.c
-    KernelModule.bproj/kmodc/c_stop.c
-
-    The trick is that the linkline links all of the developers modules.  If any static constructors are used .constructors_used will be left as an undefined symbol.  This symbol is exported by the cplus_start.c routine which automatically brings in the appropriate C++ _start routine.  However the actual _start symbol is only required by the kmod_info structure that is created and initialized by the CreateKModInfo.perl script.  If no C++ was used the _start will be an undefined symbol that is finally satisfied by the c_start module in the kmod library.
-
-    The linkline must look like this.
-        *.o -lkmodc++ kmod_info.o -lkmod
+ *   Subtle combination of files and libraries make up the C++ runtime system for kernel modules.  We are dependant on the KernelModule kmod.make and CreateKModInfo.perl scripts to be exactly instep with both this library module and the libkmod module as well.
+ *
+ *   If you do any maintenance on any of the following files make sure great care is taken to keep them in Sync.
+ *   KernelModule.bproj/kmod.make
+ *   KernelModule.bproj/CreateKModInfo.perl
+ *   KernelModule.bproj/kmodc++/pure.c
+ *   KernelModule.bproj/kmodc++/cplus_start.c
+ *   KernelModule.bproj/kmodc++/cplus_start.c
+ *   KernelModule.bproj/kmodc/c_start.c
+ *   KernelModule.bproj/kmodc/c_stop.c
+ *
+ *   The trick is that the linkline links all of the developers modules.  If any static constructors are used .constructors_used will be left as an undefined symbol.  This symbol is exported by the cplus_start.c routine which automatically brings in the appropriate C++ _start routine.  However the actual _start symbol is only required by the kmod_info structure that is created and initialized by the CreateKModInfo.perl script.  If no C++ was used the _start will be an undefined symbol that is finally satisfied by the c_start module in the kmod library.
+ *
+ *   The linkline must look like this.
+ *.o -lkmodc++ kmod_info.o -lkmod
  */
 #include <mach/mach_types.h>
 #include <libkern/OSKextLib.h>
@@ -51,31 +51,36 @@ extern kmod_info_t KMOD_INFO_NAME;
 
 /*********************************************************************
 *********************************************************************/
-__private_extern__ kern_return_t _start(kmod_info_t *ki, void *data)
+__private_extern__ kern_return_t
+_start(kmod_info_t *ki, void *data)
 {
-    if (_realmain)
-        return (*_realmain)(ki, data);
-    else
-        return KERN_SUCCESS;
+	if (_realmain) {
+		return (*_realmain)(ki, data);
+	} else {
+		return KERN_SUCCESS;
+	}
 }
 
 /*********************************************************************
 *********************************************************************/
-__private_extern__ const char * OSKextGetCurrentIdentifier(void)
+__private_extern__ const char *
+OSKextGetCurrentIdentifier(void)
 {
-    return KMOD_INFO_NAME.name;
+	return KMOD_INFO_NAME.name;
 }
 
 /*********************************************************************
 *********************************************************************/
-__private_extern__ const char * OSKextGetCurrentVersionString(void)
+__private_extern__ const char *
+OSKextGetCurrentVersionString(void)
 {
-    return KMOD_INFO_NAME.version;
+	return KMOD_INFO_NAME.version;
 }
 
 /*********************************************************************
 *********************************************************************/
-__private_extern__ OSKextLoadTag OSKextGetCurrentLoadTag(void)
+__private_extern__ OSKextLoadTag
+OSKextGetCurrentLoadTag(void)
 {
-    return (OSKextLoadTag)KMOD_INFO_NAME.id;
+	return (OSKextLoadTag)KMOD_INFO_NAME.id;
 }

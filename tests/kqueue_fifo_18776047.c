@@ -13,6 +13,8 @@
 
 #include <TargetConditionals.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 #define TMP_FILE_PATH "/tmp/test_kqueue_fifo_18776047"
 
 #define READ_BUFFER_LEN 256
@@ -41,10 +43,11 @@ write_some_data(int fd)
 		retval = (int)write(fd, data, (size_t)len);
 		if (retval < 0) {
 			if (errno == EAGAIN) {
-				if (len == 1)
+				if (len == 1) {
 					return count;
-				else
+				} else {
 					len--;
+				}
 			} else {
 				T_ASSERT_FAIL("write to fd %d of %s of len %d failed.", fd, data, len);
 				abort();

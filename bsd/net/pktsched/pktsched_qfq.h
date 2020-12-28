@@ -53,7 +53,7 @@
  */
 
 #ifndef _NET_PKTSCHED_PKTSCHED_QFQ_H_
-#define	_NET_PKTSCHED_PKTSCHED_QFQ_H_
+#define _NET_PKTSCHED_PKTSCHED_QFQ_H_
 
 #ifdef PRIVATE
 #include <net/pktsched/pktsched.h>
@@ -68,61 +68,61 @@ extern "C" {
 #endif
 
 /* qfq class flags */
-#define	QFCF_RED		0x0001	/* use RED */
-#define	QFCF_ECN		0x0002  /* use ECN with RED/BLUE/SFB */
-#define	QFCF_RIO		0x0004  /* use RIO */
-#define	QFCF_CLEARDSCP		0x0010  /* clear diffserv codepoint */
-#define	QFCF_BLUE		0x0100	/* use BLUE */
-#define	QFCF_SFB		0x0200	/* use SFB */
-#define	QFCF_FLOWCTL		0x0400	/* enable flow control advisories */
-#define	QFCF_DEFAULTCLASS	0x1000	/* default class */
-#define	QFCF_DELAYBASED		0x2000	/* queue sizing is delay based */
+#define QFCF_RED                0x0001  /* use RED */
+#define QFCF_ECN                0x0002  /* use ECN with RED/BLUE/SFB */
+#define QFCF_RIO                0x0004  /* use RIO */
+#define QFCF_CLEARDSCP          0x0010  /* clear diffserv codepoint */
+#define QFCF_BLUE               0x0100  /* use BLUE */
+#define QFCF_SFB                0x0200  /* use SFB */
+#define QFCF_FLOWCTL            0x0400  /* enable flow control advisories */
+#define QFCF_DEFAULTCLASS       0x1000  /* default class */
+#define QFCF_DELAYBASED         0x2000  /* queue sizing is delay based */
 #ifdef BSD_KERNEL_PRIVATE
-#define	QFCF_LAZY		0x10000000 /* on-demand resource allocation */
+#define QFCF_LAZY               0x10000000 /* on-demand resource allocation */
 #endif /* BSD_KERNEL_PRIVATE */
 
-#define	QFCF_USERFLAGS							\
-	(QFCF_RED | QFCF_ECN | QFCF_RIO | QFCF_CLEARDSCP | QFCF_BLUE |	\
+#define QFCF_USERFLAGS                                                  \
+	(QFCF_RED | QFCF_ECN | QFCF_RIO | QFCF_CLEARDSCP | QFCF_BLUE |  \
 	QFCF_SFB | QFCF_FLOWCTL | QFCF_DEFAULTCLASS)
 
 #ifdef BSD_KERNEL_PRIVATE
-#define	QFCF_BITS \
+#define QFCF_BITS \
 	"\020\1RED\2ECN\3RIO\5CLEARDSCP\11BLUE\12SFB\13FLOWCTL\15DEFAULT" \
 	"\35LAZY"
 #else
-#define	QFCF_BITS \
+#define QFCF_BITS \
 	"\020\1RED\2ECN\3RIO\5CLEARDSCP\11BLUE\12SFB\13FLOWCTL\15DEFAULT"
 #endif /* !BSD_KERNEL_PRIVATE */
 
-#define	QFQ_MAX_CLASSES		32
-#define	QFQ_MAX_WSHIFT		16	/* log2(max_weight) */
-#define	QFQ_MAX_WEIGHT		(1 << QFQ_MAX_WSHIFT)
+#define QFQ_MAX_CLASSES         32
+#define QFQ_MAX_WSHIFT          16      /* log2(max_weight) */
+#define QFQ_MAX_WEIGHT          (1 << QFQ_MAX_WSHIFT)
 
 struct qfq_classstats {
-	u_int32_t		class_handle;
-	u_int32_t		index;
-	u_int32_t		weight;
-	u_int32_t		lmax;
+	u_int32_t               class_handle;
+	u_int32_t               index;
+	u_int32_t               weight;
+	u_int32_t               lmax;
 
-	u_int32_t		qlength;
-	u_int32_t		qlimit;
-	u_int32_t		period;
-	struct pktcntr		xmitcnt;  /* transmitted packet counter */
-	struct pktcntr		dropcnt;  /* dropped packet counter */
+	u_int32_t               qlength;
+	u_int32_t               qlimit;
+	u_int32_t               period;
+	struct pktcntr          xmitcnt;  /* transmitted packet counter */
+	struct pktcntr          dropcnt;  /* dropped packet counter */
 
 	/* RED, RIO, BLUE, SFB related info */
-	classq_type_t		qtype;
+	classq_type_t           qtype;
 	union {
 		/* RIO has 3 red stats */
-		struct red_stats	red[RIO_NDROPPREC];
-		struct blue_stats	blue;
-		struct sfb_stats	sfb;
+		struct red_stats        red[RIO_NDROPPREC];
+		struct blue_stats       blue;
+		struct sfb_stats        sfb;
 	};
-	classq_state_t		qstate;
+	classq_state_t          qstate;
 };
 
 #ifdef BSD_KERNEL_PRIVATE
-#define	QFQ_DEBUG	1	/* enable extra debugging */
+#define QFQ_DEBUG       1       /* enable extra debugging */
 
 /*
  * Virtual time computations.
@@ -174,69 +174,69 @@ struct qfq_classstats {
  * is below the MAX_INDEX region we use 0 (which is the same as
  * using a larger len).
  */
-#define	QFQ_MAX_INDEX		19
-#define	QFQ_MAX_WSUM		(2 * QFQ_MAX_WEIGHT)
+#define QFQ_MAX_INDEX           19
+#define QFQ_MAX_WSUM            (2 * QFQ_MAX_WEIGHT)
 
-#define	QFQ_FRAC_BITS		30	/* fixed point arithmetic */
-#define	QFQ_ONE_FP		(1UL << QFQ_FRAC_BITS)
-#define	QFQ_IWSUM		(QFQ_ONE_FP / QFQ_MAX_WSUM)
+#define QFQ_FRAC_BITS           30      /* fixed point arithmetic */
+#define QFQ_ONE_FP              (1UL << QFQ_FRAC_BITS)
+#define QFQ_IWSUM               (QFQ_ONE_FP / QFQ_MAX_WSUM)
 
-#define	QFQ_MTU_SHIFT		11	/* log2(max_len) */
-#define	QFQ_MIN_SLOT_SHIFT	(QFQ_FRAC_BITS + QFQ_MTU_SHIFT - QFQ_MAX_INDEX)
+#define QFQ_MTU_SHIFT           11      /* log2(max_len) */
+#define QFQ_MIN_SLOT_SHIFT      (QFQ_FRAC_BITS + QFQ_MTU_SHIFT - QFQ_MAX_INDEX)
 
 /*
  * Possible group states, also indexes for the bitmaps array in
  * struct qfq_if. We rely on ER, IR, EB, IB being numbered 0..3
  */
 enum qfq_state {
-	ER = 0,				/* eligible, ready */
-	IR = 1,				/* ineligible, ready */
-	EB = 2,				/* eligible, backlogged */
-	IB = 3,				/* ineligible, backlogged */
+	ER = 0,                         /* eligible, ready */
+	IR = 1,                         /* ineligible, ready */
+	EB = 2,                         /* eligible, backlogged */
+	IB = 3,                         /* ineligible, backlogged */
 	QFQ_MAX_STATE
 };
 
 struct qfq_group;
 
 struct qfq_class {
-	u_int32_t	cl_handle;	/* class handle */
-	class_queue_t	cl_q;		/* class queue structure */
-	u_int32_t	cl_qflags;	/* class queue flags */
+	u_int32_t       cl_handle;      /* class handle */
+	class_queue_t   cl_q;           /* class queue structure */
+	u_int32_t       cl_qflags;      /* class queue flags */
 	union {
-		void		*ptr;
-		struct sfb	*sfb;	/* SFB state */
+		void            *ptr;
+		struct sfb      *sfb;   /* SFB state */
 	} cl_qalg;
-	struct qfq_if	*cl_qif;	/* back pointer to qif */
-	u_int32_t	cl_flags;	/* class flags */
+	struct qfq_if   *cl_qif;        /* back pointer to qif */
+	u_int32_t       cl_flags;       /* class flags */
 
-	u_int64_t	cl_S, cl_F;	/* flow timestamps (exact) */
-	struct qfq_class *cl_next;	/* link for the slot list */
+	u_int64_t       cl_S, cl_F;     /* flow timestamps (exact) */
+	struct qfq_class *cl_next;      /* link for the slot list */
 	/*
 	 * Group we belong to.  In principle we would need the index,
 	 * which is log_2(lmax/weight), but we never reference it
 	 * directly, only the group.
 	 */
 	struct qfq_group *cl_grp;
-	u_int32_t	cl_inv_w;	/* QFQ_ONE_FP/weight */
-	u_int32_t	cl_lmax;	/* max packet size for this flow */
+	u_int32_t       cl_inv_w;       /* QFQ_ONE_FP/weight */
+	u_int32_t       cl_lmax;        /* max packet size for this flow */
 
 	/* statistics */
-	u_int32_t	cl_period;	/* backlog period */
-	struct pktcntr  cl_xmitcnt;	/* transmitted packet counter */
-	struct pktcntr  cl_dropcnt;	/* dropped packet counter */
+	u_int32_t       cl_period;      /* backlog period */
+	struct pktcntr  cl_xmitcnt;     /* transmitted packet counter */
+	struct pktcntr  cl_dropcnt;     /* dropped packet counter */
 };
 
-#define	cl_sfb	cl_qalg.sfb
+#define cl_sfb  cl_qalg.sfb
 
 /*
  * Group descriptor, see the paper for details.
  * Basically this contains the bucket lists.
  */
 struct qfq_group {
-	u_int64_t	qfg_S, qfg_F;	/* group timestamps (approx) */
-	u_int8_t	qfg_slot_shift;	/* slot shift */
-	u_int8_t	qfg_index;	/* group index */
-	u_int8_t	qfg_front;	/* index of the front slot */
+	u_int64_t       qfg_S, qfg_F;   /* group timestamps (approx) */
+	u_int8_t        qfg_slot_shift; /* slot shift */
+	u_int8_t        qfg_index;      /* group index */
+	u_int8_t        qfg_front;      /* index of the front slot */
 	pktsched_bitmap_t qfg_full_slots; /* non-empty slots */
 
 	/* array of lists of active classes */
@@ -247,26 +247,26 @@ struct qfq_group {
  * qfq interface state
  */
 struct qfq_if {
-	struct ifclassq		*qif_ifq;	/* backpointer to ifclassq */
-	u_int32_t		qif_throttle;	/* throttling level */
-	u_int8_t		qif_classes;	/* # of classes in table */
-	u_int8_t		qif_maxclasses;	/* max # of classes in table */
-	u_int8_t		qif_maxslots;	/* max # of slots */
-	struct qfq_class	*qif_default;	/* default class */
-	struct qfq_class	**qif_class_tbl;
+	struct ifclassq         *qif_ifq;       /* backpointer to ifclassq */
+	u_int32_t               qif_throttle;   /* throttling level */
+	u_int8_t                qif_classes;    /* # of classes in table */
+	u_int8_t                qif_maxclasses; /* max # of classes in table */
+	u_int8_t                qif_maxslots;   /* max # of slots */
+	struct qfq_class        *qif_default;   /* default class */
+	struct qfq_class        **qif_class_tbl;
 
-	u_int64_t		qif_V;		/* precise virtual time */
-	u_int32_t		qif_wsum;	/* weight sum */
+	u_int64_t               qif_V;          /* precise virtual time */
+	u_int32_t               qif_wsum;       /* weight sum */
 #if QFQ_DEBUG
-	u_int32_t		qif_i_wsum;	/* QFQ_ONE_FP/w_sum */
-	u_int32_t		qif_queued;	/* debugging */
-	u_int32_t		qif_emptygrp;	/* debugging */
+	u_int32_t               qif_i_wsum;     /* QFQ_ONE_FP/w_sum */
+	u_int32_t               qif_queued;     /* debugging */
+	u_int32_t               qif_emptygrp;   /* debugging */
 #endif /* QFQ_DEBUG */
-	pktsched_bitmap_t	qif_bitmaps[QFQ_MAX_STATE]; /* group bitmaps */
-	struct qfq_group	**qif_groups;	/* the groups */
+	pktsched_bitmap_t       qif_bitmaps[QFQ_MAX_STATE]; /* group bitmaps */
+	struct qfq_group        **qif_groups;   /* the groups */
 };
 
-#define	QFQIF_IFP(_qif)	((_qif)->qif_ifq->ifcq_ifp)
+#define QFQIF_IFP(_qif) ((_qif)->qif_ifq->ifcq_ifp)
 
 struct if_ifclassq_stats;
 

@@ -58,7 +58,8 @@ static pthread_mutex_t g_child_mtx;
 static TAILQ_HEAD(, child) g_children = TAILQ_HEAD_INITIALIZER(g_children);
 static int g_nchildren = 0;
 
-static pid_t spawn_child(int argc, char **argv, struct persona_args *pa)
+static pid_t
+spawn_child(int argc, char **argv, struct persona_args *pa)
 {
 	int ret;
 	uint32_t persona_flags = 0;
@@ -99,11 +100,13 @@ static pid_t spawn_child(int argc, char **argv, struct persona_args *pa)
 		goto out_err;
 	}
 
-	if (pa->flags & PA_SHOULD_VERIFY)
+	if (pa->flags & PA_SHOULD_VERIFY) {
 		persona_flags |= POSIX_SPAWN_PERSONA_FLAGS_VERIFY;
+	}
 
-	if (pa->flags & PA_OVERRIDE)
+	if (pa->flags & PA_OVERRIDE) {
 		persona_flags |= POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE;
+	}
 
 	ret = posix_spawnattr_set_persona_np(&attr, pa->kinfo.persona_id, persona_flags);
 	if (ret != 0) {
@@ -166,14 +169,16 @@ out_err:
 
 static int child_should_exit = 0;
 
-static void child_sighandler(int sig)
+static void
+child_sighandler(int sig)
 {
 	(void)sig;
 	dbg("PID: %d received sig %d", getpid(), sig);
 	child_should_exit = 1;
 }
 
-static int child_main_loop(int argc, char **argv)
+static int
+child_main_loop(int argc, char **argv)
 {
 	char ch;
 	sigset_t sigset;
@@ -224,17 +229,20 @@ static int child_main_loop(int argc, char **argv)
 
 	kinfo.persona_info_version = PERSONA_INFO_V1;
 	err = kpersona_info(persona_id, &kinfo);
-	if (err == 0)
+	if (err == 0) {
 		dump_kpersona("Child: kpersona_info", &kinfo);
-	else
+	} else {
 		info("Child: ERROR grabbing kpersona_info: %d", errno);
+	}
 
-	if (child_should_exit)
+	if (child_should_exit) {
 		return rval;
+	}
 
 	infov("Child Sleeping!");
-	while (!child_should_exit)
+	while (!child_should_exit) {
 		sleep(1);
+	}
 
 	infov("Child exiting!");
 	return rval;
@@ -247,7 +255,8 @@ static int child_main_loop(int argc, char **argv)
  *
  * = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
  */
-static void main_sighandler(int sig)
+static void
+main_sighandler(int sig)
 {
 	dbg("PID: %d received sig %d", getpid(), sig);
 	if (sig == SIGCHLD) {
@@ -255,15 +264,17 @@ static void main_sighandler(int sig)
 	}
 }
 
-static void usage_main(const char *progname, int verbose)
+static void
+usage_main(const char *progname, int verbose)
 {
 	const char *nm = basename((char *)progname);
 
 	printf("%s v%d.%d\n", PERSONA_TEST_NAME, PERSONA_TEST_VMAJOR, PERSONA_TEST_VMINOR);
 	printf("usage: %s [-I id] [-V] [-u uid] [-g gid] [-vw] progname [args...]\n", nm);
 	printf("       Spawn a new process into a new or existing persona.\n");
-	if (!verbose)
+	if (!verbose) {
 		exit(1);
+	}
 
 	printf("\t%-10s\tID of the persona\n", "-I id");
 	printf("\t%-10s\tVerify persona parameters against existing persona (given by -I)\n", "-V");
@@ -278,7 +289,8 @@ static void usage_main(const char *progname, int verbose)
 	exit(1);
 }
 
-int main(int argc, char **argv)
+int
+main(int argc, char **argv)
 {
 	char ch;
 	int ret;
@@ -294,8 +306,9 @@ int main(int argc, char **argv)
 	if (argc > 1 && strcmp(argv[1], "child") == 0) {
 		optind = 2;
 		ret = child_main_loop(argc, argv);
-		if (ret != 1)
+		if (ret != 1) {
 			exit(ret);
+		}
 		if (strcmp(argv[optind], "spawn") != 0) {
 			printf("child exiting (%s).\n", argv[optind]);
 			exit(0);
@@ -310,8 +323,9 @@ int main(int argc, char **argv)
 		 */
 	}
 
-	if (geteuid() != 0)
+	if (geteuid() != 0) {
 		err("%s must be run as root", argv[0] ? basename(argv[0]) : PERSONA_TEST_NAME);
+	}
 
 	struct persona_args pa;
 	memset(&pa, 0, sizeof(pa));
@@ -334,15 +348,17 @@ int main(int argc, char **argv)
 			break;
 		case 'G':
 			ret = parse_groupspec(&pa.kinfo, optarg);
-			if (ret < 0)
+			if (ret < 0) {
 				err("Invalid groupspec: \"%s\"", optarg);
+			}
 			pa.flags |= PA_HAS_GROUPS;
 			pa.flags |= PA_OVERRIDE;
 			break;
 		case 'I':
 			pa.kinfo.persona_id = atoi(optarg);
-			if (pa.kinfo.persona_id == 0)
+			if (pa.kinfo.persona_id == 0) {
 				err("Invalid Persona ID: %s", optarg);
+			}
 			pa.flags |= PA_HAS_ID;
 			break;
 		case 'u':
@@ -366,8 +382,9 @@ int main(int argc, char **argv)
 		}
 	}
 
-	if (pa.flags & PA_SHOULD_VERIFY)
+	if (pa.flags & PA_SHOULD_VERIFY) {
 		pa.flags = ~PA_OVERRIDE;
+	}
 
 	if (optind >= argc) {
 		printf("No program given!\n");
@@ -382,8 +399,9 @@ int main(int argc, char **argv)
 	argv[argc] = NULL;
 
 	ret = spawn_child(argc, argv, &pa);
-	if (ret < 0)
+	if (ret < 0) {
 		return ret;
+	}
 
 	pid_t child_pid = (pid_t)ret;
 	int status = 0;
@@ -398,9 +416,10 @@ int main(int argc, char **argv)
 		waitpid(child_pid, &status, 0);
 		if (WIFEXITED(status)) {
 			status = WEXITSTATUS(status);
-			if (status != 0)
+			if (status != 0) {
 				errc(ERR_CHILD_FAIL,
-				     "Child exited with status: %d", status);
+				    "Child exited with status: %d", status);
+			}
 		}
 	}
 

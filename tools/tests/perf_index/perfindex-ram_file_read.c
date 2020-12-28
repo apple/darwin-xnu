@@ -9,28 +9,28 @@ const char ramdisk_name[] = "StressRAMDisk";
 char ramdisk_path[MAXPATHLEN];
 
 DECL_SETUP {
-    int retval;
+	int retval;
 
-    retval = setup_ram_volume(ramdisk_name, ramdisk_path);
-    VERIFY(retval == PERFINDEX_SUCCESS, "setup_ram_volume failed");
+	retval = setup_ram_volume(ramdisk_name, ramdisk_path);
+	VERIFY(retval == PERFINDEX_SUCCESS, "setup_ram_volume failed");
 
-    printf("ramdisk: %s\n", ramdisk_path);
+	printf("ramdisk: %s\n", ramdisk_path);
 
-    return test_file_read_setup(ramdisk_path, num_threads, length, 0L);
+	return test_file_read_setup(ramdisk_path, num_threads, length, 0L);
 }
 
 DECL_TEST {
-    return test_file_read(ramdisk_path, thread_id, num_threads, length, 0L);
+	return test_file_read(ramdisk_path, thread_id, num_threads, length, 0L);
 }
 
 DECL_CLEANUP {
-    int retval;
+	int retval;
 
-    retval = test_file_read_cleanup(ramdisk_path, num_threads, length);
-    VERIFY(retval == PERFINDEX_SUCCESS, "test_file_read_cleanup failed");
+	retval = test_file_read_cleanup(ramdisk_path, num_threads, length);
+	VERIFY(retval == PERFINDEX_SUCCESS, "test_file_read_cleanup failed");
 
-    retval = cleanup_ram_volume(ramdisk_path);
-    VERIFY(retval == 0, "cleanup_ram_volume failed");
+	retval = cleanup_ram_volume(ramdisk_path);
+	VERIFY(retval == 0, "cleanup_ram_volume failed");
 
-    return PERFINDEX_SUCCESS;
+	return PERFINDEX_SUCCESS;
 }

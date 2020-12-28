@@ -2,7 +2,7 @@
  * Copyright (c) 2007 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
@@ -52,10 +52,10 @@
  */
 
 #include <sys/param.h>
-#include <sys/types.h>  
-#include <sys/vnode.h>  
+#include <sys/types.h>
+#include <sys/vnode.h>
 #include <sys/vnode_internal.h>
-#include <sys/queue.h>  
+#include <sys/queue.h>
 #include <bsd/bsm/audit.h>
 #include <bsd/security/audit/audit.h>
 #include <bsd/sys/malloc.h>
@@ -71,7 +71,7 @@ mac_iokit_check_device(char *devtype, struct mac_module_data *mdata)
 	int error;
 
 	MAC_CHECK(iokit_check_device, devtype, mdata);
-	return (error);
+	return error;
 }
 
 int
@@ -80,7 +80,7 @@ mac_iokit_check_open(kauth_cred_t cred, io_object_t user_client, unsigned int us
 	int error;
 
 	MAC_CHECK(iokit_check_open, cred, user_client, user_client_type);
-	return (error);
+	return error;
 }
 
 int
@@ -89,7 +89,7 @@ mac_iokit_check_set_properties(kauth_cred_t cred, io_object_t registry_entry, io
 	int error;
 
 	MAC_CHECK(iokit_check_set_properties, cred, registry_entry, properties);
-	return (error);
+	return error;
 }
 
 int
@@ -98,7 +98,7 @@ mac_iokit_check_filter_properties(kauth_cred_t cred, io_object_t registry_entry)
 	int error;
 
 	MAC_CHECK(iokit_check_filter_properties, cred, registry_entry);
-	return (error);
+	return error;
 }
 
 int
@@ -107,7 +107,7 @@ mac_iokit_check_get_property(kauth_cred_t cred, io_object_t registry_entry, cons
 	int error;
 
 	MAC_CHECK(iokit_check_get_property, cred, registry_entry, name);
-	return (error);
+	return error;
 }
 
 int
@@ -116,6 +116,5 @@ mac_iokit_check_hid_control(kauth_cred_t cred)
 	int error;
 
 	MAC_CHECK(iokit_check_hid_control, cred);
-	return (error);
+	return error;
 }
-

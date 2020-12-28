@@ -47,6 +47,8 @@
 #include <net/if_ports_used.h>
 
 #include <netinet/in_pcb.h>
+#include <netinet/tcp_var.h>
+#include <netinet/tcp_fsm.h>
 
 
 #include <stdbool.h>
@@ -60,9 +62,9 @@ SYSCTL_DECL(_net_link_generic_system);
 SYSCTL_NODE(_net_link_generic_system, OID_AUTO, port_used,
     CTLFLAG_RW | CTLFLAG_LOCKED, 0, "if port used");
 
-static uuid_t		current_wakeuuid;
+static uuid_t           current_wakeuuid;
 SYSCTL_OPAQUE(_net_link_generic_system_port_used, OID_AUTO, current_wakeuuid,
-    CTLFLAG_RD|CTLFLAG_LOCKED,
+    CTLFLAG_RD | CTLFLAG_LOCKED,
     current_wakeuuid, sizeof(uuid_t), "S,uuid_t", "");
 
 static int sysctl_net_port_info_list SYSCTL_HANDLER_ARGS;
@@ -72,6 +74,7 @@ SYSCTL_PROC(_net_link_generic_system_port_used, OID_AUTO, list,
 
 static int use_test_wakeuuid = 0;
 static uuid_t test_wakeuuid;
+static uuid_string_t test_wakeuuid_str;
 
 #if (DEVELOPMENT || DEBUG)
 SYSCTL_INT(_net_link_generic_system_port_used, OID_AUTO, use_test_wakeuuid,
@@ -88,8 +91,13 @@ SYSCTL_PROC(_net_link_generic_system_port_used, OID_AUTO, clear_test_wakeuuid,
     CTLTYPE_STRUCT | CTLFLAG_RW | CTLFLAG_LOCKED, 0, 0,
     sysctl_clear_test_wakeuuid, "S,uuid_t", "");
 
+int sysctl_test_wakeuuid_str SYSCTL_HANDLER_ARGS;
+SYSCTL_PROC(_net_link_generic_system_port_used, OID_AUTO, test_wakeuuid_str,
+    CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_LOCKED, 0, 0,
+    sysctl_test_wakeuuid_str, "A", "");
+
 SYSCTL_OPAQUE(_net_link_generic_system_port_used, OID_AUTO, test_wakeuuid,
-    CTLFLAG_RD|CTLFLAG_LOCKED,
+    CTLFLAG_RD | CTLFLAG_LOCKED,
     test_wakeuuid, sizeof(uuid_t), "S,uuid_t", "");
 #endif /* (DEVELOPMENT || DEBUG) */
 
@@ -124,7 +132,7 @@ static SYSCTL_PROC(_net_link_generic_system_port_used, OID_AUTO,
     wakeuuid_not_set_last_time, CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED,
     0, 0, sysctl_wakeuuid_not_set_last_time, "S,timeval", "");
 
-char wakeuuid_not_set_last_if [IFXNAMSIZ];
+char wakeuuid_not_set_last_if[IFXNAMSIZ];
 int sysctl_wakeuuid_not_set_last_if SYSCTL_HANDLER_ARGS;
 static SYSCTL_PROC(_net_link_generic_system_port_used, OID_AUTO,
     wakeuuid_not_set_last_if, CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED,
@@ -137,14 +145,14 @@ decl_lck_mtx_data(static, net_port_entry_head_lock);
 static lck_grp_t *net_port_entry_head_lock_group;
 
 struct net_port_entry {
-	SLIST_ENTRY(net_port_entry)	npe_next;
-	struct net_port_info		npe_npi;
+	SLIST_ENTRY(net_port_entry)     npe_next;
+	struct net_port_info            npe_npi;
 };
 
 static struct zone *net_port_entry_zone = NULL;
 
-#define	NET_PORT_ENTRY_ZONE_MAX	128
-#define	NET_PORT_ENTRY_ZONE_NAME "net_port_entry"
+#define NET_PORT_ENTRY_ZONE_MAX 128
+#define NET_PORT_ENTRY_ZONE_NAME "net_port_entry"
 
 static SLIST_HEAD(net_port_entry_list, net_port_entry) net_port_entry_list =
     SLIST_HEAD_INITIALIZER(&net_port_entry_list);
@@ -164,7 +172,7 @@ if_ports_used_init(void)
 
 		lck_grp_attributes = lck_grp_attr_alloc_init();
 		net_port_entry_head_lock_group = lck_grp_alloc_init(
-		    "net port entry lock", lck_grp_attributes);
+			"net port entry lock", lck_grp_attributes);
 
 		lck_attributes = lck_attr_alloc_init();
 		if (lck_attributes == NULL) {
@@ -209,19 +217,24 @@ net_port_entry_list_clear(void)
 }
 
 static bool
-get_test_wake_uuid(uuid_t wakeuuid)
+get_test_wake_uuid(uuid_string_t wakeuuid_str, size_t len)
 {
 	if (__improbable(use_test_wakeuuid)) {
 		if (!uuid_is_null(test_wakeuuid)) {
-			if (wakeuuid != NULL) {
-				uuid_copy(wakeuuid, test_wakeuuid);
+			if (wakeuuid_str != NULL && len != 0) {
+				uuid_unparse(test_wakeuuid, wakeuuid_str);
 			}
-			return (true);
+			return true;
+		} else if (strlen(test_wakeuuid_str) != 0) {
+			if (wakeuuid_str != NULL && len != 0) {
+				strlcpy(wakeuuid_str, test_wakeuuid_str, len);
+			}
+			return true;
 		} else {
-			return (false);
+			return false;
 		}
 	} else {
-		return (false);
+		return false;
 	}
 }
 
@@ -232,7 +245,7 @@ is_wakeuuid_set(void)
 	 * IOPMCopySleepWakeUUIDKey() tells if SleepWakeUUID is currently set
 	 * That means we are currently in a sleep/wake cycle
 	 */
-	return (get_test_wake_uuid(NULL) || IOPMCopySleepWakeUUIDKey(NULL, 0));
+	return get_test_wake_uuid(NULL, 0) || IOPMCopySleepWakeUUIDKey(NULL, 0);
 }
 
 void
@@ -241,16 +254,24 @@ if_ports_used_update_wakeuuid(struct ifnet *ifp)
 	uuid_t wakeuuid;
 	bool wakeuuid_is_set = false;
 	bool updated = false;
+	uuid_string_t wakeuuid_str;
+
+	uuid_clear(wakeuuid);
 
 	if (__improbable(use_test_wakeuuid)) {
-		wakeuuid_is_set = get_test_wake_uuid(wakeuuid);
+		wakeuuid_is_set = get_test_wake_uuid(wakeuuid_str,
+		    sizeof(wakeuuid_str));
 	} else {
-		uuid_string_t wakeuuid_str;
-
 		wakeuuid_is_set = IOPMCopySleepWakeUUIDKey(wakeuuid_str,
 		    sizeof(wakeuuid_str));
-		if (wakeuuid_is_set) {
-			uuid_parse(wakeuuid_str, wakeuuid);
+	}
+
+	if (wakeuuid_is_set) {
+		if (uuid_parse(wakeuuid_str, wakeuuid) != 0) {
+			os_log(OS_LOG_DEFAULT,
+			    "%s: IOPMCopySleepWakeUUIDKey got bad value %s\n",
+			    __func__, wakeuuid_str);
+			wakeuuid_is_set = false;
 		}
 	}
 
@@ -266,7 +287,7 @@ if_ports_used_update_wakeuuid(struct ifnet *ifp)
 			microtime(&wakeuuid_not_set_last_time);
 			strlcpy(wakeuuid_not_set_last_if, if_name(ifp),
 			    sizeof(wakeuuid_not_set_last_if));
-		}	
+		}
 		return;
 	}
 
@@ -276,7 +297,7 @@ if_ports_used_update_wakeuuid(struct ifnet *ifp)
 		uuid_copy(current_wakeuuid, wakeuuid);
 		updated = true;
 	}
-	/* 
+	/*
 	 * Record the time last checked
 	 */
 	microuptime(&wakeuiid_last_check);
@@ -305,12 +326,12 @@ net_port_info_equal(const struct net_port_info *x,
 	    x->npi_effective_pid == y->npi_effective_pid &&
 	    x->npi_flags == y->npi_flags &&
 	    memcmp(&x->npi_local_addr_, &y->npi_local_addr_,
-	        sizeof(union in_addr_4_6)) == 0 &&
+	    sizeof(union in_addr_4_6)) == 0 &&
 	    memcmp(&x->npi_foreign_addr_, &y->npi_foreign_addr_,
-	        sizeof(union in_addr_4_6)) == 0) {
-		return (true);
+	    sizeof(union in_addr_4_6)) == 0) {
+		return true;
 	}
-	return (false);
+	return false;
 }
 
 static bool
@@ -322,17 +343,17 @@ net_port_info_has_entry(const struct net_port_info *npi)
 
 	SLIST_FOREACH(npe, &net_port_entry_list, npe_next) {
 		if (net_port_info_equal(&npe->npe_npi, npi)) {
-			return (true);
+			return true;
 		}
 	}
 
-	return (false);
+	return false;
 }
 
 static bool
 net_port_info_add_entry(const struct net_port_info *npi)
 {
-	struct net_port_entry	*npe = NULL;
+	struct net_port_entry   *npe = NULL;
 	uint32_t num = 0;
 	bool entry_added = false;
 
@@ -349,7 +370,7 @@ net_port_info_add_entry(const struct net_port_info *npi)
 			    npi->npi_owner_pid,
 			    npi->npi_effective_pid);
 		}
-		return (0);
+		return 0;
 	}
 
 	npe = zalloc(net_port_entry_zone);
@@ -362,7 +383,7 @@ net_port_info_add_entry(const struct net_port_info *npi)
 		    npi->npi_if_index,
 		    npi->npi_owner_pid,
 		    npi->npi_effective_pid);
-		return (0);
+		return 0;
 	}
 	bzero(npe, sizeof(struct net_port_entry));
 
@@ -405,7 +426,7 @@ net_port_info_add_entry(const struct net_port_info *npi)
 		zfree(net_port_entry_zone, npe);
 		npe = NULL;
 	}
-	return (entry_added);
+	return entry_added;
 }
 
 #if (DEVELOPMENT || DEBUG)
@@ -416,11 +437,11 @@ sysctl_new_test_wakeuuid SYSCTL_HANDLER_ARGS
 	int error = 0;
 
 	if (kauth_cred_issuser(kauth_cred_get()) == 0) {
-		return (EPERM);
+		return EPERM;
 	}
 	if (req->oldptr == USER_ADDR_NULL) {
 		req->oldidx = sizeof(uuid_t);
-		return (0);
+		return 0;
 	}
 	if (req->newptr != USER_ADDR_NULL) {
 		uuid_generate(test_wakeuuid);
@@ -428,7 +449,7 @@ sysctl_new_test_wakeuuid SYSCTL_HANDLER_ARGS
 	error = SYSCTL_OUT(req, test_wakeuuid,
 	    MIN(sizeof(uuid_t), req->oldlen));
 
-	return (error);
+	return error;
 }
 
 int
@@ -438,11 +459,11 @@ sysctl_clear_test_wakeuuid SYSCTL_HANDLER_ARGS
 	int error = 0;
 
 	if (kauth_cred_issuser(kauth_cred_get()) == 0) {
-		return (EPERM);
+		return EPERM;
 	}
 	if (req->oldptr == USER_ADDR_NULL) {
 		req->oldidx = sizeof(uuid_t);
-		return (0);
+		return 0;
 	}
 	if (req->newptr != USER_ADDR_NULL) {
 		uuid_clear(test_wakeuuid);
@@ -450,7 +471,26 @@ sysctl_clear_test_wakeuuid SYSCTL_HANDLER_ARGS
 	error = SYSCTL_OUT(req, test_wakeuuid,
 	    MIN(sizeof(uuid_t), req->oldlen));
 
-	return (error);
+	return error;
+}
+
+int
+sysctl_test_wakeuuid_str SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	int error = 0;
+	int changed;
+
+	if (kauth_cred_issuser(kauth_cred_get()) == 0) {
+		return EPERM;
+	}
+	error = sysctl_io_string(req, test_wakeuuid_str, sizeof(test_wakeuuid_str), 1, &changed);
+	if (changed) {
+		os_log_info(OS_LOG_DEFAULT, "%s: test_wakeuuid_str %s",
+		    __func__, test_wakeuuid_str);
+	}
+
+	return error;
 }
 
 #endif /* (DEVELOPMENT || DEBUG) */
@@ -481,7 +521,7 @@ sysctl_wakeuuid_not_set_last_if SYSCTL_HANDLER_ARGS
 #pragma unused(oidp, arg1, arg2)
 
 	return SYSCTL_OUT(req, &wakeuuid_not_set_last_if,
-	    strlen(wakeuuid_not_set_last_if) + 1);
+    strlen(wakeuuid_not_set_last_if) + 1);
 }
 
 static int
@@ -494,7 +534,7 @@ sysctl_net_port_info_list SYSCTL_HANDLER_ARGS
 
 	if ((error = priv_check_cred(kauth_cred_get(),
 	    PRIV_NET_PRIVILEGED_NETWORK_STATISTICS, 0)) != 0) {
-		return (EPERM);
+		return EPERM;
 	}
 	lck_mtx_lock(&net_port_entry_head_lock);
 
@@ -503,7 +543,7 @@ sysctl_net_port_info_list SYSCTL_HANDLER_ARGS
 		uint32_t cnt = net_port_entry_count;
 		cnt += cnt >> 4;
 		req->oldidx = sizeof(struct xnpigen) +
-			cnt * sizeof(struct net_port_info);
+		    cnt * sizeof(struct net_port_info);
 		goto done;
 	}
 
@@ -513,7 +553,7 @@ sysctl_net_port_info_list SYSCTL_HANDLER_ARGS
 	uuid_copy(xnpigen.xng_wakeuuid, current_wakeuuid);
 	xnpigen.xng_npi_count = net_port_entry_count;
 	xnpigen.xng_npi_size = sizeof(struct net_port_info);
-	error = SYSCTL_OUT(req, &xnpigen, sizeof (xnpigen));
+	error = SYSCTL_OUT(req, &xnpigen, sizeof(xnpigen));
 	if (error != 0) {
 		printf("%s: SYSCTL_OUT(xnpigen) error %d\n",
 		    __func__, error);
@@ -532,7 +572,7 @@ sysctl_net_port_info_list SYSCTL_HANDLER_ARGS
 done:
 	lck_mtx_unlock(&net_port_entry_head_lock);
 
-	return (error);
+	return error;
 }
 
 /*
@@ -602,9 +642,10 @@ sysctl_get_ports_used SYSCTL_HANDLER_ARGS
 	}
 	error = SYSCTL_OUT(req, bitfield, bitstr_size(IP_PORTRANGE_SIZE));
 done:
-	if (bitfield != NULL)
+	if (bitfield != NULL) {
 		_FREE(bitfield, M_TEMP);
-	return (error);
+	}
+	return error;
 }
 
 __private_extern__ void
@@ -623,7 +664,12 @@ if_ports_used_add_inpcb(const uint32_t ifindex, const struct inpcb *inp)
 	npi.npi_timestamp.tv_usec = wakeuiid_last_check.tv_usec;
 
 	if (SOCK_PROTO(so) == IPPROTO_TCP) {
+		struct tcpcb *tp = intotcpcb(inp);
+
 		npi.npi_flags |= NPIF_TCP;
+		if (tp != NULL && tp->t_state == TCPS_LISTEN) {
+			npi.npi_flags |= NPIF_LISTEN;
+		}
 	} else if (SOCK_PROTO(so) == IPPROTO_UDP) {
 		npi.npi_flags |= NPIF_UDP;
 	} else {
@@ -636,16 +682,24 @@ if_ports_used_add_inpcb(const uint32_t ifindex, const struct inpcb *inp)
 	npi.npi_local_port = inp->inp_lport;
 	npi.npi_foreign_port = inp->inp_fport;
 
-	if (inp->inp_vflag & INP_IPV4) {
+	/*
+	 * Take in account IPv4 addresses mapped on IPv6
+	 */
+	if ((inp->inp_vflag & INP_IPV6) != 0 && (inp->inp_flags & IN6P_IPV6_V6ONLY) == 0 &&
+	    (inp->inp_vflag & (INP_IPV6 | INP_IPV4)) == (INP_IPV6 | INP_IPV4)) {
+		npi.npi_flags |= NPIF_IPV6 | NPIF_IPV4;
+		memcpy(&npi.npi_local_addr_in6,
+		    &inp->in6p_laddr, sizeof(struct in6_addr));
+	} else if (inp->inp_vflag & INP_IPV4) {
 		npi.npi_flags |= NPIF_IPV4;
 		npi.npi_local_addr_in = inp->inp_laddr;
 		npi.npi_foreign_addr_in = inp->inp_faddr;
 	} else {
 		npi.npi_flags |= NPIF_IPV6;
 		memcpy(&npi.npi_local_addr_in6,
-		    &inp->in6p_laddr, sizeof (struct in6_addr));
+		    &inp->in6p_laddr, sizeof(struct in6_addr));
 		memcpy(&npi.npi_foreign_addr_in6,
-		    &inp->in6p_faddr, sizeof (struct in6_addr));
+		    &inp->in6p_faddr, sizeof(struct in6_addr));
 	}
 
 	npi.npi_owner_pid = so->last_pid;

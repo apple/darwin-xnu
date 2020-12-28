@@ -90,7 +90,7 @@
 
 extern int tvtohz(struct timeval *);
 
-static int in_rtqtimo_run;		/* in_rtqtimo is scheduled to run */
+static int in_rtqtimo_run;              /* in_rtqtimo is scheduled to run */
 static void in_rtqtimo(void *);
 static void in_sched_rtqtimo(struct timeval *);
 
@@ -123,17 +123,20 @@ in_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 	RT_LOCK_ASSERT_HELD(rt);
 
-	if (verbose)
-		rt_str(rt, dbuf, sizeof (dbuf), gbuf, sizeof (gbuf));
+	if (verbose) {
+		rt_str(rt, dbuf, sizeof(dbuf), gbuf, sizeof(gbuf));
+	}
 
 	/*
 	 * For IP, all unicast non-host routes are automatically cloning.
 	 */
-	if (IN_MULTICAST(ntohl(sin->sin_addr.s_addr)))
+	if (IN_MULTICAST(ntohl(sin->sin_addr.s_addr))) {
 		rt->rt_flags |= RTF_MULTICAST;
+	}
 
-	if (!(rt->rt_flags & (RTF_HOST | RTF_CLONING | RTF_MULTICAST)))
+	if (!(rt->rt_flags & (RTF_HOST | RTF_CLONING | RTF_MULTICAST))) {
 		rt->rt_flags |= RTF_PRCLONING;
+	}
 
 	/*
 	 * A little bit of help for both IP output and input:
@@ -159,8 +162,9 @@ in_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 			RT_CONVERT_LOCK(rt);
 			IFA_LOCK_SPIN(rt->rt_ifa);
 			if (satosin(rt->rt_ifa->ifa_addr)->sin_addr.s_addr ==
-			    sin->sin_addr.s_addr)
+			    sin->sin_addr.s_addr) {
 				rt->rt_flags |= RTF_LOCAL;
+			}
 			IFA_UNLOCK(rt->rt_ifa);
 		}
 	}
@@ -189,8 +193,9 @@ in_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 			char dbufc[MAX_IPv4_STR_LEN];
 
 			RT_LOCK(rt2);
-			if (verbose)
-				rt_str(rt2, dbufc, sizeof (dbufc), NULL, 0);
+			if (verbose) {
+				rt_str(rt2, dbufc, sizeof(dbufc), NULL, 0);
+			}
 
 			if ((rt2->rt_flags & RTF_LLINFO) &&
 			    (rt2->rt_flags & RTF_HOST) &&
@@ -228,8 +233,9 @@ in_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 		}
 	}
 
-	if (!verbose)
+	if (!verbose) {
 		goto done;
+	}
 
 	if (ret != NULL) {
 		if (flags != rt->rt_flags) {
@@ -251,7 +257,7 @@ in_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 		    rt->rt_flags, RTF_BITS);
 	}
 done:
-	return (ret);
+	return ret;
 }
 
 static struct radix_node *
@@ -267,13 +273,13 @@ in_deleteroute(void *v_arg, void *netmask_arg, struct radix_node_head *head)
 		struct rtentry *rt = (struct rtentry *)rn;
 
 		RT_LOCK(rt);
-		rt_str(rt, dbuf, sizeof (dbuf), gbuf, sizeof (gbuf));
+		rt_str(rt, dbuf, sizeof(dbuf), gbuf, sizeof(gbuf));
 		log(LOG_DEBUG, "%s: route to %s->%s->%s deleted, "
 		    "flags=%b\n", __func__, dbuf, gbuf, (rt->rt_ifp != NULL) ?
 		    rt->rt_ifp->if_xname : "", rt->rt_flags, RTF_BITS);
 		RT_UNLOCK(rt);
 	}
-	return (rn);
+	return rn;
 }
 
 /*
@@ -291,7 +297,7 @@ in_validate(struct radix_node *rn)
 		if (rt_verbose > 2) {
 			char dbuf[MAX_IPv4_STR_LEN], gbuf[MAX_IPv4_STR_LEN];
 
-			rt_str(rt, dbuf, sizeof (dbuf), gbuf, sizeof (gbuf));
+			rt_str(rt, dbuf, sizeof(dbuf), gbuf, sizeof(gbuf));
 			log(LOG_DEBUG, "%s: route to %s->%s->%s validated, "
 			    "flags=%b\n", __func__, dbuf, gbuf,
 			    (rt->rt_ifp != NULL) ? rt->rt_ifp->if_xname : "",
@@ -308,7 +314,7 @@ in_validate(struct radix_node *rn)
 			rt_setexpire(rt, 0);
 		}
 	}
-	return (rn);
+	return rn;
 }
 
 /*
@@ -317,7 +323,7 @@ in_validate(struct radix_node *rn)
 static struct radix_node *
 in_matroute(void *v_arg, struct radix_node_head *head)
 {
-	return (in_matroute_args(v_arg, head, NULL, NULL));
+	return in_matroute_args(v_arg, head, NULL, NULL);
 }
 
 /*
@@ -336,26 +342,26 @@ in_matroute_args(void *v_arg, struct radix_node_head *head,
 		in_validate(rn);
 		RT_UNLOCK((struct rtentry *)rn);
 	}
-	return (rn);
+	return rn;
 }
 
 /* one hour is ``really old'' */
-static uint32_t rtq_reallyold = 60*60;
+static uint32_t rtq_reallyold = 60 * 60;
 SYSCTL_UINT(_net_inet_ip, IPCTL_RTEXPIRE, rtexpire,
-	CTLFLAG_RW | CTLFLAG_LOCKED, &rtq_reallyold, 0,
-	"Default expiration time on dynamically learned routes");
+    CTLFLAG_RW | CTLFLAG_LOCKED, &rtq_reallyold, 0,
+    "Default expiration time on dynamically learned routes");
 
 /* never automatically crank down to less */
 static uint32_t rtq_minreallyold = 10;
 SYSCTL_UINT(_net_inet_ip, IPCTL_RTMINEXPIRE, rtminexpire,
-	CTLFLAG_RW | CTLFLAG_LOCKED, &rtq_minreallyold, 0,
-	"Minimum time to attempt to hold onto dynamically learned routes");
+    CTLFLAG_RW | CTLFLAG_LOCKED, &rtq_minreallyold, 0,
+    "Minimum time to attempt to hold onto dynamically learned routes");
 
 /* 128 cached routes is ``too many'' */
 static uint32_t rtq_toomany = 128;
 SYSCTL_UINT(_net_inet_ip, IPCTL_RTMAXCACHE, rtmaxcache,
-	CTLFLAG_RW | CTLFLAG_LOCKED, &rtq_toomany, 0,
-	"Upper limit on dynamically learned routes");
+    CTLFLAG_RW | CTLFLAG_LOCKED, &rtq_toomany, 0,
+    "Upper limit on dynamically learned routes");
 
 /*
  * On last reference drop, mark the route as belong to us so that it can be
@@ -372,20 +378,24 @@ in_clsroute(struct radix_node *rn, struct radix_node_head *head)
 	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 	RT_LOCK_ASSERT_HELD(rt);
 
-	if (!(rt->rt_flags & RTF_UP))
+	if (!(rt->rt_flags & RTF_UP)) {
 		return;         /* prophylactic measures */
-
-	if ((rt->rt_flags & (RTF_LLINFO | RTF_HOST)) != RTF_HOST)
+	}
+	if ((rt->rt_flags & (RTF_LLINFO | RTF_HOST)) != RTF_HOST) {
 		return;
+	}
 
-	if (rt->rt_flags & RTPRF_OURS)
+	if (rt->rt_flags & RTPRF_OURS) {
 		return;
+	}
 
-	if (!(rt->rt_flags & (RTF_WASCLONED | RTF_DYNAMIC)))
+	if (!(rt->rt_flags & (RTF_WASCLONED | RTF_DYNAMIC))) {
 		return;
+	}
 
-	if (verbose)
-		rt_str(rt, dbuf, sizeof (dbuf), gbuf, sizeof (gbuf));
+	if (verbose) {
+		rt_str(rt, dbuf, sizeof(dbuf), gbuf, sizeof(gbuf));
+	}
 
 	/*
 	 * Delete the route immediately if RTF_DELCLONE is set or
@@ -419,9 +429,10 @@ in_clsroute(struct radix_node *rn, struct radix_node_head *head)
 			RT_REMREF_LOCKED(rt);
 		} else {
 			RT_LOCK(rt);
-			if (!verbose)
-				rt_str(rt, dbuf, sizeof (dbuf),
-				    gbuf, sizeof (gbuf));
+			if (!verbose) {
+				rt_str(rt, dbuf, sizeof(dbuf),
+				    gbuf, sizeof(gbuf));
+			}
 			log(LOG_ERR, "%s: error deleting route to "
 			    "%s->%s->%s, flags=%b, err=%d\n", __func__,
 			    dbuf, gbuf, (rt->rt_ifp != NULL) ?
@@ -477,8 +488,9 @@ in_rtqkill(struct radix_node *rn, void *rock)
 	if (rt->rt_flags & RTPRF_OURS) {
 		char dbuf[MAX_IPv4_STR_LEN], gbuf[MAX_IPv4_STR_LEN];
 
-		if (verbose)
-			rt_str(rt, dbuf, sizeof (dbuf), gbuf, sizeof (gbuf));
+		if (verbose) {
+			rt_str(rt, dbuf, sizeof(dbuf), gbuf, sizeof(gbuf));
+		}
 
 		ap->found++;
 		VERIFY(rt->rt_expire == 0 || rt->rt_rmx.rmx_expire != 0);
@@ -498,7 +510,7 @@ in_rtqkill(struct radix_node *rn, void *rock)
 				    rt->rt_ifp->if_xname : "", rt->rt_flags,
 				    RTF_BITS, ap->draining);
 			}
-			RT_ADDREF_LOCKED(rt);	/* for us to free below */
+			RT_ADDREF_LOCKED(rt);   /* for us to free below */
 			/*
 			 * Delete this route since we're done with it;
 			 * the route may be freed afterwards, so we
@@ -513,9 +525,10 @@ in_rtqkill(struct radix_node *rn, void *rock)
 			    rt->rt_gateway, rt_mask(rt), rt->rt_flags, NULL);
 			if (err != 0) {
 				RT_LOCK(rt);
-				if (!verbose)
-					rt_str(rt, dbuf, sizeof (dbuf),
-					    gbuf, sizeof (gbuf));
+				if (!verbose) {
+					rt_str(rt, dbuf, sizeof(dbuf),
+					    gbuf, sizeof(gbuf));
+				}
 				log(LOG_ERR, "%s: error deleting route to "
 				    "%s->%s->%s, flags=%b, err=%d\n", __func__,
 				    dbuf, gbuf, (rt->rt_ifp != NULL) ?
@@ -549,10 +562,10 @@ in_rtqkill(struct radix_node *rn, void *rock)
 		RT_UNLOCK(rt);
 	}
 
-	return (0);
+	return 0;
 }
 
-#define	RTQ_TIMEOUT	60*10	/* run no less than once every ten minutes */
+#define RTQ_TIMEOUT     60*10   /* run no less than once every ten minutes */
 static int rtq_timeout = RTQ_TIMEOUT;
 
 static void
@@ -577,7 +590,7 @@ in_rtqtimo(void *targ)
 		log(LOG_DEBUG, "%s: initial nextstop is T+%u seconds\n",
 		    __func__, rtq_timeout);
 	}
-	bzero(&arg, sizeof (arg));
+	bzero(&arg, sizeof(arg));
 	arg.rnh = rnh;
 	arg.nextstop = timenow + rtq_timeout;
 	rnh->rnh_walktree(rnh, in_rtqkill, &arg);
@@ -598,8 +611,9 @@ in_rtqtimo(void *targ)
 	    ((timenow - last_adjusted_timeout) >= (uint64_t)rtq_timeout) &&
 	    rtq_reallyold > rtq_minreallyold) {
 		rtq_reallyold = 2 * rtq_reallyold / 3;
-		if (rtq_reallyold < rtq_minreallyold)
+		if (rtq_reallyold < rtq_minreallyold) {
 			rtq_reallyold = rtq_minreallyold;
+		}
 
 		last_adjusted_timeout = timenow;
 		if (verbose) {
@@ -615,10 +629,11 @@ in_rtqtimo(void *targ)
 	atv.tv_sec = arg.nextstop - timenow;
 	/* re-arm the timer only if there's work to do */
 	in_rtqtimo_run = 0;
-	if (ours > 0)
+	if (ours > 0) {
 		in_sched_rtqtimo(&atv);
-	else if (verbose)
+	} else if (verbose) {
 		log(LOG_DEBUG, "%s: not rescheduling timer\n", __func__);
+	}
 	lck_mtx_unlock(rnh_lock);
 }
 
@@ -651,13 +666,14 @@ in_rtqdrain(void)
 	struct radix_node_head *rnh;
 	struct rtqk_arg arg;
 
-	if (rt_verbose > 1)
+	if (rt_verbose > 1) {
 		log(LOG_DEBUG, "%s: draining routes\n", __func__);
+	}
 
 	lck_mtx_lock(rnh_lock);
 	rnh = rt_tables[AF_INET];
 	VERIFY(rnh != NULL);
-	bzero(&arg, sizeof (arg));
+	bzero(&arg, sizeof(arg));
 	arg.rnh = rnh;
 	arg.draining = 1;
 	rnh->rnh_walktree(rnh, in_rtqkill, &arg);
@@ -675,8 +691,9 @@ in_inithead(void **head, int off)
 	/* If called from route_init(), make sure it is exactly once */
 	VERIFY(head != (void **)&rt_tables[AF_INET] || *head == NULL);
 
-	if (!rn_inithead(head, off))
-		return (0);
+	if (!rn_inithead(head, off)) {
+		return 0;
+	}
 
 	/*
 	 * We can get here from nfs_subs.c as well, in which case this
@@ -684,16 +701,16 @@ in_inithead(void **head, int off)
 	 * this also takes care of the case when we're called more than
 	 * once from anywhere but route_init().
 	 */
-	if (head != (void **)&rt_tables[AF_INET])
-		return (1);	/* only do this for the real routing table */
-
+	if (head != (void **)&rt_tables[AF_INET]) {
+		return 1;     /* only do this for the real routing table */
+	}
 	rnh = *head;
 	rnh->rnh_addaddr = in_addroute;
 	rnh->rnh_deladdr = in_deleteroute;
 	rnh->rnh_matchaddr = in_matroute;
 	rnh->rnh_matchaddr_args = in_matroute_args;
 	rnh->rnh_close = in_clsroute;
-	return (1);
+	return 1;
 }
 
 /*
@@ -725,14 +742,14 @@ in_ifadownkill(struct radix_node *rn, void *xap)
 	RT_LOCK(rt);
 	if (rt->rt_ifa == ap->ifa &&
 	    (ap->del || !(rt->rt_flags & RTF_STATIC))) {
-		rt_str(rt, dbuf, sizeof (dbuf), gbuf, sizeof (gbuf));
+		rt_str(rt, dbuf, sizeof(dbuf), gbuf, sizeof(gbuf));
 		if (verbose) {
 			log(LOG_DEBUG, "%s: deleting route to %s->%s->%s, "
 			    "flags=%b\n", __func__, dbuf, gbuf,
 			    (rt->rt_ifp != NULL) ? rt->rt_ifp->if_xname : "",
 			    rt->rt_flags, RTF_BITS);
 		}
-		RT_ADDREF_LOCKED(rt);	/* for us to free below */
+		RT_ADDREF_LOCKED(rt);   /* for us to free below */
 		/*
 		 * We need to disable the automatic prune that happens
 		 * in this case in rtrequest() because it will blow
@@ -750,9 +767,10 @@ in_ifadownkill(struct radix_node *rn, void *xap)
 		    rt->rt_gateway, rt_mask(rt), rt->rt_flags, NULL);
 		if (err != 0) {
 			RT_LOCK(rt);
-			if (!verbose)
-				rt_str(rt, dbuf, sizeof (dbuf),
-				    gbuf, sizeof (gbuf));
+			if (!verbose) {
+				rt_str(rt, dbuf, sizeof(dbuf),
+				    gbuf, sizeof(gbuf));
+			}
 			log(LOG_ERR, "%s: error deleting route to "
 			    "%s->%s->%s, flags=%b, err=%d\n", __func__,
 			    dbuf, gbuf, (rt->rt_ifp != NULL) ?
@@ -764,7 +782,7 @@ in_ifadownkill(struct radix_node *rn, void *xap)
 	} else {
 		RT_UNLOCK(rt);
 	}
-	return (0);
+	return 0;
 }
 
 int
@@ -780,8 +798,9 @@ in_ifadown(struct ifaddr *ifa, int delete)
 	 * ifa from changing (e.g. in_ifinit), so it is safe
 	 * to access its ifa_addr without locking.
 	 */
-	if (ifa->ifa_addr->sa_family != AF_INET)
-		return (1);
+	if (ifa->ifa_addr->sa_family != AF_INET) {
+		return 1;
+	}
 
 	/* trigger route cache reevaluation */
 	routegenid_inet_update();
@@ -793,5 +812,5 @@ in_ifadown(struct ifaddr *ifa, int delete)
 	IFA_LOCK_SPIN(ifa);
 	ifa->ifa_flags &= ~IFA_ROUTE;
 	IFA_UNLOCK(ifa);
-	return (0);
+	return 0;
 }

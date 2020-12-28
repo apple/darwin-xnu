@@ -46,8 +46,7 @@ ml_dbgwrap_halt_cpu(int cpu_index __unused, uint64_t timeout_ns __unused)
 }
 
 dbgwrap_status_t
-ml_dbgwrap_halt_cpu_with_state(int cpu_index __unused, uint64_t timeout_ns __unused, dbgwrap_thread_state_t *state __unused) 
+ml_dbgwrap_halt_cpu_with_state(int cpu_index __unused, uint64_t timeout_ns __unused, dbgwrap_thread_state_t *state __unused)
 {
 	return DBGWRAP_ERR_UNSUPPORTED;
 }
-

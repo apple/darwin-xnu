@@ -5,7 +5,7 @@
 
 
 T_DECL(regression_17272465,
-	"Test for host_set_special_port Mach port over-release, rdr: 17272465", T_META_CHECK_LEAKS(false))
+    "Test for host_set_special_port Mach port over-release, rdr: 17272465", T_META_CHECK_LEAKS(false))
 {
 	kern_return_t kr;
 	mach_port_t port = MACH_PORT_NULL;

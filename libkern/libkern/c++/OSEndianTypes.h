@@ -2,7 +2,7 @@
  * Copyright (c) 2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  *
  * HISTORY
@@ -143,9 +143,9 @@ private:                                                               \
                                                                        \
     void writeValue(Value v) {                                         \
     if (__builtin_constant_p(v))                                       \
-        mValue = OSSwapHostTo ## argend ## ConstInt ## argsize(v);     \
+	mValue = OSSwapHostTo ## argend ## ConstInt ## argsize(v);     \
     else                                                               \
-        OSWrite ## argend ## Int ## argsize(&mValue, 0, (UValue) v);   \
+	OSWrite ## argend ## Int ## argsize(&mValue, 0, (UValue) v);   \
     };                                                                 \
                                                                        \
     Value readValue() const {                                          \
@@ -162,12 +162,12 @@ public:                                                                \
     operator Value () const { return readValue(); };                   \
 }
 
-class BigUInt16    __OSEndianSignIntSizeDEF(BigUInt16,    Big,    UInt, 16);
-class BigSInt16    __OSEndianSignIntSizeDEF(BigSInt16,    Big,    SInt, 16);
-class BigUInt32    __OSEndianSignIntSizeDEF(BigUInt32,    Big,    UInt, 32);
-class BigSInt32    __OSEndianSignIntSizeDEF(BigSInt32,    Big,    SInt, 32);
-class BigUInt64    __OSEndianSignIntSizeDEF(BigUInt64,    Big,    UInt, 64);
-class BigSInt64    __OSEndianSignIntSizeDEF(BigSInt64,    Big,    SInt, 64);
+class BigUInt16    __OSEndianSignIntSizeDEF(BigUInt16, Big, UInt, 16);
+class BigSInt16    __OSEndianSignIntSizeDEF(BigSInt16, Big, SInt, 16);
+class BigUInt32    __OSEndianSignIntSizeDEF(BigUInt32, Big, UInt, 32);
+class BigSInt32    __OSEndianSignIntSizeDEF(BigSInt32, Big, SInt, 32);
+class BigUInt64    __OSEndianSignIntSizeDEF(BigUInt64, Big, UInt, 64);
+class BigSInt64    __OSEndianSignIntSizeDEF(BigSInt64, Big, SInt, 64);
 class LittleUInt16 __OSEndianSignIntSizeDEF(LittleUInt16, Little, UInt, 16);
 class LittleSInt16 __OSEndianSignIntSizeDEF(LittleSInt16, Little, SInt, 16);
 class LittleUInt32 __OSEndianSignIntSizeDEF(LittleUInt32, Little, UInt, 32);
@@ -178,10 +178,7 @@ class LittleSInt64 __OSEndianSignIntSizeDEF(LittleSInt64, Little, SInt, 64);
 #undef __OSEndianSignIntSizeDEF
 
 #endif /* __cplusplus
- */
+        */
 
 #endif /* ! _OS_OSENDIANHELPER_H
- */
-
-
-
+        */

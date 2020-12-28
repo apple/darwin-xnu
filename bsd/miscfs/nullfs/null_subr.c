@@ -89,10 +89,10 @@ static lck_grp_attr_t * null_hashlck_grp_attr;
 static u_long null_hash_mask;
 
 /* os x doesn't have hashes built into vnode. gonna try doing what freebsd does
- anyway
- Don't want to create a dependency on vnode_internal.h and the real struct
- vnode.
- 9 is an eyeball of the log 2 size of vnode */
+ *  anyway
+ *  Don't want to create a dependency on vnode_internal.h and the real struct
+ *  vnode.
+ *  9 is an eyeball of the log 2 size of vnode */
 static int vnsz2log = 9;
 
 static int null_hashins(struct mount *, struct null_node *, struct vnode **);
@@ -145,7 +145,7 @@ nullfs_init(__unused struct vfsconf * vfsp)
 	lck_mtx_init(&null_hashmtx, null_hashlck_grp, null_hashlck_attr);
 	null_node_hashtbl = hashinit(NULL_HASH_SIZE, M_TEMP, &null_hash_mask);
 	NULLFSDEBUG("%s finished\n", __FUNCTION__);
-	return (0);
+	return 0;
 error:
 	printf("NULLFS: failed to get lock element\n");
 	if (null_hashlck_grp_attr) {
@@ -182,7 +182,7 @@ nullfs_uninit()
 		lck_attr_free(null_hashlck_attr);
 		null_hashlck_attr = NULL;
 	}
-	return (0);
+	return 0;
 }
 
 /*
@@ -250,10 +250,10 @@ null_hashins(struct mount * mp, struct null_node * xp, struct vnode ** vpp)
 			ovp = NULLTOV(oxp);
 			if (oxp->null_lowervid != vnode_vid(oxp->null_lowervp)) {
 				/*vp doesn't exist so return null (not sure we are actually gonna catch
-				 recycle right now
-				 This is an exceptional case right now, it suggests the vnode we are
-				 trying to add has been recycled
-				 don't add it.*/
+				 *  recycle right now
+				 *  This is an exceptional case right now, it suggests the vnode we are
+				 *  trying to add has been recycled
+				 *  don't add it.*/
 				error = EIO;
 				goto end;
 			}
@@ -303,7 +303,7 @@ null_nodecreate(struct vnode * lowervp)
 /* assumption is that vnode has iocount on it after vnode create */
 int
 null_getnewvnode(
-    struct mount * mp, struct vnode * lowervp, struct vnode * dvp, struct vnode ** vpp, struct componentname * cnp, int root)
+	struct mount * mp, struct vnode * lowervp, struct vnode * dvp, struct vnode ** vpp, struct componentname * cnp, int root)
 {
 	struct vnode_fsparam vnfs_param;
 	int error             = 0;
@@ -350,7 +350,7 @@ null_getnewvnode(
  */
 int
 null_nodeget(
-    struct mount * mp, struct vnode * lowervp, struct vnode * dvp, struct vnode ** vpp, struct componentname * cnp, int root)
+	struct mount * mp, struct vnode * lowervp, struct vnode * dvp, struct vnode ** vpp, struct componentname * cnp, int root)
 {
 	struct vnode * vp;
 	int error;
@@ -363,7 +363,7 @@ null_nodeget(
 		/* null_hashget checked the vid, so if we got something here its legit to
 		 * the best of our knowledge*/
 		/* if we found something then there is an iocount on vpp,
-		   if we didn't find something then vpp shouldn't be used by the caller */
+		 *  if we didn't find something then vpp shouldn't be used by the caller */
 		return error;
 	}
 
@@ -372,8 +372,7 @@ null_nodeget(
 	 * duplicates later, when adding new vnode to hash.
 	 */
 	error = vnode_ref(lowervp); // take a ref on lowervp so we let the system know we care about it
-	if(error)
-	{
+	if (error) {
 		// Failed to get a reference on the lower vp so bail. Lowervp may be gone already.
 		return error;
 	}
@@ -382,7 +381,7 @@ null_nodeget(
 
 	if (error) {
 		vnode_rele(lowervp);
-		return (error);
+		return error;
 	}
 
 	/*
@@ -401,5 +400,5 @@ null_nodeget(
 	/* vp has an iocount from null_getnewvnode */
 	*vpp = vp;
 
-	return (0);
+	return 0;
 }

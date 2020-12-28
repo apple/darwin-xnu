@@ -37,4 +37,3 @@
 int pgtrace_decode_and_run(uint32_t inst, vm_offset_t va, vm_map_offset_t *cva, arm_saved_state_t *ss, pgtrace_run_result_t *res);
 void pgtrace_decoder_get_stats(pgtrace_stats_t *stats);
 #endif
-

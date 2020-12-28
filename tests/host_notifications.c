@@ -4,7 +4,9 @@
 
 #include <darwintest.h>
 
-static void do_test(int notify_type, void (^trigger_block)(void)){
+static void
+do_test(int notify_type, void (^trigger_block)(void))
+{
 	mach_port_t port;
 	T_ASSERT_MACH_SUCCESS(mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &port), NULL);
 
@@ -16,13 +18,13 @@ static void do_test(int notify_type, void (^trigger_block)(void)){
 		mach_msg_header_t hdr;
 		mach_msg_trailer_t trailer;
 	} message = { .hdr = {
-		.msgh_bits = 0,
-		.msgh_size = sizeof(mach_msg_header_t),
-		.msgh_remote_port = MACH_PORT_NULL,
-		.msgh_local_port = port,
-		.msgh_voucher_port = MACH_PORT_NULL,
-		.msgh_id = 0,
-	}};
+			      .msgh_bits = 0,
+			      .msgh_size = sizeof(mach_msg_header_t),
+			      .msgh_remote_port = MACH_PORT_NULL,
+			      .msgh_local_port = port,
+			      .msgh_voucher_port = MACH_PORT_NULL,
+			      .msgh_id = 0,
+		      }};
 
 	T_ASSERT_EQ(MACH_RCV_TOO_LARGE, mach_msg_receive(&message.hdr), NULL);
 	mach_msg_destroy(&message.hdr);
@@ -32,8 +34,8 @@ T_DECL(host_notify_calendar_change, "host_request_notification(HOST_NOTIFY_CALEN
 {
 	do_test(HOST_NOTIFY_CALENDAR_CHANGE, ^{
 		struct timeval tm;
-		if (gettimeofday(&tm, NULL) != 0 || settimeofday(&tm, NULL) != 0){
-			T_SKIP("Unable to settimeofday()");
+		if (gettimeofday(&tm, NULL) != 0 || settimeofday(&tm, NULL) != 0) {
+		        T_SKIP("Unable to settimeofday()");
 		}
 	});
 }
@@ -42,8 +44,8 @@ T_DECL(host_notify_calendar_set, "host_request_notification(HOST_NOTIFY_CALENDAR
 {
 	do_test(HOST_NOTIFY_CALENDAR_SET, ^{
 		struct timeval tm;
-		if (gettimeofday(&tm, NULL) != 0 || settimeofday(&tm, NULL) != 0){
-			T_SKIP("Unable to settimeofday()");
+		if (gettimeofday(&tm, NULL) != 0 || settimeofday(&tm, NULL) != 0) {
+		        T_SKIP("Unable to settimeofday()");
 		}
 	});
 }

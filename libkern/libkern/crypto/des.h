@@ -61,17 +61,17 @@ typedef struct{
 typedef des_ecb_key_schedule des_key_schedule[1];
 #define des_set_key des_ecb_key_sched
 
-#define DES_ENCRYPT	1
-#define DES_DECRYPT	0
+#define DES_ENCRYPT     1
+#define DES_DECRYPT     0
 
 
 /* Single DES ECB - 1 block */
 int des_ecb_key_sched(des_cblock *key, des_ecb_key_schedule *ks);
-void des_ecb_encrypt(des_cblock *in, des_cblock *out, des_ecb_key_schedule *ks, int encrypt);
+int des_ecb_encrypt(des_cblock * in, des_cblock *out, des_ecb_key_schedule *ks, int encrypt);
 
 /* Triple DES ECB - 1 block */
 int des3_ecb_key_sched(des_cblock *key, des3_ecb_key_schedule *ks);
-void des3_ecb_encrypt(des_cblock *block, des_cblock *, des3_ecb_key_schedule *ks, int encrypt);
+int des3_ecb_encrypt(des_cblock *block, des_cblock *, des3_ecb_key_schedule *ks, int encrypt);
 
 int des_is_weak_key(des_cblock *key);
 

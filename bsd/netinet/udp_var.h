@@ -2,7 +2,7 @@
  * Copyright (c) 2008-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -69,89 +69,89 @@
 /*
  * UDP kernel structures and variables.
  */
-struct	udpiphdr {
-	struct	ipovly ui_i;		/* overlaid ip structure */
-	struct	udphdr ui_u;		/* udp header */
+struct  udpiphdr {
+	struct  ipovly ui_i;            /* overlaid ip structure */
+	struct  udphdr ui_u;            /* udp header */
 };
-#define	ui_x1		ui_i.ih_x1
-#define	ui_pr		ui_i.ih_pr
-#define	ui_len		ui_i.ih_len
-#define	ui_src		ui_i.ih_src
-#define	ui_dst		ui_i.ih_dst
-#define	ui_sport	ui_u.uh_sport
-#define	ui_dport	ui_u.uh_dport
-#define	ui_ulen		ui_u.uh_ulen
-#define	ui_sum		ui_u.uh_sum
-#define ui_next		ui_i.ih_next
-#define ui_prev		ui_i.ih_prev
+#define ui_x1           ui_i.ih_x1
+#define ui_pr           ui_i.ih_pr
+#define ui_len          ui_i.ih_len
+#define ui_src          ui_i.ih_src
+#define ui_dst          ui_i.ih_dst
+#define ui_sport        ui_u.uh_sport
+#define ui_dport        ui_u.uh_dport
+#define ui_ulen         ui_u.uh_ulen
+#define ui_sum          ui_u.uh_sum
+#define ui_next         ui_i.ih_next
+#define ui_prev         ui_i.ih_prev
 
-struct	udpstat {
+struct  udpstat {
 	/* input statistics: */
-	u_int32_t udps_ipackets;	/* total input packets */
-	u_int32_t udps_hdrops;		/* packet shorter than header */
-	u_int32_t udps_badsum;		/* checksum error */
-	u_int32_t udps_badlen;		/* data length larger than packet */
-	u_int32_t udps_noport;		/* no socket on port */
-	u_int32_t udps_noportbcast;	/* of above, arrived as broadcast */
-	u_int32_t udps_fullsock;	/* not delivered, input socket full */
-	u_int32_t udpps_pcbcachemiss;	/* input packets missing pcb cache */
-	u_int32_t udpps_pcbhashmiss;	/* input packets not for hashed pcb */
+	u_int32_t udps_ipackets;        /* total input packets */
+	u_int32_t udps_hdrops;          /* packet shorter than header */
+	u_int32_t udps_badsum;          /* checksum error */
+	u_int32_t udps_badlen;          /* data length larger than packet */
+	u_int32_t udps_noport;          /* no socket on port */
+	u_int32_t udps_noportbcast;     /* of above, arrived as broadcast */
+	u_int32_t udps_fullsock;        /* not delivered, input socket full */
+	u_int32_t udpps_pcbcachemiss;   /* input packets missing pcb cache */
+	u_int32_t udpps_pcbhashmiss;    /* input packets not for hashed pcb */
 	/* output statistics: */
-	u_int32_t udps_opackets;	/* total output packets */
-	u_int32_t udps_fastout;		/* output packets on fast path */
-	u_int32_t udps_nosum;		/* no checksum */
-	u_int32_t udps_noportmcast;	/* of no socket on port, multicast */
-	u_int32_t udps_filtermcast;	/* blocked by multicast filter */
+	u_int32_t udps_opackets;        /* total output packets */
+	u_int32_t udps_fastout;         /* output packets on fast path */
+	u_int32_t udps_nosum;           /* no checksum */
+	u_int32_t udps_noportmcast;     /* of no socket on port, multicast */
+	u_int32_t udps_filtermcast;     /* blocked by multicast filter */
 	/* checksum statistics: */
-	u_int32_t udps_rcv_swcsum;	  /* udp swcksum (inbound), packets */
+	u_int32_t udps_rcv_swcsum;        /* udp swcksum (inbound), packets */
 	u_int32_t udps_rcv_swcsum_bytes;  /* udp swcksum (inbound), bytes */
-	u_int32_t udps_rcv6_swcsum;	  /* udp6 swcksum (inbound), packets */
+	u_int32_t udps_rcv6_swcsum;       /* udp6 swcksum (inbound), packets */
 	u_int32_t udps_rcv6_swcsum_bytes; /* udp6 swcksum (inbound), bytes */
-	u_int32_t udps_snd_swcsum;	  /* udp swcksum (outbound), packets */
+	u_int32_t udps_snd_swcsum;        /* udp swcksum (outbound), packets */
 	u_int32_t udps_snd_swcsum_bytes;  /* udp swcksum (outbound), bytes */
-	u_int32_t udps_snd6_swcsum;	  /* udp6 swcksum (outbound), packets */
+	u_int32_t udps_snd6_swcsum;       /* udp6 swcksum (outbound), packets */
 	u_int32_t udps_snd6_swcsum_bytes; /* udp6 swcksum (outbound), bytes */
 };
 
 /*
  * Names for UDP sysctl objects
  */
-#define	UDPCTL_CHECKSUM		1	/* checksum UDP packets */
-#define UDPCTL_STATS		2	/* statistics (read-only) */
-#define	UDPCTL_MAXDGRAM		3	/* max datagram size */
-#define	UDPCTL_RECVSPACE	4	/* default receive buffer space */
-#define	UDPCTL_PCBLIST		5	/* list of PCBs for UDP sockets */
-#define UDPCTL_MAXID		6
+#define UDPCTL_CHECKSUM         1       /* checksum UDP packets */
+#define UDPCTL_STATS            2       /* statistics (read-only) */
+#define UDPCTL_MAXDGRAM         3       /* max datagram size */
+#define UDPCTL_RECVSPACE        4       /* default receive buffer space */
+#define UDPCTL_PCBLIST          5       /* list of PCBs for UDP sockets */
+#define UDPCTL_MAXID            6
 
 #ifdef BSD_KERNEL_PRIVATE
 #include <kern/locks.h>
 #include <sys/bitstring.h>
 
-#define UDPCTL_NAMES {							\
-	{ 0, 0 },							\
-	{ "checksum", CTLTYPE_INT },					\
-	{ "stats", CTLTYPE_STRUCT },					\
-	{ "maxdgram", CTLTYPE_INT },					\
-	{ "recvspace", CTLTYPE_INT },					\
-	{ "pcblist", CTLTYPE_STRUCT },					\
+#define UDPCTL_NAMES {                                                  \
+	{ 0, 0 },                                                       \
+	{ "checksum", CTLTYPE_INT },                                    \
+	{ "stats", CTLTYPE_STRUCT },                                    \
+	{ "maxdgram", CTLTYPE_INT },                                    \
+	{ "recvspace", CTLTYPE_INT },                                   \
+	{ "pcblist", CTLTYPE_STRUCT },                                  \
 }
 
 #ifdef INET6
-#define	udp6stat	udpstat
-#define	udp6s_opackets	udps_opackets
+#define udp6stat        udpstat
+#define udp6s_opackets  udps_opackets
 #endif /* INET6 */
 
 SYSCTL_DECL(_net_inet_udp);
 
 struct udpstat_local {
-	u_int64_t	port_unreach;
-	u_int64_t	faithprefix;	/* deprecated */
-	u_int64_t	port0;
-	u_int64_t	badlength;
-	u_int64_t	badchksum;
-	u_int64_t	badmcast;
-	u_int64_t	cleanup;
-	u_int64_t	badipsec;
+	u_int64_t       port_unreach;
+	u_int64_t       faithprefix;    /* deprecated */
+	u_int64_t       port0;
+	u_int64_t       badlength;
+	u_int64_t       badchksum;
+	u_int64_t       badmcast;
+	u_int64_t       cleanup;
+	u_int64_t       badipsec;
 };
 
 extern struct pr_usrreqs udp_usrreqs;

@@ -64,7 +64,7 @@ __BEGIN_DECLS
  * va_list from variadic arguments.  The caller must be the same binary
  * that generated the message and provided the format string.
  */
-__OSX_AVAILABLE_STARTING(__MAC_10_12, __IPHONE_10_0)
+    __OSX_AVAILABLE_STARTING(__MAC_10_12, __IPHONE_10_0)
 OS_EXPORT OS_NOTHROW OS_LOG_NOTAILCALL
 void
 os_log_with_args(os_log_t oslog, os_log_type_t type, const char *format, va_list args, void *ret_addr);
@@ -73,9 +73,9 @@ os_log_with_args(os_log_t oslog, os_log_type_t type, const char *format, va_list
  * @enum oslog_stream_link_type_t
  */
 OS_ENUM(oslog_stream_link_type, uint8_t,
-	oslog_stream_link_type_log       = 0x0,
-	oslog_stream_link_type_metadata  = 0x1,
-);
+    oslog_stream_link_type_log       = 0x0,
+    oslog_stream_link_type_metadata  = 0x1,
+    );
 
 /*!
  * @typedef oslog_stream_buf_entry_t

@@ -2,7 +2,7 @@
  * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -61,7 +61,7 @@
  */
 
 #ifndef _NETINET_IP_DIVERT_H_
-#define	_NETINET_IP_DIVERT_H_
+#define _NETINET_IP_DIVERT_H_
 
 #if IPDIVERT
 #ifdef BSD_KERNEL_PRIVATE
@@ -72,8 +72,8 @@
 /* 32-bit unique unsigned value used to identify a module */
 
 struct divert_tag {
-	u_int32_t	info;		/* port & flags */
-	u_int16_t	cookie;		/* ipfw rule number */
+	u_int32_t       info;           /* port & flags */
+	u_int16_t       cookie;         /* ipfw rule number */
 };
 
 /*
@@ -82,13 +82,13 @@ struct divert_tag {
 static __inline u_int16_t
 divert_cookie(struct m_tag *mtag)
 {
-	return ((struct divert_tag *)(mtag+1))->cookie;
+	return ((struct divert_tag *)(mtag + 1))->cookie;
 }
 static __inline u_int16_t
 divert_find_cookie(struct mbuf *m)
 {
 	struct m_tag *mtag = m_tag_locate(m, KERNEL_MODULE_TAG_ID,
-									  KERNEL_TAG_TYPE_DIVERT, NULL);
+	    KERNEL_TAG_TYPE_DIVERT, NULL);
 	return mtag ? divert_cookie(mtag) : 0;
 }
 
@@ -98,23 +98,23 @@ divert_find_cookie(struct mbuf *m)
 static __inline u_int32_t
 divert_info(struct m_tag *mtag)
 {
-	return ((struct divert_tag *)(mtag+1))->info;
+	return ((struct divert_tag *)(mtag + 1))->info;
 }
 static __inline u_int32_t
 divert_find_info(struct mbuf *m)
 {
 	struct m_tag *mtag = m_tag_locate(m, KERNEL_MODULE_TAG_ID,
-									  KERNEL_TAG_TYPE_DIVERT, NULL);
+	    KERNEL_TAG_TYPE_DIVERT, NULL);
 	return mtag ? divert_info(mtag) : 0;
 }
 
-extern	void div_init(struct protosw *, struct domain *);
-extern	void div_input(struct mbuf *, int);
-lck_mtx_t * 
-        div_getlock(struct socket *,  int );
-int	div_unlock(struct socket *, int, void *);
-int     div_lock(struct socket *, int , void *);
-extern	void divert_packet(struct mbuf *m, int incoming, int port, int rule);
+extern  void div_init(struct protosw *, struct domain *);
+extern  void div_input(struct mbuf *, int);
+lck_mtx_t *
+div_getlock(struct socket *, int );
+int     div_unlock(struct socket *, int, void *);
+int     div_lock(struct socket *, int, void *);
+extern  void divert_packet(struct mbuf *m, int incoming, int port, int rule);
 extern struct pr_usrreqs div_usrreqs;
 
 #endif /* BSD_KERNEL_PRIVATE */

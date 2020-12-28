@@ -2,7 +2,7 @@
  * Copyright (c) 1997-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
@@ -74,14 +74,14 @@
 #define MAXLDISC 8
 #endif
 
-#define	l_noopen	((l_open_t *)  &enodev)
-#define	l_noclose	((l_close_t *) &enodev)
-#define	l_noread	((l_read_t *)  &enodev)
-#define	l_nowrite	((l_write_t *) &enodev)
-#define	l_norint	((l_rint_t *)  &enodev)
+#define l_noopen        ((l_open_t *)  &enodev)
+#define l_noclose       ((l_close_t *) &enodev)
+#define l_noread        ((l_read_t *)  &enodev)
+#define l_nowrite       ((l_write_t *) &enodev)
+#define l_norint        ((l_rint_t *)  &enodev)
 
-static l_ioctl_t	l_noioctl;
-static l_start_t	l_nostart;
+static l_ioctl_t        l_noioctl;
+static l_start_t        l_nostart;
 
 /*
  * XXX it probably doesn't matter what the entries other than the l_open
@@ -93,23 +93,23 @@ static l_start_t	l_nostart;
 	{ l_noopen,	l_noclose,	l_noread,	l_nowrite, \
 	  l_noioctl,	l_norint,	l_nostart,	ttymodem }
 
-struct	linesw linesw[MAXLDISC] =
+struct  linesw linesw[MAXLDISC] =
 {
-				/* 0- termios */
-	{ ttyopen,	ttylclose,	ttread,		ttwrite,
-	  l_noioctl,	ttyinput,	ttwwakeup,	ttymodem },
-	NODISC(1),		/* 1- defunct */
-	  			/* 2- NTTYDISC */
-	{ ttyopen,	ttylclose,	ttread,		ttwrite,
-	  l_noioctl,	ttyinput,	ttwwakeup,	ttymodem },
-	NODISC(3),		/* TABLDISC */
-	NODISC(4),		/* SLIPDISC */
-	NODISC(5),		/* PPPDISC */
-	NODISC(6),		/* loadable */
-	NODISC(7),		/* loadable */
+	/* 0- termios */
+	{ ttyopen, ttylclose, ttread, ttwrite,
+	  l_noioctl, ttyinput, ttwwakeup, ttymodem },
+	NODISC(1),              /* 1- defunct */
+	                        /* 2- NTTYDISC */
+	{ ttyopen, ttylclose, ttread, ttwrite,
+	  l_noioctl, ttyinput, ttwwakeup, ttymodem },
+	NODISC(3),              /* TABLDISC */
+	NODISC(4),              /* SLIPDISC */
+	NODISC(5),              /* PPPDISC */
+	NODISC(6),              /* loadable */
+	NODISC(7),              /* loadable */
 };
 
-const int nlinesw = sizeof (linesw) / sizeof (linesw[0]);
+const int nlinesw = sizeof(linesw) / sizeof(linesw[0]);
 
 static struct linesw nodisc = NODISC(0);
 
@@ -129,17 +129,18 @@ ldisc_register(int discipline, struct linesw *linesw_p)
 
 	if (discipline == LDISC_LOAD) {
 		int i;
-		for (i = LOADABLE_LDISC; i < MAXLDISC; i++)
+		for (i = LOADABLE_LDISC; i < MAXLDISC; i++) {
 			if (bcmp(linesw + i, &nodisc, sizeof(nodisc)) == 0) {
 				slot = i;
 			}
-	}
-	else if (discipline >= 0 && discipline < MAXLDISC) {
+		}
+	} else if (discipline >= 0 && discipline < MAXLDISC) {
 		slot = discipline;
 	}
 
-	if (slot != -1 && linesw_p)
+	if (slot != -1 && linesw_p) {
 		linesw[slot] = *linesw_p;
+	}
 
 	return slot;
 }
@@ -164,7 +165,7 @@ ldisc_deregister(int discipline)
  */
 static int
 l_noioctl(__unused struct tty *tp, __unused u_long cmd, __unused caddr_t data,
-	  __unused int flags, __unused struct proc *p)
+    __unused int flags, __unused struct proc *p)
 {
 	return ENOTTY;
 }

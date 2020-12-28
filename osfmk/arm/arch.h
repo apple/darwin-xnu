@@ -42,17 +42,17 @@
 #endif
 
 #if defined (__ARM_ARCH_6__) || defined (__ARM_ARCH_6J__) || \
-	defined (_ARM_ARCH_6Z) || defined (_ARM_ARCH_6K)
+        defined (_ARM_ARCH_6Z) || defined (_ARM_ARCH_6K)
 #define _ARM_ARCH_6
 #endif
 
 #if defined (_ARM_ARCH_6) || defined (__ARM_ARCH_5E__) || \
-    defined (__ARM_ARCH_5TE__) || defined (__ARM_ARCH_5TEJ__)
+        defined (__ARM_ARCH_5TE__) || defined (__ARM_ARCH_5TEJ__)
 #define _ARM_ARCH_5E
 #endif
 
 #if defined (_ARM_ARCH_5E) || defined (__ARM_ARCH_5__) || \
-	defined (__ARM_ARCH_5T__)
+        defined (__ARM_ARCH_5T__)
 #define _ARM_ARCH_5
 #endif
 

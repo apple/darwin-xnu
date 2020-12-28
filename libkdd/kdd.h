@@ -118,7 +118,7 @@ NSMutableDictionary * _Nullable parseKCDataArray(kcdata_iter_t iter, NSError * _
  * @discussion
  * This function tries to parse one container. If it encounters sub containers
  * they will be parsed and collected within the same dictionary.
- * Other data type fields will also be parsed based on their type. 
+ * Other data type fields will also be parsed based on their type.
  *
  */
 

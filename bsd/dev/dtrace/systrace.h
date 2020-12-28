@@ -25,29 +25,19 @@
  */
 
 #ifndef _SYS_SYSTRACE_H
-#define	_SYS_SYSTRACE_H
-
-/* #pragma ident	"@(#)systrace.h	1.3	06/09/19 SMI" */
-
-#ifdef KERNEL
-#ifndef _KERNEL
-#define _KERNEL /* Solaris vs. Darwin */
-#endif
-#endif
+#define _SYS_SYSTRACE_H
 
 #include <sys/dtrace.h>
 
-#ifdef	__cplusplus
+#ifdef  __cplusplus
 extern "C" {
 #endif
 
-#ifdef _KERNEL
-
 typedef struct systrace_sysent {
-	dtrace_id_t	stsy_entry;
-	dtrace_id_t	stsy_return;
-	int32_t		(*stsy_underlying)(struct proc *, void *, int *);
-	int32_t		stsy_return_type;
+	dtrace_id_t     stsy_entry;
+	dtrace_id_t     stsy_return;
+	int32_t         (*stsy_underlying)(struct proc *, void *, int *);
+	int32_t         stsy_return_type;
 } systrace_sysent_t;
 
 extern systrace_sysent_t *systrace_sysent;
@@ -62,10 +52,8 @@ extern int32_t dtrace_systrace_syscall(struct proc *, void *, int *);
 
 extern void dtrace_systrace_syscall_return(unsigned short, int, int *);
 
-#endif /* _KERNEL */
-
-#ifdef	__cplusplus
+#ifdef  __cplusplus
 }
 #endif
 
-#endif	/* _SYS_SYSTRACE_H */
+#endif  /* _SYS_SYSTRACE_H */

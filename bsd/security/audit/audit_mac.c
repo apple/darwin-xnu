@@ -69,8 +69,8 @@
 #define MAC_ARG_PREFIX "arg: "
 #define MAC_ARG_PREFIX_LEN 5
 
-zone_t		audit_mac_label_zone;
-extern zone_t	mac_audit_data_zone;
+zone_t          audit_mac_label_zone;
+extern zone_t   mac_audit_data_zone;
 
 void
 audit_mac_init(void)
@@ -79,7 +79,7 @@ audit_mac_init(void)
 	 * one for creds.
 	 */
 	audit_mac_label_zone = zinit(MAC_AUDIT_LABEL_LEN,
-	    AQ_HIWATER * 3*MAC_AUDIT_LABEL_LEN, 8192, "audit_mac_label_zone");
+	    AQ_HIWATER * 3 * MAC_AUDIT_LABEL_LEN, 8192, "audit_mac_label_zone");
 }
 
 int
@@ -87,12 +87,13 @@ audit_mac_new(proc_t p, struct kaudit_record *ar)
 {
 	struct mac mac;
 
-	/* 
+	/*
 	 * Retrieve the MAC labels for the process.
 	 */
 	ar->k_ar.ar_cred_mac_labels = (char *)zalloc(audit_mac_label_zone);
-	if (ar->k_ar.ar_cred_mac_labels == NULL)
-		return (1);
+	if (ar->k_ar.ar_cred_mac_labels == NULL) {
+		return 1;
+	}
 	mac.m_buflen = MAC_AUDIT_LABEL_LEN;
 	mac.m_string = ar->k_ar.ar_cred_mac_labels;
 	mac_cred_label_externalize_audit(p, &mac);
@@ -104,12 +105,12 @@ audit_mac_new(proc_t p, struct kaudit_record *ar)
 	    kalloc(sizeof(*ar->k_ar.ar_mac_records));
 	if (ar->k_ar.ar_mac_records == NULL) {
 		zfree(audit_mac_label_zone, ar->k_ar.ar_cred_mac_labels);
-		return (1);
+		return 1;
 	}
 	LIST_INIT(ar->k_ar.ar_mac_records);
 	ar->k_ar.ar_forced_by_mac = 0;
-	
-	return (0);
+
+	return 0;
 }
 
 void
@@ -117,15 +118,19 @@ audit_mac_free(struct kaudit_record *ar)
 {
 	struct mac_audit_record *head, *next;
 
-	if (ar->k_ar.ar_vnode1_mac_labels != NULL)
+	if (ar->k_ar.ar_vnode1_mac_labels != NULL) {
 		zfree(audit_mac_label_zone, ar->k_ar.ar_vnode1_mac_labels);
-	if (ar->k_ar.ar_vnode2_mac_labels != NULL)
+	}
+	if (ar->k_ar.ar_vnode2_mac_labels != NULL) {
 		zfree(audit_mac_label_zone, ar->k_ar.ar_vnode2_mac_labels);
-	if (ar->k_ar.ar_cred_mac_labels != NULL)
+	}
+	if (ar->k_ar.ar_cred_mac_labels != NULL) {
 		zfree(audit_mac_label_zone, ar->k_ar.ar_cred_mac_labels);
-	if (ar->k_ar.ar_arg_mac_string != NULL)
+	}
+	if (ar->k_ar.ar_arg_mac_string != NULL) {
 		kfree(ar->k_ar.ar_arg_mac_string,
 		    MAC_MAX_LABEL_BUF_LEN + MAC_ARG_PREFIX_LEN);
+	}
 
 	/*
 	 * Free the audit data from the MAC policies.
@@ -147,19 +152,19 @@ audit_mac_syscall_enter(unsigned short code, proc_t p, struct uthread *uthread,
 	int error;
 
 	error = mac_audit_check_preselect(my_cred, code,
-	     (void *)uthread->uu_arg);
+	    (void *)uthread->uu_arg);
 	if (error == MAC_AUDIT_YES) {
 		uthread->uu_ar = audit_new(event, p, uthread);
 		uthread->uu_ar->k_ar.ar_forced_by_mac = 1;
 		au_to_text("Forced by a MAC policy");
-		return (1);
+		return 1;
 	} else if (error == MAC_AUDIT_NO) {
-		return (0);
+		return 0;
 	} else if (error == MAC_AUDIT_DEFAULT) {
-		return (1);
+		return 1;
 	}
 
-	return (0);
+	return 0;
 }
 
 int
@@ -168,11 +173,12 @@ audit_mac_syscall_exit(unsigned short code, struct uthread *uthread, int error,
 {
 	int mac_error;
 
-	if (uthread->uu_ar == NULL)  /* syscall wasn't audited */
-		return (1);
+	if (uthread->uu_ar == NULL) { /* syscall wasn't audited */
+		return 1;
+	}
 
 	/*
-	 * Note, no other postselect mechanism exists.  If 
+	 * Note, no other postselect mechanism exists.  If
 	 * mac_audit_check_postselect returns MAC_AUDIT_NO, the record will be
 	 * suppressed.  Other values at this point result in the audit record
 	 * being committed.  This suppression behavior will probably go away in
@@ -182,13 +188,13 @@ audit_mac_syscall_exit(unsigned short code, struct uthread *uthread, int error,
 	    (void *) uthread->uu_arg, error, retval,
 	    uthread->uu_ar->k_ar.ar_forced_by_mac);
 
-	if (mac_error == MAC_AUDIT_YES)
+	if (mac_error == MAC_AUDIT_YES) {
 		uthread->uu_ar->k_ar_commit |= AR_COMMIT_KERNEL;
-	else if (mac_error == MAC_AUDIT_NO) {
+	} else if (mac_error == MAC_AUDIT_NO) {
 		audit_free(uthread->uu_ar);
-		return (1);	
+		return 1;
 	}
-	return (0);
+	return 0;
 }
 
 /*
@@ -196,19 +202,20 @@ audit_mac_syscall_exit(unsigned short code, struct uthread *uthread, int error,
  * from a policy to the current audit record.
  */
 int
-audit_mac_data(int type, int len, u_char *data) {
+audit_mac_data(int type, int len, u_char *data)
+{
 	struct kaudit_record *cur;
 	struct mac_audit_record *record;
 
 	if (audit_enabled == 0) {
 		kfree(data, len);
-		return (ENOTSUP);
+		return ENOTSUP;
 	}
 
 	cur = currecord();
 	if (cur == NULL) {
 		kfree(data, len);
-		return (ENOTSUP);
+		return ENOTSUP;
 	}
 
 	/*
@@ -219,7 +226,7 @@ audit_mac_data(int type, int len, u_char *data) {
 	record = kalloc(sizeof(*record));
 	if (record == NULL) {
 		kfree(data, len);
-		return (0);
+		return 0;
 	}
 
 	record->type = type;
@@ -227,16 +234,16 @@ audit_mac_data(int type, int len, u_char *data) {
 	record->data = data;
 	LIST_INSERT_HEAD(cur->k_ar.ar_mac_records, record, records);
 
-	return (0);
+	return 0;
 }
 
 void
 audit_arg_mac_string(struct kaudit_record *ar, char *string)
 {
-
-	if (ar->k_ar.ar_arg_mac_string == NULL)
+	if (ar->k_ar.ar_arg_mac_string == NULL) {
 		ar->k_ar.ar_arg_mac_string =
-			kalloc(MAC_MAX_LABEL_BUF_LEN + MAC_ARG_PREFIX_LEN);
+		    kalloc(MAC_MAX_LABEL_BUF_LEN + MAC_ARG_PREFIX_LEN);
+	}
 
 	/*
 	 * XXX This should be a rare event. If kalloc() returns NULL,
@@ -244,9 +251,11 @@ audit_arg_mac_string(struct kaudit_record *ar, char *string)
 	 * consistent with the rest of audit, just return
 	 * (may need to panic if required to for audit).
 	 */
-	if (ar->k_ar.ar_arg_mac_string == NULL)
-		if (ar->k_ar.ar_arg_mac_string == NULL)
+	if (ar->k_ar.ar_arg_mac_string == NULL) {
+		if (ar->k_ar.ar_arg_mac_string == NULL) {
 			return;
+		}
+	}
 
 	strncpy(ar->k_ar.ar_arg_mac_string, MAC_ARG_PREFIX,
 	    MAC_ARG_PREFIX_LEN);

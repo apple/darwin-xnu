@@ -2,7 +2,7 @@
  * Copyright (c) 2007 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -37,9 +37,9 @@
  *	shared by a task family, this controls affinity tag lookup and
  *	allocation; it anchors all affinity sets in one namespace
  * - affinity set:
- * 	anchors all threads with membership of this affinity set
+ *      anchors all threads with membership of this affinity set
  *	and which share an affinity tag in the owning namespace.
- * 
+ *
  * Locking:
  * - The task lock protects the creation of an affinity namespace.
  * - The affinity namespace mutex protects the inheritance of a namespace
@@ -48,20 +48,20 @@
  * - The thread mutex protects a thread's affinity set membership, but in
  *   addition, the thread_lock is taken to write thread->affinity_set since this
  *   field (representng the active affinity set) is read by the scheduler.
- * 
+ *
  * The lock ordering is: task lock, thread mutex, namespace mutex, thread lock.
  */
 
 #if AFFINITY_DEBUG
-#define DBG(x...)	kprintf("DBG: " x)
+#define DBG(x...)       kprintf("DBG: " x)
 #else
 #define DBG(x...)
 #endif
 
 struct affinity_space {
-	lck_mtx_t		aspc_lock;
-	uint32_t		aspc_task_count;
-	queue_head_t	aspc_affinities;
+	lck_mtx_t               aspc_lock;
+	uint32_t                aspc_task_count;
+	queue_head_t    aspc_affinities;
 };
 typedef struct affinity_space *affinity_space_t;
 
@@ -85,23 +85,23 @@ static affinity_set_t affinity_set_remove(affinity_set_t aset, thread_t thread);
  * more important than pset affinity.
  */
 #if CONFIG_EMBEDDED
-boolean_t	affinity_sets_enabled = FALSE;
-int		affinity_sets_mapping = 0;
+boolean_t       affinity_sets_enabled = FALSE;
+int             affinity_sets_mapping = 0;
 #else /* !CONFIG_EMBEDDED */
-boolean_t	affinity_sets_enabled = TRUE;
-int		affinity_sets_mapping = 1;
+boolean_t       affinity_sets_enabled = TRUE;
+int             affinity_sets_mapping = 1;
 #endif /* !CONFIG_EMBEDDED */
 
 boolean_t
 thread_affinity_is_supported(void)
 {
-	return (ml_get_max_affinity_sets() != 0);
+	return ml_get_max_affinity_sets() != 0;
 }
 
 
 /*
- * thread_affinity_get() 
- * Return the affinity tag for a thread. 
+ * thread_affinity_get()
+ * Return the affinity tag for a thread.
  * Called with the thread mutex held.
  */
 uint32_t
@@ -109,27 +109,28 @@ thread_affinity_get(thread_t thread)
 {
 	uint32_t tag;
 
-	if (thread->affinity_set != NULL)
+	if (thread->affinity_set != NULL) {
 		tag = thread->affinity_set->aset_tag;
-	else
+	} else {
 		tag = THREAD_AFFINITY_TAG_NULL;
+	}
 
 	return tag;
 }
 
 
 /*
- * thread_affinity_set() 
+ * thread_affinity_set()
  * Place a thread in an affinity set identified by a tag.
  * Called with thread referenced but not locked.
  */
 kern_return_t
 thread_affinity_set(thread_t thread, uint32_t tag)
 {
-	affinity_set_t		aset;
-	affinity_set_t		empty_aset = NULL;
-	affinity_space_t	aspc;
-	affinity_space_t	new_aspc = NULL;
+	affinity_set_t          aset;
+	affinity_set_t          empty_aset = NULL;
+	affinity_space_t        aspc;
+	affinity_space_t        new_aspc = NULL;
 
 	DBG("thread_affinity_set(%p,%u)\n", thread, tag);
 
@@ -138,8 +139,9 @@ thread_affinity_set(thread_t thread, uint32_t tag)
 	if (aspc == NULL) {
 		task_unlock(thread->task);
 		new_aspc = affinity_space_alloc();
-		if (new_aspc == NULL)
+		if (new_aspc == NULL) {
 			return KERN_RESOURCE_SHORTAGE;
+		}
 		task_lock(thread->task);
 		if (thread->task->affinity_space == NULL) {
 			thread->task->affinity_space = new_aspc;
@@ -148,8 +150,9 @@ thread_affinity_set(thread_t thread, uint32_t tag)
 		aspc = thread->task->affinity_space;
 	}
 	task_unlock(thread->task);
-	if (new_aspc)
+	if (new_aspc) {
 		affinity_space_free(new_aspc);
+	}
 
 	thread_mtx_lock(thread);
 	if (!thread->active) {
@@ -165,7 +168,7 @@ thread_affinity_set(thread_t thread, uint32_t tag)
 		 * Remove thread from current affinity set
 		 */
 		DBG("thread_affinity_set(%p,%u) removing from aset %p\n",
-			thread, tag, aset);
+		    thread, tag, aset);
 		empty_aset = affinity_set_remove(aset, thread);
 	}
 
@@ -176,7 +179,7 @@ thread_affinity_set(thread_t thread, uint32_t tag)
 			 * Add thread to existing affinity set
 			 */
 			DBG("thread_affinity_set(%p,%u) found aset %p\n",
-				thread, tag, aset);
+			    thread, tag, aset);
 		} else {
 			/*
 			 * Use the new affinity set, add this thread
@@ -194,7 +197,7 @@ thread_affinity_set(thread_t thread, uint32_t tag)
 				}
 			}
 			DBG("thread_affinity_set(%p,%u) (re-)using aset %p\n",
-				thread, tag, aset);
+			    thread, tag, aset);
 			aset->aset_tag = tag;
 			affinity_set_place(aspc, aset);
 		}
@@ -208,11 +211,13 @@ thread_affinity_set(thread_t thread, uint32_t tag)
 	 * If we wound up not using an empty aset we created,
 	 * free it here.
 	 */
-	if (empty_aset != NULL)
+	if (empty_aset != NULL) {
 		affinity_set_free(empty_aset);
+	}
 
-	if (thread == current_thread())
-	        thread_block(THREAD_CONTINUE_NULL);
+	if (thread == current_thread()) {
+		thread_block(THREAD_CONTINUE_NULL);
+	}
 
 	return KERN_SUCCESS;
 }
@@ -224,7 +229,7 @@ thread_affinity_set(thread_t thread, uint32_t tag)
 void
 task_affinity_create(task_t parent_task, task_t child_task)
 {
-	affinity_space_t	aspc = parent_task->affinity_space;
+	affinity_space_t        aspc = parent_task->affinity_space;
 
 	DBG("task_affinity_create(%p,%p)\n", parent_task, child_task);
 
@@ -245,12 +250,12 @@ task_affinity_create(task_t parent_task, task_t child_task)
  * Called from task_deallocate() when there's a namespace to dereference.
  */
 void
-task_affinity_deallocate(task_t	task)
+task_affinity_deallocate(task_t task)
 {
-	affinity_space_t	aspc = task->affinity_space;
+	affinity_space_t        aspc = task->affinity_space;
 
 	DBG("task_affinity_deallocate(%p) aspc %p task_count %d\n",
-		task, aspc, aspc->aspc_task_count);
+	    task, aspc, aspc->aspc_task_count);
 
 	lck_mtx_lock(&aspc->aspc_lock);
 	if (--(aspc->aspc_task_count) == 0) {
@@ -270,13 +275,13 @@ task_affinity_deallocate(task_t	task)
  */
 kern_return_t
 task_affinity_info(
-	task_t			task,
-	task_info_t		task_info_out,
-	mach_msg_type_number_t	*task_info_count)
+	task_t                  task,
+	task_info_t             task_info_out,
+	mach_msg_type_number_t  *task_info_count)
 {
-	affinity_set_t			aset;
-	affinity_space_t		aspc;
-	task_affinity_tag_info_t	info;
+	affinity_set_t                  aset;
+	affinity_space_t                aspc;
+	task_affinity_tag_info_t        info;
 
 	*task_info_count = TASK_AFFINITY_TAG_INFO_COUNT;
 	info = (task_affinity_tag_info_t) task_info_out;
@@ -289,14 +294,16 @@ task_affinity_info(
 	if (aspc) {
 		lck_mtx_lock(&aspc->aspc_lock);
 		queue_iterate(&aspc->aspc_affinities,
-				 aset, affinity_set_t, aset_affinities) {	
+		    aset, affinity_set_t, aset_affinities) {
 			info->set_count++;
 			if (info->min == THREAD_AFFINITY_TAG_NULL ||
-			    aset->aset_tag < (uint32_t) info->min)
+			    aset->aset_tag < (uint32_t) info->min) {
 				info->min = aset->aset_tag;
+			}
 			if (info->max == THREAD_AFFINITY_TAG_NULL ||
-			    aset->aset_tag > (uint32_t) info->max)
+			    aset->aset_tag > (uint32_t) info->max) {
 				info->max = aset->aset_tag;
+			}
 		}
 		info->task_count = aspc->aspc_task_count;
 		lck_mtx_unlock(&aspc->aspc_lock);
@@ -312,8 +319,8 @@ task_affinity_info(
 void
 thread_affinity_dup(thread_t parent, thread_t child)
 {
-	affinity_set_t			aset;
-	affinity_space_t		aspc;
+	affinity_set_t                  aset;
+	affinity_space_t                aspc;
 
 	thread_mtx_lock(parent);
 	aset = parent->affinity_set;
@@ -335,15 +342,15 @@ thread_affinity_dup(thread_t parent, thread_t child)
 }
 
 /*
- * thread_affinity_terminate() 
+ * thread_affinity_terminate()
  * Remove thread from any affinity set.
  * Called with the thread mutex locked.
  */
 void
 thread_affinity_terminate(thread_t thread)
 {
-	affinity_set_t		aset = thread->affinity_set;
-	affinity_space_t	aspc;
+	affinity_set_t          aset = thread->affinity_set;
+	affinity_space_t        aspc;
 
 	DBG("thread_affinity_terminate(%p)\n", thread);
 
@@ -363,21 +370,23 @@ thread_affinity_terminate(thread_t thread)
 void
 thread_affinity_exec(thread_t thread)
 {
-	if (thread->affinity_set != AFFINITY_SET_NULL)
+	if (thread->affinity_set != AFFINITY_SET_NULL) {
 		thread_affinity_terminate(thread);
+	}
 }
 
 /*
  * Create an empty affinity namespace data structure.
  */
 static affinity_space_t
-affinity_space_alloc(void) 
+affinity_space_alloc(void)
 {
-	affinity_space_t	aspc;
+	affinity_space_t        aspc;
 
 	aspc = (affinity_space_t) kalloc(sizeof(struct affinity_space));
-	if (aspc == NULL)
+	if (aspc == NULL) {
 		return NULL;
+	}
 
 	lck_mtx_init(&aspc->aspc_lock, &task_lck_grp, &task_lck_attr);
 	queue_init(&aspc->aspc_affinities);
@@ -406,13 +415,14 @@ affinity_space_free(affinity_space_t aspc)
  * entering it into a list anchored by the owning task.
  */
 static affinity_set_t
-affinity_set_alloc(void) 
+affinity_set_alloc(void)
 {
-	affinity_set_t	aset;
+	affinity_set_t  aset;
 
 	aset = (affinity_set_t) kalloc(sizeof(struct affinity_set));
-	if (aset == NULL)
+	if (aset == NULL) {
 		return NULL;
+	}
 
 	aset->aset_thread_count = 0;
 	queue_init(&aset->aset_affinities);
@@ -445,11 +455,11 @@ affinity_set_free(affinity_set_t aset)
 static void
 affinity_set_add(affinity_set_t aset, thread_t thread)
 {
-	spl_t	s;
+	spl_t   s;
 
 	DBG("affinity_set_add(%p,%p)\n", aset, thread);
 	queue_enter(&aset->aset_threads,
-		thread, thread_t, affinity_threads);
+	    thread, thread_t, affinity_threads);
 	aset->aset_thread_count++;
 	s = splsched();
 	thread_lock(thread);
@@ -465,7 +475,7 @@ affinity_set_add(affinity_set_t aset, thread_t thread)
 static affinity_set_t
 affinity_set_remove(affinity_set_t aset, thread_t thread)
 {
-	spl_t	s;
+	spl_t   s;
 
 	s = splsched();
 	thread_lock(thread);
@@ -475,10 +485,10 @@ affinity_set_remove(affinity_set_t aset, thread_t thread)
 
 	aset->aset_thread_count--;
 	queue_remove(&aset->aset_threads,
-		thread, thread_t, affinity_threads);
+	    thread, thread_t, affinity_threads);
 	if (queue_empty(&aset->aset_threads)) {
 		queue_remove(&aset->aset_space->aspc_affinities,
-				aset, affinity_set_t, aset_affinities);
+		    aset, affinity_set_t, aset_affinities);
 		assert(aset->aset_thread_count == 0);
 		aset->aset_tag = THREAD_AFFINITY_TAG_NULL;
 		aset->aset_num = 0;
@@ -499,13 +509,13 @@ affinity_set_remove(affinity_set_t aset, thread_t thread)
 static affinity_set_t
 affinity_set_find(affinity_space_t space, uint32_t tag)
 {
-	affinity_set_t	aset;
+	affinity_set_t  aset;
 
 	queue_iterate(&space->aspc_affinities,
-			 aset, affinity_set_t, aset_affinities) {	
+	    aset, affinity_set_t, aset_affinities) {
 		if (aset->aset_tag == tag) {
 			DBG("affinity_set_find(%p,%u) finds %p\n",
-		 	    space, tag, aset);
+			    space, tag, aset);
 			return aset;
 		}
 	}
@@ -523,25 +533,27 @@ affinity_set_find(affinity_space_t space, uint32_t tag)
 static void
 affinity_set_place(affinity_space_t aspc, affinity_set_t new_aset)
 {
-	unsigned int	num_cpu_asets = ml_get_max_affinity_sets();
-	unsigned int	set_occupancy[num_cpu_asets];
-	unsigned int	i;
-	unsigned int	i_least_occupied;
-	affinity_set_t	aset;
+	unsigned int    num_cpu_asets = ml_get_max_affinity_sets();
+	unsigned int    set_occupancy[num_cpu_asets];
+	unsigned int    i;
+	unsigned int    i_least_occupied;
+	affinity_set_t  aset;
 
-	for (i = 0; i < num_cpu_asets; i++)
+	for (i = 0; i < num_cpu_asets; i++) {
 		set_occupancy[i] = 0;
+	}
 
 	/*
 	 * Scan the affinity sets calculating the number of sets
 	 * occupy the available physical affinities.
 	 */
 	queue_iterate(&aspc->aspc_affinities,
-			 aset, affinity_set_t, aset_affinities) {
-		if(aset->aset_num < num_cpu_asets)
+	    aset, affinity_set_t, aset_affinities) {
+		if (aset->aset_num < num_cpu_asets) {
 			set_occupancy[aset->aset_num]++;
-		else
+		} else {
 			panic("aset_num = %d in %s\n", aset->aset_num, __FUNCTION__);
+		}
 	}
 
 	/*
@@ -551,18 +563,20 @@ affinity_set_place(affinity_space_t aspc, affinity_set_t new_aset)
 	 *   [(unsigned int)aspc % 127] % num_cpu_asets
 	 * unless this mapping policy is overridden.
 	 */
-	if (affinity_sets_mapping == 0)
+	if (affinity_sets_mapping == 0) {
 		i_least_occupied = 0;
-	else
+	} else {
 		i_least_occupied = (unsigned int)(((uintptr_t)aspc % 127) % num_cpu_asets);
+	}
 	for (i = 0; i < num_cpu_asets; i++) {
-		unsigned int	j = (i_least_occupied + i) % num_cpu_asets;
+		unsigned int    j = (i_least_occupied + i) % num_cpu_asets;
 		if (set_occupancy[j] == 0) {
 			i_least_occupied = j;
 			break;
 		}
-		if (set_occupancy[j] < set_occupancy[i_least_occupied])
+		if (set_occupancy[j] < set_occupancy[i_least_occupied]) {
 			i_least_occupied = j;
+		}
 	}
 	new_aset->aset_num = i_least_occupied;
 	new_aset->aset_pset = ml_affinity_to_pset(i_least_occupied);
@@ -570,7 +584,7 @@ affinity_set_place(affinity_space_t aspc, affinity_set_t new_aset)
 	/* Add the new affinity set to the group */
 	new_aset->aset_space = aspc;
 	queue_enter(&aspc->aspc_affinities,
-			new_aset, affinity_set_t, aset_affinities);
+	    new_aset, affinity_set_t, aset_affinities);
 
 	DBG("affinity_set_place(%p,%p) selected affinity %u pset %p\n",
 	    aspc, new_aset, new_aset->aset_num, new_aset->aset_pset);

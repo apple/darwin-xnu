@@ -35,8 +35,8 @@
 #include <vm/vm_kern.h>
 
 
-#define	P2ROUNDUP(x, align) (-(-((uint32_t)(x)) & -(align)))
-#define ROUNDDOWN(x,y)	(((x)/(y))*(y))
+#define P2ROUNDUP(x, align) (-(-((uint32_t)(x)) & -(align)))
+#define ROUNDDOWN(x, y)  (((x)/(y))*(y))
 
 /* ----------------------------------------------------------------------
  *
@@ -68,9 +68,10 @@ lt_elem_idx(struct link_table *table, uint32_t idx)
 {
 	int slab_idx = idx / table->slab_elem;
 	struct lt_elem *slab = table->table[slab_idx];
-	if (!slab)
+	if (!slab) {
 		panic("Invalid index:%d slab:%d (NULL) for table:%p\n",
-		      idx, slab_idx, table);
+		    idx, slab_idx, table);
+	}
 	assert(slab->lt_id.idx <= idx && (slab->lt_id.idx + table->slab_elem) > idx);
 	return lt_elem_ofst_slab(slab, table->slab_msk, (idx - slab->lt_id.idx) * table->elem_sz);
 }
@@ -81,9 +82,10 @@ lt_elem_idx(struct link_table *table, uint32_t idx)
 {
 	uint32_t ofst = idx * table->elem_sz;
 	struct lt_elem *slab = table->table[ofst >> table->slab_shift];
-	if (!slab)
+	if (!slab) {
 		panic("Invalid index:%d slab:%d (NULL) for table:%p\n",
-		      idx, (ofst >> table->slab_shift), table);
+		    idx, (ofst >> table->slab_shift), table);
+	}
 	assert(slab->lt_id.idx <= idx && (slab->lt_id.idx + table->slab_elem) > idx);
 	return lt_elem_ofst_slab(slab, table->slab_msk, ofst);
 }
@@ -97,11 +99,13 @@ lt_elem_in_range(struct lt_elem *elem, struct link_table *table)
 	assert(base != NULL);
 	while (*base != NULL) {
 		uintptr_t b = (uintptr_t)(*base);
-		if (e >= b && e < b + table->slab_sz)
+		if (e >= b && e < b + table->slab_sz) {
 			return 1;
+		}
 		base++;
-		if ((uintptr_t)base >= (uintptr_t)table->table + PAGE_SIZE)
+		if ((uintptr_t)base >= (uintptr_t)table->table + PAGE_SIZE) {
 			return 0;
+		}
 	}
 	return 0;
 }
@@ -112,12 +116,13 @@ lt_elem_in_range(struct lt_elem *elem, struct link_table *table)
  *
  * NOTE: this does _not_ get or put a reference on 'elem'
  */
-void lt_elem_invalidate(struct lt_elem *elem)
+void
+lt_elem_invalidate(struct lt_elem *elem)
 {
 	uint32_t __assert_only old = OSBitAndAtomic(~LT_BITS_VALID, &elem->lt_bits);
 	OSMemoryBarrier();
 	assert(((lt_bits_type(old) != LT_RESERVED) && (old & LT_BITS_VALID)) ||
-	       ((lt_bits_type(old) == LT_RESERVED) && !(old & LT_BITS_VALID)));
+	    ((lt_bits_type(old) == LT_RESERVED) && !(old & LT_BITS_VALID)));
 }
 
 /**
@@ -125,20 +130,22 @@ void lt_elem_invalidate(struct lt_elem *elem)
  *
  * NOTE: this does _not_ get or put a reference on 'elem'
  */
-void lt_elem_mkvalid(struct lt_elem *elem)
+void
+lt_elem_mkvalid(struct lt_elem *elem)
 {
 	uint32_t __assert_only old = OSBitOrAtomic(LT_BITS_VALID, &elem->lt_bits);
 	OSMemoryBarrier();
 	assert(!(old & LT_BITS_VALID));
 }
 
-static void lt_elem_set_type(struct lt_elem *elem, int type)
+static void
+lt_elem_set_type(struct lt_elem *elem, int type)
 {
 	uint32_t old_bits, new_bits;
 	do {
 		old_bits = elem->lt_bits;
 		new_bits = (old_bits & ~LT_BITS_TYPE) |
-			   ((type & LT_BITS_TYPE_MASK) << LT_BITS_TYPE_SHIFT);
+		    ((type & LT_BITS_TYPE_MASK) << LT_BITS_TYPE_SHIFT);
 	} while (OSCompareAndSwap(old_bits, new_bits, &elem->lt_bits) == FALSE);
 	OSMemoryBarrier();
 }
@@ -149,19 +156,22 @@ static void lt_elem_set_type(struct lt_elem *elem, int type)
  *
  * Called once at system boot
  */
-void ltable_bootstrap(void)
+void
+ltable_bootstrap(void)
 {
 	static int s_is_bootstrapped = 0;
 
 	uint32_t tmp32 = 0;
 
-	if (s_is_bootstrapped)
+	if (s_is_bootstrapped) {
 		return;
+	}
 	s_is_bootstrapped = 1;
 
 	g_lt_max_tbl_size = DEFAULT_MAX_TABLE_SIZE;
-	if (PE_parse_boot_argn("lt_tbl_size", &tmp32, sizeof(tmp32)) == TRUE)
+	if (PE_parse_boot_argn("lt_tbl_size", &tmp32, sizeof(tmp32)) == TRUE) {
 		g_lt_max_tbl_size = (vm_size_t)P2ROUNDUP(tmp32, PAGE_SIZE);
+	}
 
 	lck_grp_init(&g_lt_lck_grp, "link_table_locks", LCK_GRP_ATTR_NULL);
 }
@@ -170,9 +180,10 @@ void ltable_bootstrap(void)
  * ltable_init: initialize a link table with given parameters
  *
  */
-void ltable_init(struct link_table *table, const char *name,
-                 uint32_t max_tbl_elem, uint32_t elem_sz,
-                 ltable_poison_func poison)
+void
+ltable_init(struct link_table *table, const char *name,
+    uint32_t max_tbl_elem, uint32_t elem_sz,
+    ltable_poison_func poison)
 {
 	kern_return_t kr;
 	uint32_t slab_sz, slab_shift, slab_msk, slab_elem;
@@ -182,9 +193,10 @@ void ltable_init(struct link_table *table, const char *name,
 
 #ifndef CONFIG_LTABLE_STATS
 	/* the element size _must_ be a power of two! */
-	if ((elem_sz & (elem_sz - 1)) != 0)
+	if ((elem_sz & (elem_sz - 1)) != 0) {
 		panic("elem_sz:%d for table:'%s' must be a power of two!",
-		      elem_sz, name);
+		    elem_sz, name);
+	}
 #endif
 
 	/*
@@ -192,10 +204,11 @@ void ltable_init(struct link_table *table, const char *name,
 	 * for the table's element slabs
 	 */
 	kr = kernel_memory_allocate(kernel_map, (vm_offset_t *)&base,
-				    PAGE_SIZE, 0, KMA_NOPAGEWAIT, VM_KERN_MEMORY_LTABLE);
-	if (kr != KERN_SUCCESS)
+	    PAGE_SIZE, 0, KMA_NOPAGEWAIT, VM_KERN_MEMORY_LTABLE);
+	if (kr != KERN_SUCCESS) {
 		panic("Cannot initialize %s table: "
-		      "kernel_memory_allocate failed:%d\n", name, kr);
+		    "kernel_memory_allocate failed:%d\n", name, kr);
+	}
 	memset(base, 0, PAGE_SIZE);
 
 	/*
@@ -209,8 +222,9 @@ void ltable_init(struct link_table *table, const char *name,
 
 	/* system maximum table size divided by number of slots in a page */
 	slab_sz = (uint32_t)(max_tbl_sz / (PAGE_SIZE / (sizeof(void *))));
-	if (slab_sz < PAGE_SIZE)
+	if (slab_sz < PAGE_SIZE) {
 		slab_sz = PAGE_SIZE;
+	}
 
 	/* make sure the slab size is a power of two */
 	slab_shift = 0;
@@ -220,8 +234,9 @@ void ltable_init(struct link_table *table, const char *name,
 		if ((slab_sz & bit) == slab_sz) {
 			slab_shift = i;
 			slab_msk = 0;
-			for (uint32_t j = 0; j < i; j++)
+			for (uint32_t j = 0; j < i; j++) {
 				slab_msk |= (1 << j);
+			}
 			break;
 		}
 		slab_sz &= ~bit;
@@ -230,15 +245,16 @@ void ltable_init(struct link_table *table, const char *name,
 
 	/* initialize the table's slab zone (for table growth) */
 	ltdbg("Initializing %s zone: slab:%d (%d,0x%x) max:%ld",
-	      name, slab_sz, slab_shift, slab_msk, max_tbl_sz);
+	    name, slab_sz, slab_shift, slab_msk, max_tbl_sz);
 	slab_zone = zinit(slab_sz, max_tbl_sz, slab_sz, name);
 	assert(slab_zone != ZONE_NULL);
 
 	/* allocate the first slab and populate it */
 	base[0] = (struct lt_elem *)zalloc(slab_zone);
-	if (base[0] == NULL)
+	if (base[0] == NULL) {
 		panic("Can't allocate a %s table slab from zone:%p",
-		      name, slab_zone);
+		    name, slab_zone);
+	}
 
 	memset(base[0], 0, slab_sz);
 
@@ -301,7 +317,8 @@ void ltable_init(struct link_table *table, const char *name,
  *	table mutex is unlocked
  *	calling thread can block
  */
-void ltable_grow(struct link_table *table, uint32_t min_free)
+void
+ltable_grow(struct link_table *table, uint32_t min_free)
 {
 	struct lt_elem *slab, **slot;
 	struct lt_elem *e = NULL, *first_new_elem, *last_new_elem;
@@ -341,20 +358,22 @@ void ltable_grow(struct link_table *table, uint32_t min_free)
 			return;
 		}
 		panic("No more room to grow table: %p (nelem: %d, used: %d)",
-		      table, table->nelem, table->used_elem);
+		    table, table->nelem, table->used_elem);
 	}
 	slot = table->next_free_slab;
 	table->next_free_slab++;
-	if ((uintptr_t)table->next_free_slab >= (uintptr_t)table->table + PAGE_SIZE)
+	if ((uintptr_t)table->next_free_slab >= (uintptr_t)table->table + PAGE_SIZE) {
 		table->next_free_slab = NULL;
+	}
 
 	assert(*slot == NULL);
 
 	/* allocate another slab */
 	slab = (struct lt_elem *)zalloc(table->slab_zone);
-	if (slab == NULL)
+	if (slab == NULL) {
 		panic("Can't allocate a %s table (%p) slab from zone:%p",
-		      table->slab_zone->zone_name, table, table->slab_zone);
+		    table->slab_zone->zone_name, table, table->slab_zone);
+	}
 
 	memset(slab, 0, table->slab_sz);
 
@@ -362,8 +381,9 @@ void ltable_grow(struct link_table *table, uint32_t min_free)
 	ltdbg_v("    init %d new links...", table->slab_elem);
 	for (unsigned l = 0; l < table->slab_elem; l++) {
 		uint32_t idx = l + table->nelem;
-		if (idx >= (LT_IDX_MAX - 1))
+		if (idx >= (LT_IDX_MAX - 1)) {
 			break; /* the last element of the last slab */
+		}
 		e = lt_elem_ofst_slab(slab, table->slab_msk, l * table->elem_sz);
 		e->lt_id.idx = idx;
 		e->lt_next_idx = idx + 1;
@@ -375,10 +395,11 @@ void ltable_grow(struct link_table *table, uint32_t min_free)
 
 	/* update table book keeping, and atomically swap the freelist head */
 	*slot = slab;
-	if (table->nelem + table->slab_elem >= LT_IDX_MAX)
+	if (table->nelem + table->slab_elem >= LT_IDX_MAX) {
 		table->nelem = LT_IDX_MAX - 1;
-	else
+	} else {
 		table->nelem += table->slab_elem;
+	}
 
 #if CONFIG_LTABLE_STATS
 	table->nslabs += 1;
@@ -393,7 +414,7 @@ void ltable_grow(struct link_table *table, uint32_t min_free)
 	/* connect the existing free list to the end of the new free list */
 	last_new_elem->lt_next_idx = free_id.idx;
 	while (OSCompareAndSwap64(free_id.id, first_new_elem->lt_id.id,
-				  &table->free_list.id) == FALSE) {
+	    &table->free_list.id) == FALSE) {
 		OSMemoryBarrier();
 		free_id = table->free_list;
 		last_new_elem->lt_next_idx = free_id.idx;
@@ -435,8 +456,9 @@ ltable_nelem(struct link_table *table)
  * the table grows to meet the demand for 'nelem' element(s).
  */
 __attribute__((noinline))
-struct lt_elem *ltable_alloc_elem(struct link_table *table, int type,
-				  int nelem, int nattempts)
+struct lt_elem *
+ltable_alloc_elem(struct link_table *table, int type,
+    int nelem, int nattempts)
 {
 	int nspins = 0, ntries = 0, nalloc = 0;
 	uint32_t table_size;
@@ -445,9 +467,10 @@ struct lt_elem *ltable_alloc_elem(struct link_table *table, int type,
 
 	static const int max_retries = 500;
 
-	if (type != LT_ELEM && type != LT_LINK && type != LT_RESERVED)
+	if (type != LT_ELEM && type != LT_LINK && type != LT_RESERVED) {
 		panic("link_table_aloc of invalid elem type:%d from table @%p",
-		      type, table);
+		    type, table);
+	}
 
 	assert(nelem > 0);
 
@@ -472,17 +495,20 @@ try_again:
 			return NULL;
 		}
 
-		if (table->used_elem + nelem >= table_size)
+		if (table->used_elem + nelem >= table_size) {
 			panic("No more room to grow table: 0x%p size:%d, used:%d, requested elem:%d",
-			      table, table_size, table->used_elem, nelem);
-		if (nelem == 1)
+			    table, table_size, table->used_elem, nelem);
+		}
+		if (nelem == 1) {
 			panic("Too many alloc retries: %d, table:%p, type:%d, nelem:%d",
-			      ntries, table, type, nelem);
+			    ntries, table, type, nelem);
+		}
 		/* don't panic: try allocating one-at-a-time */
 		while (nelem > 0) {
 			tmp = ltable_alloc_elem(table, type, 1, nattempts);
-			if (elem)
+			if (elem) {
 				lt_elem_list_link(table, tmp, elem);
+			}
 			elem = tmp;
 			--nelem;
 		}
@@ -502,9 +528,10 @@ try_again:
 			 * We may have just raced with table growth: check
 			 * again to make sure there really isn't any space.
 			 */
-			if (++nspins > 4)
+			if (++nspins > 4) {
 				panic("Can't grow table %p with preemption"
-				      " disabled!", table);
+				    " disabled!", table);
+			}
 			delay(1);
 			goto try_again;
 		}
@@ -514,8 +541,9 @@ try_again:
 
 	/* read this value only once before the CAS */
 	free_id = table->free_list;
-	if (free_id.idx >= table_size)
+	if (free_id.idx >= table_size) {
 		goto try_again;
+	}
 
 	/*
 	 * Find the item on the free list which will become the new free list
@@ -525,8 +553,8 @@ try_again:
 	 * free list head with the one we've investigated.
 	 */
 	for (struct lt_elem *next_elem = lt_elem_idx(table, free_id.idx);
-	     nalloc < nelem;
-	     nalloc++) {
+	    nalloc < nelem;
+	    nalloc++) {
 		elem = next_elem;
 		next_id.generation = 0;
 		next_id.idx = next_elem->lt_next_idx;
@@ -540,8 +568,9 @@ try_again:
 	/* 'elem' points to the last element being allocated */
 
 	if (OSCompareAndSwap64(free_id.id, next_id.id,
-			       &table->free_list.id) == FALSE)
+	    &table->free_list.id) == FALSE) {
 		goto try_again;
+	}
 
 	/* load barrier */
 	OSMemoryBarrier();
@@ -566,15 +595,16 @@ try_again:
 	 * subsequently marks the element as valid, then the put
 	 * will simply drop the reference.
 	 */
-	for (struct lt_elem *tmp = elem; ; ) {
+	for (struct lt_elem *tmp = elem;;) {
 		assert(!lt_bits_valid(tmp->lt_bits) &&
-		       (lt_bits_refcnt(tmp->lt_bits) == 0));
+		    (lt_bits_refcnt(tmp->lt_bits) == 0));
 		--nalloc;
 		tmp->lt_id.generation += 1;
 		tmp->lt_bits = 1;
 		lt_elem_set_type(tmp, type);
-		if (tmp->lt_next_idx == LT_IDX_MAX)
+		if (tmp->lt_next_idx == LT_IDX_MAX) {
 			break;
+		}
 		assert(tmp->lt_next_idx != LT_IDX_MAX);
 		tmp = lt_elem_idx(table, tmp->lt_next_idx);
 	}
@@ -583,13 +613,16 @@ try_again:
 #if CONFIG_LTABLE_STATS
 	uint64_t nreservations;
 	table->nallocs += nelem;
-	if (type == LT_RESERVED)
+	if (type == LT_RESERVED) {
 		OSIncrementAtomic64(&table->nreservations);
+	}
 	nreservations = table->nreservations;
-	if (table->used_elem > table->max_used)
+	if (table->used_elem > table->max_used) {
 		table->max_used = table->used_elem;
-	if (nreservations > table->max_reservations)
+	}
+	if (nreservations > table->max_reservations) {
 		table->max_reservations = nreservations;
+	}
 	table->avg_used = (table->avg_used + table->used_elem) / 2;
 	table->avg_reservations = (table->avg_reservations + nreservations) / 2;
 #endif
@@ -606,11 +639,12 @@ try_again:
  * is disconnected from any list to which it belongs, and its type is set to
  * 'type'.
  */
-void ltable_realloc_elem(struct link_table *table, struct lt_elem *elem, int type)
+void
+ltable_realloc_elem(struct link_table *table, struct lt_elem *elem, int type)
 {
 	(void)table;
 	assert(lt_elem_in_range(elem, table) &&
-	       !lt_bits_valid(elem->lt_bits));
+	    !lt_bits_valid(elem->lt_bits));
 
 #if CONFIG_LTABLE_STATS
 	table->nreallocs += 1;
@@ -648,40 +682,45 @@ void ltable_realloc_elem(struct link_table *table, struct lt_elem *elem, int typ
  *     'elem' is _not_ marked valid
  *     'elem' has a reference count of 0
  */
-static void ltable_free_elem(struct link_table *table, struct lt_elem *elem)
+static void
+ltable_free_elem(struct link_table *table, struct lt_elem *elem)
 {
 	struct ltable_id next_id;
 
 	assert(lt_elem_in_range(elem, table) &&
-	       !lt_bits_valid(elem->lt_bits) &&
-	       (lt_bits_refcnt(elem->lt_bits) == 0));
+	    !lt_bits_valid(elem->lt_bits) &&
+	    (lt_bits_refcnt(elem->lt_bits) == 0));
 
 	OSDecrementAtomic(&table->used_elem);
 
 #if CONFIG_LTABLE_STATS
 	table->avg_used = (table->avg_used + table->used_elem) / 2;
-	if (lt_bits_type(elem->lt_bits) == LT_RESERVED)
+	if (lt_bits_type(elem->lt_bits) == LT_RESERVED) {
 		OSDecrementAtomic64(&table->nreservations);
+	}
 	table->avg_reservations = (table->avg_reservations + table->nreservations) / 2;
 #endif
 
 	elem->lt_bits = 0;
 
-	if (table->poison)
+	if (table->poison) {
 		(table->poison)(table, elem);
+	}
 
 again:
 	next_id = table->free_list;
-	if (next_id.idx >= table->nelem)
+	if (next_id.idx >= table->nelem) {
 		elem->lt_next_idx = LT_IDX_MAX;
-	else
+	} else {
 		elem->lt_next_idx = next_id.idx;
+	}
 
 	/* store barrier */
 	OSMemoryBarrier();
 	if (OSCompareAndSwap64(next_id.id, elem->lt_id.id,
-			       &table->free_list.id) == FALSE)
+	    &table->free_list.id) == FALSE) {
 		goto again;
+	}
 }
 
 
@@ -695,7 +734,8 @@ again:
  * NOTE: if the table element pointed to by 'id' is marked as invalid,
  *       this function will return NULL.
  */
-struct lt_elem *ltable_get_elem(struct link_table *table, uint64_t id)
+struct lt_elem *
+ltable_get_elem(struct link_table *table, uint64_t id)
 {
 	struct lt_elem *elem;
 	uint32_t idx, bits, new_bits;
@@ -707,22 +747,25 @@ struct lt_elem *ltable_get_elem(struct link_table *table, uint64_t id)
 
 	idx = ((struct ltable_id *)&id)->idx;
 
-	if (idx >= table->nelem)
+	if (idx >= table->nelem) {
 		panic("id:0x%llx : idx:%d > %d", id, idx, table->nelem);
+	}
 
 	elem = lt_elem_idx(table, idx);
 
 	/* verify the validity by taking a reference on the table object */
 	bits = elem->lt_bits;
-	if (!lt_bits_valid(bits))
+	if (!lt_bits_valid(bits)) {
 		return NULL;
+	}
 
 	/*
 	 * do a pre-verify on the element ID to potentially
 	 * avoid 2 compare-and-swaps
 	 */
-	if (elem->lt_id.id != id)
+	if (elem->lt_id.id != id) {
 		return NULL;
+	}
 
 	new_bits = bits + 1;
 
@@ -749,9 +792,9 @@ struct lt_elem *ltable_get_elem(struct link_table *table, uint64_t id)
 	/* check to see that our reference is to the same generation! */
 	if (elem->lt_id.id != id) {
 		/*
-		ltdbg("ID:0x%llx table generation (%d) != %d",
-		      id, elem->lt_id.generation,
-		      ((struct ltable_id *)&id)->generation);
+		 *  ltdbg("ID:0x%llx table generation (%d) != %d",
+		 *     id, elem->lt_id.generation,
+		 *     ((struct ltable_id *)&id)->generation);
 		 */
 		ltable_put_elem(table, elem);
 		return NULL;
@@ -769,7 +812,8 @@ struct lt_elem *ltable_get_elem(struct link_table *table, uint64_t id)
  * when the reference count goes to 0 AND the element has been marked as
  * invalid.
  */
-void ltable_put_elem(struct link_table *table, struct lt_elem *elem)
+void
+ltable_put_elem(struct link_table *table, struct lt_elem *elem)
 {
 	uint32_t bits, new_bits;
 
@@ -795,8 +839,9 @@ void ltable_put_elem(struct link_table *table, struct lt_elem *elem)
 	 * if this was the last reference, and it was marked as invalid,
 	 * then we can add this link object back to the free list
 	 */
-	if (!lt_bits_valid(new_bits) && (lt_bits_refcnt(new_bits) == 0))
+	if (!lt_bits_valid(new_bits) && (lt_bits_refcnt(new_bits) == 0)) {
 		ltable_free_elem(table, elem);
+	}
 
 	return;
 }
@@ -820,7 +865,8 @@ void ltable_put_elem(struct link_table *table, struct lt_elem *elem)
  * results in: parent->child
  * however this could also result in: parent->...->child
  */
-int lt_elem_list_link(struct link_table *table, struct lt_elem *parent, struct lt_elem *child)
+int
+lt_elem_list_link(struct link_table *table, struct lt_elem *parent, struct lt_elem *child)
 {
 	int nelem = 1;
 
@@ -851,30 +897,34 @@ int lt_elem_list_link(struct link_table *table, struct lt_elem *parent, struct l
  * It does _not_ take an extra reference on the object: the list implicitly
  * holds that reference.
  */
-struct lt_elem *lt_elem_list_first(struct link_table *table, uint64_t id)
+struct lt_elem *
+lt_elem_list_first(struct link_table *table, uint64_t id)
 {
 	uint32_t idx;
 	struct lt_elem *elem = NULL;
 
-	if (id == 0)
+	if (id == 0) {
 		return NULL;
+	}
 
 	idx = ((struct ltable_id *)&id)->idx;
 
-	if (idx > table->nelem)
+	if (idx > table->nelem) {
 		panic("Invalid element for id:0x%llx", id);
+	}
 	elem = lt_elem_idx(table, idx);
 
 	/* invalid element: reserved ID was probably already reallocated */
-	if (elem->lt_id.id != id)
+	if (elem->lt_id.id != id) {
 		return NULL;
+	}
 
 	/* the returned element should _not_ be marked valid! */
 	if (lt_bits_valid(elem->lt_bits) ||
 	    lt_bits_type(elem->lt_bits) != LT_RESERVED ||
 	    lt_bits_refcnt(elem->lt_bits) != 1) {
 		panic("Valid/unreserved element %p (0x%x) in reserved list",
-		      elem, elem->lt_bits);
+		    elem, elem->lt_bits);
 	}
 
 	return elem;
@@ -886,14 +936,17 @@ struct lt_elem *lt_elem_list_first(struct link_table *table, uint64_t id)
  *
  * Note that this will return NULL if 'elem' is actually the end of the list.
  */
-struct lt_elem *lt_elem_list_next(struct link_table *table, struct lt_elem *head)
+struct lt_elem *
+lt_elem_list_next(struct link_table *table, struct lt_elem *head)
 {
 	struct lt_elem *elem;
 
-	if (!head)
+	if (!head) {
 		return NULL;
-	if (head->lt_next_idx >= table->nelem)
+	}
+	if (head->lt_next_idx >= table->nelem) {
 		return NULL;
+	}
 
 	elem = lt_elem_idx(table, head->lt_next_idx);
 	assert(lt_elem_in_range(elem, table));
@@ -909,12 +962,14 @@ struct lt_elem *lt_elem_list_next(struct link_table *table, struct lt_elem *head
  * the list), and return the element subsequent to 'elem' in the list
  * (which could be NULL)
  */
-struct lt_elem *lt_elem_list_break(struct link_table *table, struct lt_elem *elem)
+struct lt_elem *
+lt_elem_list_break(struct link_table *table, struct lt_elem *elem)
 {
 	struct lt_elem *next;
 
-	if (!elem)
+	if (!elem) {
 		return NULL;
+	}
 	next = lt_elem_list_next(table, elem);
 	elem->lt_next_idx = LT_IDX_MAX;
 
@@ -931,12 +986,14 @@ struct lt_elem *lt_elem_list_break(struct link_table *table, struct lt_elem *ele
  * returned object.  A realloc is done to reset the type of the object, but it
  * is still left invalid.
  */
-struct lt_elem *lt_elem_list_pop(struct link_table *table, uint64_t *id, int type)
+struct lt_elem *
+lt_elem_list_pop(struct link_table *table, uint64_t *id, int type)
 {
 	struct lt_elem *first, *next;
 
-	if (!id || *id == 0)
+	if (!id || *id == 0) {
 		return NULL;
+	}
 
 	/* pop an item off the reserved stack */
 
@@ -947,10 +1004,11 @@ struct lt_elem *lt_elem_list_pop(struct link_table *table, uint64_t *id, int typ
 	}
 
 	next = lt_elem_list_next(table, first);
-	if (next)
+	if (next) {
 		*id = next->lt_id.id;
-	else
+	} else {
 		*id = 0;
+	}
 
 	ltable_realloc_elem(table, first, type);
 
@@ -964,28 +1022,32 @@ struct lt_elem *lt_elem_list_pop(struct link_table *table, uint64_t *id, int typ
  * to 'table' as free elements. The 'type' parameter is used in development
  * kernels to assert that all elements on the list are of the given type.
  */
-int lt_elem_list_release(struct link_table *table, struct lt_elem *head,
-                         int __assert_only type)
+int
+lt_elem_list_release(struct link_table *table, struct lt_elem *head,
+    int __assert_only type)
 {
 	struct lt_elem *elem;
 	struct ltable_id free_id;
 	int nelem = 0;
 
-	if (!head)
+	if (!head) {
 		return 0;
+	}
 
-	for (elem = head; ; ) {
+	for (elem = head;;) {
 		assert(lt_elem_in_range(elem, table));
 		assert(!lt_bits_valid(elem->lt_bits) && (lt_bits_refcnt(elem->lt_bits) == 1));
 		assert(lt_bits_type(elem->lt_bits) == type);
 
 		nelem++;
 		elem->lt_bits = 0;
-		if (table->poison)
+		if (table->poison) {
 			(table->poison)(table, elem);
+		}
 
-		if (elem->lt_next_idx == LT_IDX_MAX)
+		if (elem->lt_next_idx == LT_IDX_MAX) {
 			break;
+		}
 		assert(elem->lt_next_idx < table->nelem);
 		elem = lt_elem_idx(table, elem->lt_next_idx);
 	}
@@ -999,16 +1061,18 @@ int lt_elem_list_release(struct link_table *table, struct lt_elem *head,
 
 again:
 	free_id = table->free_list;
-	if (free_id.idx >= table->nelem)
+	if (free_id.idx >= table->nelem) {
 		elem->lt_next_idx = LT_IDX_MAX;
-	else
+	} else {
 		elem->lt_next_idx = free_id.idx;
+	}
 
 	/* store barrier */
 	OSMemoryBarrier();
 	if (OSCompareAndSwap64(free_id.id, head->lt_id.id,
-			       &table->free_list.id) == FALSE)
+	    &table->free_list.id) == FALSE) {
 		goto again;
+	}
 
 	OSAddAtomic(-nelem, &table->used_elem);
 	return nelem;

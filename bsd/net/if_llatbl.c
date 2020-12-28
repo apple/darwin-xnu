@@ -124,8 +124,9 @@ lltable_dump_af(struct lltable *llt, struct sysctl_req *wr)
 
 	LLTABLE_LOCK_ASSERT();
 
-	if (llt->llt_ifp->if_flags & IFF_LOOPBACK)
-		return (0);
+	if (llt->llt_ifp->if_flags & IFF_LOOPBACK) {
+		return 0;
+	}
 	error = 0;
 
 	IF_AFDATA_RLOCK(llt->llt_ifp, llt->llt_af);
@@ -133,7 +134,7 @@ lltable_dump_af(struct lltable *llt, struct sysctl_req *wr)
 	    (llt_foreach_cb_t *)llt->llt_dump_entry, wr);
 	IF_AFDATA_RUNLOCK(llt->llt_ifp, llt->llt_af);
 
-	return (error);
+	return error;
 }
 
 /*
@@ -149,13 +150,14 @@ lltable_sysctl_dumparp(int af, struct sysctl_req *wr)
 	SLIST_FOREACH(llt, &lltables, llt_link) {
 		if (llt->llt_af == af) {
 			error = lltable_dump_af(llt, wr);
-			if (error != 0)
+			if (error != 0) {
 				goto done;
+			}
 		}
 	}
 done:
 	LLTABLE_RUNLOCK();
-	return (error);
+	return error;
 }
 
 /*
@@ -178,12 +180,13 @@ htable_foreach_lle(struct lltable *llt, llt_foreach_cb_t *f, void *farg)
 	for (i = 0; i < llt->llt_hsize; i++) {
 		LIST_FOREACH_SAFE(lle, &llt->lle_head[i], lle_next, next) {
 			error = f(llt, lle, farg);
-			if (error != 0)
+			if (error != 0) {
 				break;
+			}
 		}
 	}
 
-	return (error);
+	return error;
 }
 
 static void
@@ -192,8 +195,9 @@ htable_link_entry(struct lltable *llt, struct llentry *lle)
 	struct llentries *lleh;
 	uint32_t hashidx;
 
-	if ((lle->la_flags & LLE_LINKED) != 0)
+	if ((lle->la_flags & LLE_LINKED) != 0) {
 		return;
+	}
 
 	IF_AFDATA_WLOCK_ASSERT(llt->llt_ifp, llt->llt_af);
 
@@ -239,7 +243,7 @@ htable_prefix_free_cb(struct lltable *llt, struct llentry *lle, void *farg)
 		LIST_INSERT_HEAD(&pmd->dchain, lle, lle_chain);
 	}
 
-	return (0);
+	return 0;
 }
 
 static void
@@ -263,13 +267,12 @@ htable_prefix_free(struct lltable *llt, const struct sockaddr *addr,
 	IF_AFDATA_WUNLOCK(llt->llt_ifp, llt->llt_af);
 
 	LIST_FOREACH_SAFE(lle, &pmd.dchain, lle_chain, next)
-		lltable_free_entry(llt, lle);
+	lltable_free_entry(llt, lle);
 }
 
 static void
 htable_free_tbl(struct lltable *llt)
 {
-
 	FREE(llt->lle_head, M_LLTABLE);
 	FREE(llt, M_LLTABLE);
 }
@@ -280,7 +283,7 @@ llentries_unlink(struct lltable *llt, struct llentries *head)
 	struct llentry *lle, *next;
 
 	LIST_FOREACH_SAFE(lle, head, lle_chain, next)
-		llt->llt_unlink_entry(lle);
+	llt->llt_unlink_entry(lle);
 }
 
 /*
@@ -306,10 +309,10 @@ lltable_drop_entry_queue(struct llentry *lle)
 	}
 
 	KASSERT(lle->la_numheld == 0,
-		("%s: la_numheld %d > 0, pkts_droped %zd", __func__,
-		 lle->la_numheld, pkts_dropped));
+	    ("%s: la_numheld %d > 0, pkts_droped %zd", __func__,
+	    lle->la_numheld, pkts_dropped));
 
-	return (pkts_dropped);
+	return pkts_dropped;
 }
 
 void
@@ -355,7 +358,7 @@ lltable_try_set_entry_addr(struct ifnet *ifp, struct llentry *lle,
 	if ((lle->la_flags & LLE_DELETED) != 0) {
 		IF_AFDATA_WUNLOCK(ifp, lle->lle_tbl->llt_af);
 		LLE_FREE_LOCKED(lle);
-		return (0);
+		return 0;
 	}
 
 	/* Update data */
@@ -365,7 +368,7 @@ lltable_try_set_entry_addr(struct ifnet *ifp, struct llentry *lle,
 
 	LLE_REMREF(lle);
 
-	return (1);
+	return 1;
 }
 
 /*
@@ -393,7 +396,7 @@ lltable_calc_llheader(struct ifnet *ifp, int family, char *lladdr,
 		*lladdr_off = ereq.lladdr_off;
 	}
 
-	return (error);
+	return error;
 }
 
 /*
@@ -416,11 +419,12 @@ llentry_update_ifaddr(struct lltable *llt, struct llentry *lle, void *farg)
 	LLE_WLOCK(lle);
 	if ((lle->la_flags & LLE_VALID) == 0) {
 		LLE_WUNLOCK(lle);
-		return (0);
+		return 0;
 	}
 
-	if ((lle->la_flags & LLE_IFADDR) != 0)
+	if ((lle->la_flags & LLE_IFADDR) != 0) {
 		lladdr = (void *)IF_LLADDR(ifp);
+	}
 
 	linkhdrsize = sizeof(linkhdr);
 	lltable_calc_llheader(ifp, llt->llt_af, (void *)lladdr, (void *)linkhdr, &linkhdrsize,
@@ -428,7 +432,7 @@ llentry_update_ifaddr(struct lltable *llt, struct llentry *lle, void *farg)
 	memcpy(lle->r_linkdata, linkhdr, linkhdrsize);
 	LLE_WUNLOCK(lle);
 
-	return (0);
+	return 0;
 }
 
 /*
@@ -437,9 +441,9 @@ llentry_update_ifaddr(struct lltable *llt, struct llentry *lle, void *farg)
 void
 lltable_update_ifaddr(struct lltable *llt)
 {
-
-	if (llt->llt_ifp->if_flags & IFF_LOOPBACK)
+	if (llt->llt_ifp->if_flags & IFF_LOOPBACK) {
 		return;
+	}
 
 	IF_AFDATA_WLOCK(llt->llt_ifp, llt->llt_af);
 	lltable_foreach_lle(llt, llentry_update_ifaddr, llt->llt_ifp);
@@ -471,7 +475,7 @@ llentry_free(struct llentry *lle)
 
 	LLE_FREE_LOCKED(lle);
 
-	return (pkts_dropped);
+	return pkts_dropped;
 }
 
 /*
@@ -492,19 +496,21 @@ llentry_alloc(struct ifnet *ifp, struct lltable *lt,
 	if (la != NULL) {
 		LLE_ADDREF(la);
 		LLE_WUNLOCK(la);
-		return (la);
+		return la;
 	}
 
 	if ((ifp->if_flags & IFF_NOARP) == 0) {
 		la = lltable_alloc_entry(lt, 0, (struct sockaddr *)dst);
-		if (la == NULL)
-			return (NULL);
+		if (la == NULL) {
+			return NULL;
+		}
 		IF_AFDATA_WLOCK(ifp, lt->llt_af);
 		LLE_WLOCK(la);
 		/* Prefer any existing LLE over newly-created one */
 		la_tmp = lla_lookup(lt, LLE_EXCLUSIVE, (struct sockaddr *)dst);
-		if (la_tmp == NULL)
+		if (la_tmp == NULL) {
 			lltable_link_entry(lt, la);
+		}
 		IF_AFDATA_WUNLOCK(ifp, lt->llt_af);
 		if (la_tmp != NULL) {
 			lltable_free_entry(lt, la);
@@ -514,7 +520,7 @@ llentry_alloc(struct ifnet *ifp, struct lltable *lt,
 		LLE_WUNLOCK(la);
 	}
 
-	return (la);
+	return la;
 }
 
 /*
@@ -532,7 +538,7 @@ lltable_free_cb(struct lltable *llt, struct llentry *lle, void *farg)
 	LLE_WLOCK(lle);
 	LIST_INSERT_HEAD(dchain, lle, lle_chain);
 
-	return (0);
+	return 0;
 }
 
 /*
@@ -557,8 +563,9 @@ lltable_free(struct lltable *llt)
 
 	LIST_FOREACH_SAFE(lle, &dchain, lle_chain, next) {
 #if 0
-		if (thread_call_cancel(lle->lle_timer) == TRUE)
+		if (thread_call_cancel(lle->lle_timer) == TRUE) {
 			LLE_REMREF(lle);
+		}
 #endif
 		llentry_free(lle);
 	}
@@ -571,16 +578,17 @@ lltable_free(struct lltable *llt)
 void
 lltable_drain(int af)
 {
-	struct lltable	*llt;
-	struct llentry	*lle;
+	struct lltable  *llt;
+	struct llentry  *lle;
 	register int i;
 
 	LLTABLE_RLOCK();
 	SLIST_FOREACH(llt, &lltables, llt_link) {
-		if (llt->llt_af != af)
+		if (llt->llt_af != af) {
 			continue;
+		}
 
-		for (i=0; i < llt->llt_hsize; i++) {
+		for (i = 0; i < llt->llt_hsize; i++) {
 			LIST_FOREACH(lle, &llt->lle_head[i], lle_next) {
 				LLE_WLOCK(lle);
 				if (lle->la_hold) {
@@ -613,12 +621,12 @@ lltable_delete_addr(struct lltable *llt, u_int flags,
 
 	if (lle == NULL) {
 		IF_AFDATA_WUNLOCK(ifp, llt->llt_af);
-		return (ENOENT);
+		return ENOENT;
 	}
 	if ((lle->la_flags & LLE_IFADDR) != 0 && (flags & LLE_IFADDR) == 0) {
 		IF_AFDATA_WUNLOCK(ifp, llt->llt_af);
 		LLE_WUNLOCK(lle);
-		return (EPERM);
+		return EPERM;
 	}
 
 	lltable_unlink_entry(llt, lle);
@@ -626,7 +634,7 @@ lltable_delete_addr(struct lltable *llt, u_int flags,
 
 	llt->llt_delete_entry(llt, lle);
 
-	return (0);
+	return 0;
 }
 
 void
@@ -637,8 +645,9 @@ lltable_prefix_free(int af, struct sockaddr *addr, struct sockaddr *mask,
 
 	LLTABLE_RLOCK();
 	SLIST_FOREACH(llt, &lltables, llt_link) {
-		if (llt->llt_af != af)
+		if (llt->llt_af != af) {
 			continue;
+		}
 
 		llt->llt_prefix_free(llt, addr, mask, flags);
 	}
@@ -656,8 +665,9 @@ lltable_allocate_htbl(uint32_t hsize)
 	MALLOC(llt->lle_head, struct llentries *, sizeof(struct llentries) * hsize,
 	    M_LLTABLE, M_WAITOK | M_ZERO);
 
-	for (i = 0; i < llt->llt_hsize; i++)
+	for (i = 0; i < llt->llt_hsize; i++) {
 		LIST_INIT(&llt->lle_head[i]);
+	}
 
 	/* Set some default callbacks */
 	llt->llt_link_entry = htable_link_entry;
@@ -666,7 +676,7 @@ lltable_allocate_htbl(uint32_t hsize)
 	llt->llt_foreach_entry = htable_foreach_lle;
 	llt->llt_free_tbl = htable_free_tbl;
 
-	return (llt);
+	return llt;
 }
 
 /*
@@ -697,14 +707,14 @@ lltable_unlink(struct lltable *llt)
 int
 lltable_foreach_lle(struct lltable *llt, llt_foreach_cb_t *f, void *farg)
 {
-	return (llt->llt_foreach_entry(llt, f, farg));
+	return llt->llt_foreach_entry(llt, f, farg);
 }
 
 struct llentry *
 lltable_alloc_entry(struct lltable *llt, u_int flags,
     const struct sockaddr *l3addr)
 {
-	return (llt->llt_alloc_entry(llt, flags, l3addr));
+	return llt->llt_alloc_entry(llt, flags, l3addr);
 }
 
 void
@@ -737,16 +747,16 @@ lltable_fill_sa_entry(const struct llentry *lle, struct sockaddr *sa)
 struct ifnet *
 lltable_get_ifp(const struct lltable *llt)
 {
-	return (llt->llt_ifp);
+	return llt->llt_ifp;
 }
 
 int
 lltable_get_af(const struct lltable *llt)
 {
-	return (llt->llt_af);
+	return llt->llt_af;
 }
 
-#define ifnet_byindex(index)	ifindex2ifnet[(index)]
+#define ifnet_byindex(index)    ifindex2ifnet[(index)]
 
 /*
  * Called in route_output when rtm_flags contains RTF_LLDATA.
@@ -777,8 +787,9 @@ lla_rt_output(struct rt_msghdr *rtm, struct rt_addrinfo *info)
 	LLTABLE_RLOCK();
 	SLIST_FOREACH(llt, &lltables, llt_link) {
 		if (llt->llt_af == dst->sa_family &&
-		    llt->llt_ifp == ifp)
+		    llt->llt_ifp == ifp) {
 			break;
+		}
 	}
 	LLTABLE_RUNLOCK();
 	KASSERT(llt != NULL, ("Yep, ugly hacks are bad\n"));
@@ -789,21 +800,25 @@ lla_rt_output(struct rt_msghdr *rtm, struct rt_addrinfo *info)
 	case RTM_ADD:
 		/* Add static LLE */
 		laflags = 0;
-		if (rtm->rtm_rmx.rmx_expire == 0)
+		if (rtm->rtm_rmx.rmx_expire == 0) {
 			laflags = LLE_STATIC;
+		}
 		lle = lltable_alloc_entry(llt, laflags, dst);
-		if (lle == NULL)
-			return (ENOMEM);
+		if (lle == NULL) {
+			return ENOMEM;
+		}
 #if 0
 		linkhdrsize = sizeof(linkhdr);
 		if (lltable_calc_llheader(ifp, dst->sa_family, LLADDR(dl),
-		    (void *)linkhdr, &linkhdrsize, &lladdr_off) != 0)
-			return (EINVAL);
+		    (void *)linkhdr, &linkhdrsize, &lladdr_off) != 0) {
+			return EINVAL;
+		}
 #endif
 		lltable_set_entry_addr(ifp, lle, LLADDR(dl));
 
-		if (rtm->rtm_flags & RTF_ANNOUNCE)
+		if (rtm->rtm_flags & RTF_ANNOUNCE) {
 			lle->la_flags |= LLE_PUB;
+		}
 		lle->la_expire = rtm->rtm_rmx.rmx_expire;
 
 		laflags = lle->la_flags;
@@ -819,7 +834,7 @@ lla_rt_output(struct rt_msghdr *rtm, struct rt_addrinfo *info)
 				IF_AFDATA_WUNLOCK(ifp, llt->llt_af);
 				LLE_WUNLOCK(lle_tmp);
 				lltable_free_entry(llt, lle);
-				return (EPERM);
+				return EPERM;
 			}
 			/* Unlink existing entry from table */
 			lltable_unlink_entry(llt, lle_tmp);
@@ -842,19 +857,19 @@ lla_rt_output(struct rt_msghdr *rtm, struct rt_addrinfo *info)
 		LLE_WUNLOCK(lle);
 #ifdef INET
 		/* gratuitous ARP */
-		if ((laflags & LLE_PUB) && dst->sa_family == AF_INET)
+		if ((laflags & LLE_PUB) && dst->sa_family == AF_INET) {
 			dlil_send_arp(ifp, ARPOP_REQUEST, NULL, dst, NULL, dst, 0);
+		}
 #endif
 
 		break;
 
 	case RTM_DELETE:
-		return (lltable_delete_addr(llt, 0, dst));
+		return lltable_delete_addr(llt, 0, dst);
 
 	default:
 		error = EINVAL;
 	}
 
-	return (error);
+	return error;
 }
-

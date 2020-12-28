@@ -2,9 +2,9 @@
 #include "test_fault_helper.h"
 
 DECL_SETUP {
-    return test_fault_setup();
+	return test_fault_setup();
 }
 
 DECL_TEST {
-    return test_fault_helper(thread_id, num_threads, length, TESTFAULT);
+	return test_fault_helper(thread_id, num_threads, length, TESTFAULT);
 }

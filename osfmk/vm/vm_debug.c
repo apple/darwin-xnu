@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,34 +22,34 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1991,1990 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
  * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
@@ -112,31 +112,32 @@
 
 kern_return_t
 vm32_region_info(
-	__DEBUG_ONLY vm_map_t			map,
-	__DEBUG_ONLY vm32_offset_t		address,
-	__DEBUG_ONLY vm_info_region_t		*regionp,
-	__DEBUG_ONLY vm_info_object_array_t	*objectsp,
-	__DEBUG_ONLY mach_msg_type_number_t	*objectsCntp)
+	__DEBUG_ONLY vm_map_t                   map,
+	__DEBUG_ONLY vm32_offset_t              address,
+	__DEBUG_ONLY vm_info_region_t           *regionp,
+	__DEBUG_ONLY vm_info_object_array_t     *objectsp,
+	__DEBUG_ONLY mach_msg_type_number_t     *objectsCntp)
 {
 #if !MACH_VM_DEBUG
-        return KERN_FAILURE;
+	return KERN_FAILURE;
 #else
 	vm_map_copy_t copy;
-	vm_offset_t addr = 0;	/* memory for OOL data */
-	vm_size_t size;		/* size of the memory */
-	unsigned int room;	/* room for this many objects */
-	unsigned int used;	/* actually this many objects */
+	vm_offset_t addr = 0;   /* memory for OOL data */
+	vm_size_t size;         /* size of the memory */
+	unsigned int room;      /* room for this many objects */
+	unsigned int used;      /* actually this many objects */
 	vm_info_region_t region;
 	kern_return_t kr;
 
-	if (map == VM_MAP_NULL)
+	if (map == VM_MAP_NULL) {
 		return KERN_INVALID_TASK;
+	}
 
-	size = 0;		/* no memory allocated yet */
+	size = 0;               /* no memory allocated yet */
 
 	for (;;) {
-		vm_map_t cmap;	/* current map in traversal */
-		vm_map_t nmap;	/* next map to look at */
+		vm_map_t cmap;  /* current map in traversal */
+		vm_map_t nmap;  /* next map to look at */
 		vm_map_entry_t entry;
 		vm_object_t object, cobject, nobject;
 
@@ -146,23 +147,24 @@ vm32_region_info(
 		for (cmap = map;; cmap = nmap) {
 			/* cmap is read-locked */
 
-			if (!vm_map_lookup_entry(cmap, 
-				(vm_map_address_t)address, &entry)) {
-
+			if (!vm_map_lookup_entry(cmap,
+			    (vm_map_address_t)address, &entry)) {
 				entry = entry->vme_next;
 				if (entry == vm_map_to_entry(cmap)) {
 					vm_map_unlock_read(cmap);
-					if (size != 0)
+					if (size != 0) {
 						kmem_free(ipc_kernel_map,
-							  addr, size);
+						    addr, size);
+					}
 					return KERN_NO_SPACE;
 				}
 			}
 
-			if (entry->is_sub_map)
+			if (entry->is_sub_map) {
 				nmap = VME_SUBMAP(entry);
-			else
+			} else {
 				break;
+			}
 
 			/* move down to the lower map */
 
@@ -201,50 +203,50 @@ vm32_region_info(
 
 			if (used < room) {
 				vm_info_object_t *vio =
-					&((vm_info_object_t *) addr)[used];
+				    &((vm_info_object_t *) addr)[used];
 
 				vio->vio_object =
-					(natural_t)(uintptr_t) cobject;
+				    (natural_t)(uintptr_t) cobject;
 				vio->vio_size =
-					(natural_t) cobject->vo_size;
+				    (natural_t) cobject->vo_size;
 				vio->vio_ref_count =
-					cobject->ref_count;
+				    cobject->ref_count;
 				vio->vio_resident_page_count =
-					cobject->resident_page_count;
+				    cobject->resident_page_count;
 				vio->vio_copy =
-					(natural_t)(uintptr_t) cobject->copy;
+				    (natural_t)(uintptr_t) cobject->copy;
 				vio->vio_shadow =
-					(natural_t)(uintptr_t) cobject->shadow;
+				    (natural_t)(uintptr_t) cobject->shadow;
 				vio->vio_shadow_offset =
-					(natural_t) cobject->vo_shadow_offset;
+				    (natural_t) cobject->vo_shadow_offset;
 				vio->vio_paging_offset =
-					(natural_t) cobject->paging_offset;
+				    (natural_t) cobject->paging_offset;
 				vio->vio_copy_strategy =
-					cobject->copy_strategy;
+				    cobject->copy_strategy;
 				vio->vio_last_alloc =
-					(vm_offset_t) cobject->last_alloc;
+				    (vm_offset_t) cobject->last_alloc;
 				vio->vio_paging_in_progress =
-					cobject->paging_in_progress +
-					cobject->activity_in_progress;
+				    cobject->paging_in_progress +
+				    cobject->activity_in_progress;
 				vio->vio_pager_created =
-					cobject->pager_created;
+				    cobject->pager_created;
 				vio->vio_pager_initialized =
-					cobject->pager_initialized;
+				    cobject->pager_initialized;
 				vio->vio_pager_ready =
-					cobject->pager_ready;
+				    cobject->pager_ready;
 				vio->vio_can_persist =
-					cobject->can_persist;
+				    cobject->can_persist;
 				vio->vio_internal =
-					cobject->internal;
+				    cobject->internal;
 				vio->vio_temporary =
-					FALSE;
+				    FALSE;
 				vio->vio_alive =
-					cobject->alive;
+				    cobject->alive;
 				vio->vio_purgable =
-					(cobject->purgable != VM_PURGABLE_DENY);
+				    (cobject->purgable != VM_PURGABLE_DENY);
 				vio->vio_purgable_volatile =
-					(cobject->purgable == VM_PURGABLE_VOLATILE ||
-					 cobject->purgable == VM_PURGABLE_EMPTY);
+				    (cobject->purgable == VM_PURGABLE_VOLATILE ||
+				    cobject->purgable == VM_PURGABLE_EMPTY);
 			}
 
 			used++;
@@ -260,27 +262,30 @@ vm32_region_info(
 
 		/* nothing locked */
 
-		if (used <= room)
+		if (used <= room) {
 			break;
+		}
 
 		/* must allocate more memory */
 
-		if (size != 0)
+		if (size != 0) {
 			kmem_free(ipc_kernel_map, addr, size);
+		}
 		size = vm_map_round_page(2 * used * sizeof(vm_info_object_t),
-					 VM_MAP_PAGE_MASK(ipc_kernel_map));
+		    VM_MAP_PAGE_MASK(ipc_kernel_map));
 
 		kr = vm_allocate_kernel(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_IPC);
-		if (kr != KERN_SUCCESS)
+		if (kr != KERN_SUCCESS) {
 			return KERN_RESOURCE_SHORTAGE;
+		}
 
 		kr = vm_map_wire_kernel(
 			ipc_kernel_map,
 			vm_map_trunc_page(addr,
-					  VM_MAP_PAGE_MASK(ipc_kernel_map)),
+			VM_MAP_PAGE_MASK(ipc_kernel_map)),
 			vm_map_round_page(addr + size,
-					  VM_MAP_PAGE_MASK(ipc_kernel_map)),
-			VM_PROT_READ|VM_PROT_WRITE,
+			VM_MAP_PAGE_MASK(ipc_kernel_map)),
+			VM_PROT_READ | VM_PROT_WRITE,
 			VM_KERN_MEMORY_IPC,
 			FALSE);
 		assert(kr == KERN_SUCCESS);
@@ -291,29 +296,31 @@ vm32_region_info(
 	if (used == 0) {
 		copy = VM_MAP_COPY_NULL;
 
-		if (size != 0)
+		if (size != 0) {
 			kmem_free(ipc_kernel_map, addr, size);
+		}
 	} else {
 		vm_size_t size_used = (used * sizeof(vm_info_object_t));
 		vm_size_t vmsize_used = vm_map_round_page(size_used,
-					  VM_MAP_PAGE_MASK(ipc_kernel_map));
+		    VM_MAP_PAGE_MASK(ipc_kernel_map));
 
 		kr = vm_map_unwire(
 			ipc_kernel_map,
 			vm_map_trunc_page(addr,
-					  VM_MAP_PAGE_MASK(ipc_kernel_map)),
+			VM_MAP_PAGE_MASK(ipc_kernel_map)),
 			vm_map_round_page(addr + size_used,
-					  VM_MAP_PAGE_MASK(ipc_kernel_map)),
+			VM_MAP_PAGE_MASK(ipc_kernel_map)),
 			FALSE);
 		assert(kr == KERN_SUCCESS);
 
 		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)addr,
-				   (vm_map_size_t)size_used, TRUE, &copy);
+		    (vm_map_size_t)size_used, TRUE, &copy);
 		assert(kr == KERN_SUCCESS);
 
-		if (size != vmsize_used)
+		if (size != vmsize_used) {
 			kmem_free(ipc_kernel_map,
-				  addr + vmsize_used, size - vmsize_used);
+			    addr + vmsize_used, size - vmsize_used);
+		}
 	}
 
 	*regionp = region;
@@ -329,31 +336,32 @@ vm32_region_info(
 
 kern_return_t
 vm32_region_info_64(
-	__DEBUG_ONLY vm_map_t			map,
-	__DEBUG_ONLY vm32_offset_t		address,
-	__DEBUG_ONLY vm_info_region_64_t	*regionp,
-	__DEBUG_ONLY vm_info_object_array_t	*objectsp,
-	__DEBUG_ONLY mach_msg_type_number_t	*objectsCntp)
+	__DEBUG_ONLY vm_map_t                   map,
+	__DEBUG_ONLY vm32_offset_t              address,
+	__DEBUG_ONLY vm_info_region_64_t        *regionp,
+	__DEBUG_ONLY vm_info_object_array_t     *objectsp,
+	__DEBUG_ONLY mach_msg_type_number_t     *objectsCntp)
 {
 #if !MACH_VM_DEBUG
-        return KERN_FAILURE;
+	return KERN_FAILURE;
 #else
 	vm_map_copy_t copy;
-	vm_offset_t addr = 0;	/* memory for OOL data */
-	vm_size_t size;		/* size of the memory */
-	unsigned int room;	/* room for this many objects */
-	unsigned int used;	/* actually this many objects */
+	vm_offset_t addr = 0;   /* memory for OOL data */
+	vm_size_t size;         /* size of the memory */
+	unsigned int room;      /* room for this many objects */
+	unsigned int used;      /* actually this many objects */
 	vm_info_region_64_t region;
 	kern_return_t kr;
 
-	if (map == VM_MAP_NULL)
+	if (map == VM_MAP_NULL) {
 		return KERN_INVALID_TASK;
+	}
 
-	size = 0;		/* no memory allocated yet */
+	size = 0;               /* no memory allocated yet */
 
 	for (;;) {
-		vm_map_t cmap;	/* current map in traversal */
-		vm_map_t nmap;	/* next map to look at */
+		vm_map_t cmap;  /* current map in traversal */
+		vm_map_t nmap;  /* next map to look at */
 		vm_map_entry_t entry;
 		vm_object_t object, cobject, nobject;
 
@@ -367,17 +375,19 @@ vm32_region_info_64(
 				entry = entry->vme_next;
 				if (entry == vm_map_to_entry(cmap)) {
 					vm_map_unlock_read(cmap);
-					if (size != 0)
+					if (size != 0) {
 						kmem_free(ipc_kernel_map,
-							  addr, size);
+						    addr, size);
+					}
 					return KERN_NO_SPACE;
 				}
 			}
 
-			if (entry->is_sub_map)
+			if (entry->is_sub_map) {
 				nmap = VME_SUBMAP(entry);
-			else
+			} else {
 				break;
+			}
 
 			/* move down to the lower map */
 
@@ -416,50 +426,50 @@ vm32_region_info_64(
 
 			if (used < room) {
 				vm_info_object_t *vio =
-					&((vm_info_object_t *) addr)[used];
+				    &((vm_info_object_t *) addr)[used];
 
 				vio->vio_object =
-					(natural_t)(uintptr_t) cobject;
+				    (natural_t)(uintptr_t) cobject;
 				vio->vio_size =
-					(natural_t) cobject->vo_size;
+				    (natural_t) cobject->vo_size;
 				vio->vio_ref_count =
-					cobject->ref_count;
+				    cobject->ref_count;
 				vio->vio_resident_page_count =
-					cobject->resident_page_count;
+				    cobject->resident_page_count;
 				vio->vio_copy =
-					(natural_t)(uintptr_t) cobject->copy;
+				    (natural_t)(uintptr_t) cobject->copy;
 				vio->vio_shadow =
-					(natural_t)(uintptr_t) cobject->shadow;
+				    (natural_t)(uintptr_t) cobject->shadow;
 				vio->vio_shadow_offset =
-					(natural_t) cobject->vo_shadow_offset;
+				    (natural_t) cobject->vo_shadow_offset;
 				vio->vio_paging_offset =
-					(natural_t) cobject->paging_offset;
+				    (natural_t) cobject->paging_offset;
 				vio->vio_copy_strategy =
-					cobject->copy_strategy;
+				    cobject->copy_strategy;
 				vio->vio_last_alloc =
-					(vm_offset_t) cobject->last_alloc;
+				    (vm_offset_t) cobject->last_alloc;
 				vio->vio_paging_in_progress =
-					cobject->paging_in_progress +
-					cobject->activity_in_progress;
+				    cobject->paging_in_progress +
+				    cobject->activity_in_progress;
 				vio->vio_pager_created =
-					cobject->pager_created;
+				    cobject->pager_created;
 				vio->vio_pager_initialized =
-					cobject->pager_initialized;
+				    cobject->pager_initialized;
 				vio->vio_pager_ready =
-					cobject->pager_ready;
+				    cobject->pager_ready;
 				vio->vio_can_persist =
-					cobject->can_persist;
+				    cobject->can_persist;
 				vio->vio_internal =
-					cobject->internal;
+				    cobject->internal;
 				vio->vio_temporary =
-					FALSE;
+				    FALSE;
 				vio->vio_alive =
-					cobject->alive;
+				    cobject->alive;
 				vio->vio_purgable =
-					(cobject->purgable != VM_PURGABLE_DENY);
+				    (cobject->purgable != VM_PURGABLE_DENY);
 				vio->vio_purgable_volatile =
-					(cobject->purgable == VM_PURGABLE_VOLATILE ||
-					 cobject->purgable == VM_PURGABLE_EMPTY);
+				    (cobject->purgable == VM_PURGABLE_VOLATILE ||
+				    cobject->purgable == VM_PURGABLE_EMPTY);
 			}
 
 			used++;
@@ -475,27 +485,30 @@ vm32_region_info_64(
 
 		/* nothing locked */
 
-		if (used <= room)
+		if (used <= room) {
 			break;
+		}
 
 		/* must allocate more memory */
 
-		if (size != 0)
+		if (size != 0) {
 			kmem_free(ipc_kernel_map, addr, size);
+		}
 		size = vm_map_round_page(2 * used * sizeof(vm_info_object_t),
-					 VM_MAP_PAGE_MASK(ipc_kernel_map));
+		    VM_MAP_PAGE_MASK(ipc_kernel_map));
 
 		kr = vm_allocate_kernel(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_IPC);
-		if (kr != KERN_SUCCESS)
+		if (kr != KERN_SUCCESS) {
 			return KERN_RESOURCE_SHORTAGE;
+		}
 
 		kr = vm_map_wire_kernel(
 			ipc_kernel_map,
 			vm_map_trunc_page(addr,
-					  VM_MAP_PAGE_MASK(ipc_kernel_map)),
+			VM_MAP_PAGE_MASK(ipc_kernel_map)),
 			vm_map_round_page(addr + size,
-					  VM_MAP_PAGE_MASK(ipc_kernel_map)),
-			VM_PROT_READ|VM_PROT_WRITE,
+			VM_MAP_PAGE_MASK(ipc_kernel_map)),
+			VM_PROT_READ | VM_PROT_WRITE,
 			VM_KERN_MEMORY_IPC,
 			FALSE);
 		assert(kr == KERN_SUCCESS);
@@ -506,29 +519,31 @@ vm32_region_info_64(
 	if (used == 0) {
 		copy = VM_MAP_COPY_NULL;
 
-		if (size != 0)
+		if (size != 0) {
 			kmem_free(ipc_kernel_map, addr, size);
+		}
 	} else {
 		vm_size_t size_used = (used * sizeof(vm_info_object_t));
 		vm_size_t vmsize_used = vm_map_round_page(size_used,
-					  VM_MAP_PAGE_MASK(ipc_kernel_map));
+		    VM_MAP_PAGE_MASK(ipc_kernel_map));
 
 		kr = vm_map_unwire(
 			ipc_kernel_map,
 			vm_map_trunc_page(addr,
-					  VM_MAP_PAGE_MASK(ipc_kernel_map)),
+			VM_MAP_PAGE_MASK(ipc_kernel_map)),
 			vm_map_round_page(addr + size_used,
-					  VM_MAP_PAGE_MASK(ipc_kernel_map)),
+			VM_MAP_PAGE_MASK(ipc_kernel_map)),
 			FALSE);
 		assert(kr == KERN_SUCCESS);
 
 		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)addr,
-				   (vm_map_size_t)size_used, TRUE, &copy);
+		    (vm_map_size_t)size_used, TRUE, &copy);
 		assert(kr == KERN_SUCCESS);
 
-		if (size != vmsize_used)
+		if (size != vmsize_used) {
 			kmem_free(ipc_kernel_map,
-				  addr + vmsize_used, size - vmsize_used);
+			    addr + vmsize_used, size - vmsize_used);
+		}
 	}
 
 	*regionp = region;
@@ -542,90 +557,91 @@ vm32_region_info_64(
  */
 kern_return_t
 vm32_mapped_pages_info(
-	__DEBUG_ONLY vm_map_t			map,
-	__DEBUG_ONLY page_address_array_t	*pages,
-	__DEBUG_ONLY mach_msg_type_number_t	*pages_count)
+	__DEBUG_ONLY vm_map_t                   map,
+	__DEBUG_ONLY page_address_array_t       *pages,
+	__DEBUG_ONLY mach_msg_type_number_t     *pages_count)
 {
 #if !MACH_VM_DEBUG
-        return KERN_FAILURE;
+	return KERN_FAILURE;
 #else
-	pmap_t		pmap;
-	vm_size_t	size, size_used;
-	unsigned int	actual, space;
+	pmap_t          pmap;
+	vm_size_t       size, size_used;
+	unsigned int    actual, space;
 	page_address_array_t list;
-	vm_offset_t	addr = 0;
+	vm_offset_t     addr = 0;
 
-	if (map == VM_MAP_NULL)
-	    return (KERN_INVALID_ARGUMENT);
+	if (map == VM_MAP_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	pmap = map->pmap;
 	size = pmap_resident_count(pmap) * sizeof(vm_offset_t);
 	size = vm_map_round_page(size,
-				 VM_MAP_PAGE_MASK(ipc_kernel_map));
+	    VM_MAP_PAGE_MASK(ipc_kernel_map));
 
 	for (;;) {
-	    (void) vm_allocate_kernel(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_IPC);
-	    (void) vm_map_unwire(
-		    ipc_kernel_map,
-		    vm_map_trunc_page(addr,
-				      VM_MAP_PAGE_MASK(ipc_kernel_map)),
-		    vm_map_round_page(addr + size,
-				      VM_MAP_PAGE_MASK(ipc_kernel_map)),
-		    FALSE);
+		(void) vm_allocate_kernel(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_IPC);
+		(void) vm_map_unwire(
+			ipc_kernel_map,
+			vm_map_trunc_page(addr,
+			VM_MAP_PAGE_MASK(ipc_kernel_map)),
+			vm_map_round_page(addr + size,
+			VM_MAP_PAGE_MASK(ipc_kernel_map)),
+			FALSE);
 
-	    list = (page_address_array_t) addr;
-	    space = (unsigned int) (size / sizeof(vm_offset_t));
+		list = (page_address_array_t) addr;
+		space = (unsigned int) (size / sizeof(vm_offset_t));
 
-	    actual = pmap_list_resident_pages(pmap,
-					list,
-					space);
-	    if (actual <= space)
-		break;
+		actual = pmap_list_resident_pages(pmap,
+		    list,
+		    space);
+		if (actual <= space) {
+			break;
+		}
 
-	    /*
-	     * Free memory if not enough
-	     */
-	    (void) kmem_free(ipc_kernel_map, addr, size);
+		/*
+		 * Free memory if not enough
+		 */
+		(void) kmem_free(ipc_kernel_map, addr, size);
 
-	    /*
-	     * Try again, doubling the size
-	     */
-	    size = vm_map_round_page(actual * sizeof(vm_offset_t),
-				     VM_MAP_PAGE_MASK(ipc_kernel_map));
+		/*
+		 * Try again, doubling the size
+		 */
+		size = vm_map_round_page(actual * sizeof(vm_offset_t),
+		    VM_MAP_PAGE_MASK(ipc_kernel_map));
 	}
 	if (actual == 0) {
-	    *pages = 0;
-	    *pages_count = 0;
-	    (void) kmem_free(ipc_kernel_map, addr, size);
-	}
-	else {
-	    vm_size_t vmsize_used;
-	    *pages_count = actual;
-	    size_used = (actual * sizeof(vm_offset_t));
-	    vmsize_used = vm_map_round_page(size_used,
-					    VM_MAP_PAGE_MASK(ipc_kernel_map));
-	    (void) vm_map_wire_kernel(
-		    ipc_kernel_map,
-		    vm_map_trunc_page(addr,
-				      VM_MAP_PAGE_MASK(ipc_kernel_map)),
-		    vm_map_round_page(addr + size,
-				      VM_MAP_PAGE_MASK(ipc_kernel_map)), 
-		    VM_PROT_READ|VM_PROT_WRITE,
-		    VM_KERN_MEMORY_IPC,
-		    FALSE);
-	    (void) vm_map_copyin(ipc_kernel_map,
-				(vm_map_address_t)addr,
-				(vm_map_size_t)size_used,
-				TRUE,
-				(vm_map_copy_t *)pages);
-	    if (vmsize_used != size) {
-		(void) kmem_free(ipc_kernel_map,
-				addr + vmsize_used,
-				size - vmsize_used);
-	    }
+		*pages = 0;
+		*pages_count = 0;
+		(void) kmem_free(ipc_kernel_map, addr, size);
+	} else {
+		vm_size_t vmsize_used;
+		*pages_count = actual;
+		size_used = (actual * sizeof(vm_offset_t));
+		vmsize_used = vm_map_round_page(size_used,
+		    VM_MAP_PAGE_MASK(ipc_kernel_map));
+		(void) vm_map_wire_kernel(
+			ipc_kernel_map,
+			vm_map_trunc_page(addr,
+			VM_MAP_PAGE_MASK(ipc_kernel_map)),
+			vm_map_round_page(addr + size,
+			VM_MAP_PAGE_MASK(ipc_kernel_map)),
+			VM_PROT_READ | VM_PROT_WRITE,
+			VM_KERN_MEMORY_IPC,
+			FALSE);
+		(void) vm_map_copyin(ipc_kernel_map,
+		    (vm_map_address_t)addr,
+		    (vm_map_size_t)size_used,
+		    TRUE,
+		    (vm_map_copy_t *)pages);
+		if (vmsize_used != size) {
+			(void) kmem_free(ipc_kernel_map,
+			    addr + vmsize_used,
+			    size - vmsize_used);
+		}
 	}
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 #endif /* MACH_VM_DEBUG */
 }
 
@@ -645,12 +661,12 @@ vm32_mapped_pages_info(
 
 kern_return_t
 host_virtual_physical_table_info(
-	__DEBUG_ONLY host_t			host,
-	__DEBUG_ONLY hash_info_bucket_array_t	*infop,
-	__DEBUG_ONLY mach_msg_type_number_t 	*countp)
+	__DEBUG_ONLY host_t                     host,
+	__DEBUG_ONLY hash_info_bucket_array_t   *infop,
+	__DEBUG_ONLY mach_msg_type_number_t     *countp)
 {
 #if !MACH_VM_DEBUG
-        return KERN_FAILURE;
+	return KERN_FAILURE;
 #else
 	vm_offset_t addr = 0;
 	vm_size_t size = 0;
@@ -658,8 +674,9 @@ host_virtual_physical_table_info(
 	unsigned int potential, actual;
 	kern_return_t kr;
 
-	if (host == HOST_NULL)
+	if (host == HOST_NULL) {
 		return KERN_INVALID_HOST;
+	}
 
 	/* start with in-line data */
 
@@ -668,23 +685,26 @@ host_virtual_physical_table_info(
 
 	for (;;) {
 		actual = vm_page_info(info, potential);
-		if (actual <= potential)
+		if (actual <= potential) {
 			break;
+		}
 
 		/* allocate more memory */
 
-		if (info != *infop)
+		if (info != *infop) {
 			kmem_free(ipc_kernel_map, addr, size);
+		}
 
 		size = vm_map_round_page(actual * sizeof *info,
-					 VM_MAP_PAGE_MASK(ipc_kernel_map));
+		    VM_MAP_PAGE_MASK(ipc_kernel_map));
 		kr = vm_allocate_kernel(ipc_kernel_map, &addr, size,
-				 VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_IPC);
-		if (kr != KERN_SUCCESS)
+		    VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_IPC);
+		if (kr != KERN_SUCCESS) {
 			return KERN_RESOURCE_SHORTAGE;
+		}
 
 		info = (hash_info_bucket_t *) addr;
-		potential = (unsigned int) (size/sizeof (*info));
+		potential = (unsigned int) (size / sizeof(*info));
 	}
 
 	if (info == *infop) {
@@ -702,11 +722,12 @@ host_virtual_physical_table_info(
 		used = (actual * sizeof(*info));
 		vmused = vm_map_round_page(used, VM_MAP_PAGE_MASK(ipc_kernel_map));
 
-		if (vmused != size)
+		if (vmused != size) {
 			kmem_free(ipc_kernel_map, addr + vmused, size - vmused);
+		}
 
 		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)addr,
-				   (vm_map_size_t)used, TRUE, &copy);
+		    (vm_map_size_t)used, TRUE, &copy);
 		assert(kr == KERN_SUCCESS);
 
 		*infop = (hash_info_bucket_t *) copy;

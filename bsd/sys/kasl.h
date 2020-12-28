@@ -27,18 +27,14 @@
  */
 
 #ifndef _SYS_KASL_H_
-#define	_SYS_KASL_H_
+#define _SYS_KASL_H_
 
 #ifdef BSD_KERNEL_PRIVATE
 
-#define	KASL_KEY_FACILITY	"Facility"	/* Facility generating messages */
-#define	KASL_KEY_LEVEL		"Level"		/* Priority level */
+#define KASL_KEY_FACILITY       "Facility"      /* Facility generating messages */
+#define KASL_KEY_LEVEL          "Level"         /* Priority level */
 
 #endif /* BSD_KERNEL_PRIVATE */
-
-extern int
-kern_asl_msg_va(int level, const char *facility, int num_pairs,
-    va_list vargs, ...);
 
 extern int
 kern_asl_msg(int level, const char *facility, int num_pairs, ...);

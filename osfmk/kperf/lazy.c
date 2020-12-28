@@ -57,7 +57,7 @@ kperf_lazy_off_cpu(thread_t thread)
 	/* try to lazily sample the CPU if the thread was pre-empted */
 	if ((thread->reason & AST_SCHEDULING) != 0) {
 		kperf_lazy_cpu_sample(thread, 0, 0);
-    }
+	}
 }
 
 void
@@ -72,13 +72,13 @@ kperf_lazy_make_runnable(thread_t thread, bool in_interrupt)
 	uint64_t wait_time = thread_get_last_wait_duration(thread);
 	if (wait_time > kperf_lazy_wait_time_threshold) {
 		BUF_DATA(PERF_LZ_MKRUNNABLE, (uintptr_t)thread_tid(thread),
-				thread->sched_pri, in_interrupt ? 1 : 0);
+		    thread->sched_pri, in_interrupt ? 1 : 0);
 	}
 }
 
 void
 kperf_lazy_wait_sample(thread_t thread, thread_continue_t continuation,
-		uintptr_t *starting_fp)
+    uintptr_t *starting_fp)
 {
 	/* ignore idle threads */
 	if (thread->last_made_runnable_time == THREAD_NOT_RUNNABLE) {
@@ -98,7 +98,7 @@ kperf_lazy_wait_sample(thread_t thread, thread_continue_t continuation,
 
 		uint64_t runnable_time = timer_grab(&thread->runnable_timer);
 		uint64_t running_time = timer_grab(&thread->user_timer) +
-				timer_grab(&thread->system_timer);
+		    timer_grab(&thread->system_timer);
 
 		BUF_DATA(PERF_LZ_WAITSAMPLE, wait_time, runnable_time, running_time);
 
@@ -140,10 +140,10 @@ kperf_lazy_cpu_sample(thread_t thread, unsigned int flags, bool interrupt)
 
 		uint64_t runnable_time = timer_grab(&thread->runnable_timer);
 		uint64_t running_time = timer_grab(&thread->user_timer) +
-				timer_grab(&thread->system_timer);
+		    timer_grab(&thread->system_timer);
 
 		BUF_DATA(PERF_LZ_CPUSAMPLE, running_time, runnable_time,
-				thread->sched_pri, interrupt ? 1 : 0);
+		    thread->sched_pri, interrupt ? 1 : 0);
 
 		task_t task = get_threadtask(thread);
 		struct kperf_context ctx = {
@@ -160,7 +160,7 @@ kperf_lazy_cpu_sample(thread_t thread, unsigned int flags, bool interrupt)
 		}
 
 		kperf_sample(sample, &ctx, kperf_lazy_cpu_action,
-				SAMPLE_FLAG_PEND_USER | flags);
+		    SAMPLE_FLAG_PEND_USER | flags);
 	}
 }
 
@@ -168,7 +168,11 @@ kperf_lazy_cpu_sample(thread_t thread, unsigned int flags, bool interrupt)
  * Accessors for configuration.
  */
 
-int kperf_lazy_get_wait_action(void) { return kperf_lazy_wait_action; }
+int
+kperf_lazy_get_wait_action(void)
+{
+	return kperf_lazy_wait_action;
+}
 
 int
 kperf_lazy_set_wait_action(int action_id)
@@ -195,7 +199,11 @@ kperf_lazy_set_wait_time_threshold(uint64_t threshold)
 	return 0;
 }
 
-int kperf_lazy_get_cpu_action(void) { return kperf_lazy_cpu_action; }
+int
+kperf_lazy_get_cpu_action(void)
+{
+	return kperf_lazy_cpu_action;
+}
 
 int
 kperf_lazy_set_cpu_action(int action_id)
@@ -220,4 +228,3 @@ kperf_lazy_set_cpu_time_threshold(uint64_t threshold)
 	kperf_lazy_cpu_time_threshold = threshold;
 	return 0;
 }
-

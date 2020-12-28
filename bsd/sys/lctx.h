@@ -26,4 +26,4 @@ setlcid(pid_t pid, pid_t lcid)
 #define LCID_REMOVE     (-1)
 #define LCID_CREATE     (0)
 
-#endif	/* !_SYS_LCTX_H_ */
+#endif  /* !_SYS_LCTX_H_ */

@@ -129,14 +129,19 @@ and the behavior is identical to a call to
 The flags specified
 for the
 .Fa oflag
-argument are formed by
-.Em or Ns 'ing
-the following values:
+argument must include exactly one of the following file access modes:
 .Pp
 .Bd -literal -offset indent -compact
 O_RDONLY	open for reading only
 O_WRONLY	open for writing only
 O_RDWR		open for reading and writing
+.Ed
+.Pp
+In addition any combination of the following values can be
+.Em or Ns 'ed in
+.Fa oflag:
+.Pp
+.Bd -literal -offset indent -compact
 O_NONBLOCK	do not block on open or for data to become available
 O_APPEND	append on each write
 O_CREAT		create file if it does not exist
@@ -421,6 +426,8 @@ argument is not an absolute path and
 is neither
 .Dv AT_FDCWD
 nor a file descriptor associated with a directory.
+.It Bq Eq EILSEQ
+The filename does not match the encoding rules.
 .El
 .Sh COMPATIBILITY
 .Fn open

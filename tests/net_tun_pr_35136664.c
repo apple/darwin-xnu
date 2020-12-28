@@ -1,4 +1,3 @@
-
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/kern_control.h>
@@ -10,10 +9,11 @@
 #include <darwintest.h>
 #include <darwintest_utils.h>
 
-T_GLOBAL_META(T_META_NAMESPACE("xnu.net"));
+T_GLOBAL_META(T_META_NAMESPACE("xnu.net"),
+    T_META_RUN_CONCURRENTLY(true));
 
 T_DECL(PR_35136664_utun,
-	"This bind a utun and close it without connecting")
+    "This bind a utun and close it without connecting")
 {
 	int tunsock;
 	struct ctl_info kernctl_info;
@@ -38,7 +38,7 @@ T_DECL(PR_35136664_utun,
 }
 
 T_DECL(PR_35136664_ipsec,
-	"This bind a ipsec and close it without connecting")
+    "This bind a ipsec and close it without connecting")
 {
 	int tunsock;
 	struct ctl_info kernctl_info;

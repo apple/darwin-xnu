@@ -24,7 +24,7 @@ struct cccmac_ctx {
     size_t  block_nbytes; // Number of byte occupied in block
     size_t  cumulated_nbytes;  // Total size processed
     const struct ccmode_cbc *cbc;
-    uint8_t ctx[8];
+    uint8_t ctx[1];
 } CC_ALIGNED(8);// cccmac_ctx_hdr;
 
 typedef struct cccmac_ctx* cccmac_ctx_t;

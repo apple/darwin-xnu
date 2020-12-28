@@ -18,7 +18,7 @@
 extern char **environ;
 
 static mach_timebase_info_data_t tb_info;
-static const uint64_t one_mil = 1000LL*1000LL;
+static const uint64_t one_mil = 1000LL * 1000LL;
 
 #define tick_to_ns(ticks) (((ticks) * tb_info.numer) / (tb_info.denom))
 #define tick_to_ms(ticks) (tick_to_ns(ticks)/one_mil)
@@ -26,7 +26,9 @@ static const uint64_t one_mil = 1000LL*1000LL;
 #define ns_to_tick(ns) ((ns) * tb_info.denom / tb_info.numer)
 #define ms_to_tick(ms) (ns_to_tick((ms) * one_mil))
 
-static uint64_t time_delta_ms(void){
+static uint64_t
+time_delta_ms(void)
+{
 	uint64_t abs_now = mach_absolute_time();
 	uint64_t cnt_now = mach_continuous_time();;
 	return tick_to_ms(cnt_now) - tick_to_ms(abs_now);
@@ -34,8 +36,12 @@ static uint64_t time_delta_ms(void){
 
 static int run_sleep_tests = 0;
 
-static int trigger_sleep(int for_secs) {
-	if(!run_sleep_tests) return 0;
+static int
+trigger_sleep(int for_secs)
+{
+	if (!run_sleep_tests) {
+		return 0;
+	}
 
 	// sleep for 1 seconds each iteration
 	char buf[10];
@@ -46,13 +52,13 @@ static int trigger_sleep(int for_secs) {
 	int spawn_ret, pid;
 	char *const pmset1_args[] = {"/usr/bin/pmset", "relative", "wake", buf, NULL};
 	T_ASSERT_POSIX_ZERO((spawn_ret = posix_spawn(&pid, pmset1_args[0], NULL, NULL, pmset1_args, environ)), NULL);
-	
+
 	T_ASSERT_EQ(waitpid(pid, &spawn_ret, 0), pid, NULL);
 	T_ASSERT_EQ(spawn_ret, 0, NULL);
 
 	char *const pmset2_args[] = {"/usr/bin/pmset", "sleepnow", NULL};
 	T_ASSERT_POSIX_ZERO((spawn_ret = posix_spawn(&pid, pmset2_args[0], NULL, NULL, pmset2_args, environ)), NULL);
-	
+
 	T_ASSERT_EQ(waitpid(pid, &spawn_ret, 0), pid, NULL);
 	T_ASSERT_EQ(spawn_ret, 0, NULL);
 
@@ -62,22 +68,26 @@ static int trigger_sleep(int for_secs) {
 // waits up to 30 seconds for system to sleep
 // returns number of seconds it took for sleep to be entered
 // or -1 if sleep wasn't accomplished
-static int wait_for_sleep() {
-	if(!run_sleep_tests) return 0;
+static int
+wait_for_sleep()
+{
+	if (!run_sleep_tests) {
+		return 0;
+	}
 
 	uint64_t before_diff = time_delta_ms();
-	
-	for(int i = 0; i < 30; i++) {
+
+	for (int i = 0; i < 30; i++) {
 		uint64_t after_diff = time_delta_ms();
 
 		// on OSX, there's enough latency between calls to MCT and MAT
 		// when the system is going down for sleep for values to diverge a few ms
-		if(llabs((int64_t)before_diff - (int64_t)after_diff) > 2) {
+		if (llabs((int64_t)before_diff - (int64_t)after_diff) > 2) {
 			return i + 1;
 		}
-		
+
 		sleep(1);
-		T_LOG("waited %d seconds for sleep...", i+1);
+		T_LOG("waited %d seconds for sleep...", i + 1);
 	}
 	return -1;
 }
@@ -149,7 +159,7 @@ T_DECL(kevent_continuous_time_absolute, "kevent(EVFILT_TIMER with NOTE_MACH_CONT
 	struct timeval tv;
 	gettimeofday(&tv, NULL);
 	int64_t nowus   = (int64_t)tv.tv_sec * USEC_PER_SEC + (int64_t)tv.tv_usec;
-	int64_t fire_at = (3*USEC_PER_SEC) + nowus;
+	int64_t fire_at = (3 * USEC_PER_SEC) + nowus;
 
 	uint64_t cnt_now = mach_continuous_time();
 	uint64_t cnt_then = cnt_now + ms_to_tick(3000);
@@ -231,10 +241,9 @@ T_DECL(kevent_continuous_time_pops, "kevent(EVFILT_TIMER with NOTE_MACH_CONTINUO
 	trigger_sleep(2);
 
 	int sleep_secs = 0;
-	if(run_sleep_tests) {
+	if (run_sleep_tests) {
 		sleep_secs = wait_for_sleep();
-	}
-	else {
+	} else {
 		// simulate 2 seconds of system "sleep"
 		sleep(2);
 	}
@@ -242,7 +251,7 @@ T_DECL(kevent_continuous_time_pops, "kevent(EVFILT_TIMER with NOTE_MACH_CONTINUO
 	uint64_t cnt_now = mach_continuous_time();
 
 	uint64_t ms_elapsed = tick_to_ms(cnt_now - cnt_then);
-	if(run_sleep_tests) {
+	if (run_sleep_tests) {
 		T_ASSERT_LT(llabs((int64_t)ms_elapsed - 2000LL), 500LL, "slept for %llums, expected 2000ms (astris is connected?)", ms_elapsed);
 	}
 

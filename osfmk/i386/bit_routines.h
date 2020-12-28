@@ -106,15 +106,6 @@
 								:	\
 			"r" (bit), "m" (*(volatile int *)(l)));
 
-static inline char	xchgb(volatile char * cp, char new)
-{
-	char	old = new;
-
-	__asm__ volatile ("	xchgb	%0,%2"			:
-			"=q" (old)				:
-			"0" (new), "m" (*(volatile char *)cp) : "memory");
-	return (old);
-}
 
 static inline void	atomic_incl(volatile long * p, long delta)
 {
@@ -122,22 +113,6 @@ static inline void	atomic_incl(volatile long * p, long delta)
 				add    %0,%1"		:	\
 							:	\
 				"r" (delta), "m" (*(volatile long *)p));
-}
-
-static inline void	atomic_incs(volatile short * p, short delta)
-{
-	__asm__ volatile ("	lock		\n		\
-				addw    %0,%1"		:	\
-							:	\
-				"q" (delta), "m" (*(volatile short *)p));
-}
-
-static inline void	atomic_incb(volatile char * p, char delta)
-{
-	__asm__ volatile ("	lock		\n		\
-				addb    %0,%1"		:	\
-							:	\
-				"q" (delta), "m" (*(volatile char *)p));
 }
 
 static inline void	atomic_decl(volatile long * p, long delta)
@@ -159,53 +134,6 @@ static inline int	atomic_decl_and_test(volatile long * p, long delta)
 		: "r" (delta), "m" (*(volatile long *)p));
 	return ret;
 }
-
-static inline void	atomic_decs(volatile short * p, short delta)
-{
-	__asm__ volatile ("	lock		\n		\
-				subw    %0,%1"		:	\
-							:	\
-				"q" (delta), "m" (*(volatile short *)p));
-}
-
-static inline void	atomic_decb(volatile char * p, char delta)
-{
-	__asm__ volatile ("	lock		\n		\
-				subb    %0,%1"		:	\
-							:	\
-				"q" (delta), "m" (*(volatile char *)p));
-}
-
-static inline long	atomic_getl(const volatile long * p)
-{
-	return (*p);
-}
-
-static inline short	atomic_gets(const volatile short * p)
-{
-	return (*p);
-}
-
-static inline char	atomic_getb(const volatile char * p)
-{
-	return (*p);
-}
-
-static inline void	atomic_setl(volatile long * p, long value)
-{
-	*p = value;
-}
-
-static inline void	atomic_sets(volatile short * p, short value)
-{
-	*p = value;
-}
-
-static inline void	atomic_setb(volatile char * p, char value)
-{
-	*p = value;
-}
-
 #endif /* MACH_KERNEL_PRIVATE */
 
 #endif	/* _I386_BIT_ROUTINES_H_ */

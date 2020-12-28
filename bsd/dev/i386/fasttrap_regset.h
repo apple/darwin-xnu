@@ -36,10 +36,6 @@
  * APPLE NOTE: This file was orginally uts/intel/sys/regset.h
  */
 
-/*
- * #pragma ident	"@(#)regset.h	1.11	05/06/08 SMI"
- */
-
 #ifdef __cplusplus
 extern "C" {
 #endif

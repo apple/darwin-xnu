@@ -126,11 +126,11 @@ in6_addrscope(struct in6_addr *addr)
 
 		switch (scope) {
 		case 0x80:
-			return (IPV6_ADDR_SCOPE_LINKLOCAL);
+			return IPV6_ADDR_SCOPE_LINKLOCAL;
 		case 0xc0:
-			return (IPV6_ADDR_SCOPE_SITELOCAL);
+			return IPV6_ADDR_SCOPE_SITELOCAL;
 		default:
-			return (IPV6_ADDR_SCOPE_GLOBAL); /* just in case */
+			return IPV6_ADDR_SCOPE_GLOBAL; /* just in case */
 		}
 	}
 
@@ -143,13 +143,13 @@ in6_addrscope(struct in6_addr *addr)
 		 */
 		switch (scope) {
 		case IPV6_ADDR_SCOPE_INTFACELOCAL:
-			return (IPV6_ADDR_SCOPE_INTFACELOCAL);
+			return IPV6_ADDR_SCOPE_INTFACELOCAL;
 		case IPV6_ADDR_SCOPE_LINKLOCAL:
-			return (IPV6_ADDR_SCOPE_LINKLOCAL);
+			return IPV6_ADDR_SCOPE_LINKLOCAL;
 		case IPV6_ADDR_SCOPE_SITELOCAL:
-			return (IPV6_ADDR_SCOPE_SITELOCAL);
+			return IPV6_ADDR_SCOPE_SITELOCAL;
 		default:
-			return (IPV6_ADDR_SCOPE_GLOBAL);
+			return IPV6_ADDR_SCOPE_GLOBAL;
 		}
 	}
 
@@ -157,14 +157,16 @@ in6_addrscope(struct in6_addr *addr)
 	 * Regard loopback and unspecified addresses as global, since
 	 * they have no ambiguity.
 	 */
-	if (bcmp(&in6addr_loopback, addr, sizeof (*addr) - 1) == 0) {
-		if (addr->s6_addr8[15] == 1) /* loopback */
-			return (IPV6_ADDR_SCOPE_LINKLOCAL);
-		if (addr->s6_addr8[15] == 0) /* unspecified */
-			return (IPV6_ADDR_SCOPE_GLOBAL); /* XXX: correct? */
+	if (bcmp(&in6addr_loopback, addr, sizeof(*addr) - 1) == 0) {
+		if (addr->s6_addr8[15] == 1) { /* loopback */
+			return IPV6_ADDR_SCOPE_LINKLOCAL;
+		}
+		if (addr->s6_addr8[15] == 0) { /* unspecified */
+			return IPV6_ADDR_SCOPE_GLOBAL; /* XXX: correct? */
+		}
 	}
 
-	return (IPV6_ADDR_SCOPE_GLOBAL);
+	return IPV6_ADDR_SCOPE_GLOBAL;
 }
 
 int
@@ -175,12 +177,13 @@ in6_addr2scopeid(struct ifnet *ifp, struct in6_addr *addr)
 	struct scope6_id *sid;
 
 	if_inet6data_lock_shared(ifp);
-	if (IN6_IFEXTRA(ifp) == NULL)
+	if (IN6_IFEXTRA(ifp) == NULL) {
 		goto err;
+	}
 	sid = SID(ifp);
 	switch (scope) {
 	case IPV6_ADDR_SCOPE_NODELOCAL:
-		retid = -1;	/* XXX: is this an appropriate value? */
+		retid = -1;     /* XXX: is this an appropriate value? */
 		break;
 	case IPV6_ADDR_SCOPE_LINKLOCAL:
 		retid = sid->s6id_list[IPV6_ADDR_SCOPE_LINKLOCAL];
@@ -192,12 +195,12 @@ in6_addr2scopeid(struct ifnet *ifp, struct in6_addr *addr)
 		retid = sid->s6id_list[IPV6_ADDR_SCOPE_ORGLOCAL];
 		break;
 	default:
-		break;	/* XXX: value 0, treat as global. */
+		break;  /* XXX: value 0, treat as global. */
 	}
 err:
 	if_inet6data_lock_done(ifp);
 
-	return (retid);
+	return retid;
 }
 
 /*
@@ -214,8 +217,9 @@ sa6_embedscope(struct sockaddr_in6 *sin6, int defaultok)
 	struct ifnet *ifp;
 	u_int32_t zoneid;
 
-	if ((zoneid = sin6->sin6_scope_id) == 0 && defaultok)
+	if ((zoneid = sin6->sin6_scope_id) == 0 && defaultok) {
 		zoneid = scope6_addr2default(&sin6->sin6_addr);
+	}
 
 	if (zoneid != 0 &&
 	    (IN6_IS_SCOPE_LINKLOCAL(&sin6->sin6_addr) ||
@@ -226,13 +230,14 @@ sa6_embedscope(struct sockaddr_in6 *sin6, int defaultok)
 		 * zone IDs assuming a one-to-one mapping between interfaces
 		 * and links.
 		 */
-		if (if_index < zoneid)
-			return (ENXIO);
+		if (if_index < zoneid) {
+			return ENXIO;
+		}
 		ifnet_head_lock_shared();
 		ifp = ifindex2ifnet[zoneid];
-		if (ifp == NULL) {	/* XXX: this can happen for some OS */
+		if (ifp == NULL) {      /* XXX: this can happen for some OS */
 			ifnet_head_done();
-			return (ENXIO);
+			return ENXIO;
 		}
 		ifnet_head_done();
 		/* XXX assignment to 16bit from 32bit variable */
@@ -241,7 +246,7 @@ sa6_embedscope(struct sockaddr_in6 *sin6, int defaultok)
 		sin6->sin6_scope_id = 0;
 	}
 
-	return (0);
+	return 0;
 }
 
 void
@@ -284,8 +289,9 @@ sa6_recoverscope(struct sockaddr_in6 *sin6, boolean_t attachcheck)
 		zoneid = ntohs(sin6->sin6_addr.s6_addr16[1]);
 		if (zoneid) {
 			/* sanity check */
-			if (if_index < zoneid)
-				return (ENXIO);
+			if (if_index < zoneid) {
+				return ENXIO;
+			}
 			/*
 			 * We use the attachcheck parameter to skip the
 			 * interface attachment check.
@@ -301,7 +307,7 @@ sa6_recoverscope(struct sockaddr_in6 *sin6, boolean_t attachcheck)
 				ifnet_head_lock_shared();
 				if (ifindex2ifnet[zoneid] == NULL) {
 					ifnet_head_done();
-					return (ENXIO);
+					return ENXIO;
 				}
 				ifnet_head_done();
 			}
@@ -310,7 +316,7 @@ sa6_recoverscope(struct sockaddr_in6 *sin6, boolean_t attachcheck)
 		}
 	}
 
-	return (0);
+	return 0;
 }
 
 void
@@ -346,14 +352,15 @@ scope6_addr2default(struct in6_addr *addr)
 	 * special case: The loopback address should be considered as
 	 * link-local, but there's no ambiguity in the syntax.
 	 */
-	if (IN6_IS_ADDR_LOOPBACK(addr))
-		return (0);
+	if (IN6_IS_ADDR_LOOPBACK(addr)) {
+		return 0;
+	}
 
 	lck_mtx_lock(&scope6_lock);
 	id = sid_default.s6id_list[index];
 	lck_mtx_unlock(&scope6_lock);
 
-	return (id);
+	return id;
 }
 
 /*
@@ -376,11 +383,12 @@ in6_setscope(struct in6_addr *in6, struct ifnet *ifp, u_int32_t *ret_id)
 	 */
 	if (IN6_IS_ADDR_LOOPBACK(in6)) {
 		if (!(ifp->if_flags & IFF_LOOPBACK)) {
-			return (EINVAL);
+			return EINVAL;
 		} else {
-			if (ret_id != NULL)
+			if (ret_id != NULL) {
 				*ret_id = 0; /* there's no ambiguity */
-			return (0);
+			}
+			return 0;
 		}
 	}
 
@@ -389,9 +397,10 @@ in6_setscope(struct in6_addr *in6, struct ifnet *ifp, u_int32_t *ret_id)
 	if_inet6data_lock_shared(ifp);
 	if (IN6_IFEXTRA(ifp) == NULL) {
 		if_inet6data_lock_done(ifp);
-		if (ret_id)
+		if (ret_id) {
 			*ret_id = 0;
-		return (EINVAL);
+		}
+		return EINVAL;
 	}
 	sid = SID(ifp);
 	switch (scope) {
@@ -411,18 +420,19 @@ in6_setscope(struct in6_addr *in6, struct ifnet *ifp, u_int32_t *ret_id)
 		zoneid = sid->s6id_list[IPV6_ADDR_SCOPE_ORGLOCAL];
 		break;
 	default:
-		zoneid = 0;	/* XXX: treat as global. */
+		zoneid = 0;     /* XXX: treat as global. */
 		break;
 	}
 	if_inet6data_lock_done(ifp);
 
-	if (ret_id != NULL)
+	if (ret_id != NULL) {
 		*ret_id = zoneid;
+	}
 
-	if (IN6_IS_SCOPE_LINKLOCAL(in6) || IN6_IS_ADDR_MC_INTFACELOCAL(in6))
+	if (IN6_IS_SCOPE_LINKLOCAL(in6) || IN6_IS_ADDR_MC_INTFACELOCAL(in6)) {
 		in6->s6_addr16[1] = htons(zoneid & 0xffff); /* XXX */
-
-	return (0);
+	}
+	return 0;
 }
 
 /*
@@ -435,10 +445,11 @@ in6_clearscope(struct in6_addr *in6)
 	int modified = 0;
 
 	if (IN6_IS_SCOPE_LINKLOCAL(in6) || IN6_IS_ADDR_MC_INTFACELOCAL(in6)) {
-		if (in6->s6_addr16[1] != 0)
+		if (in6->s6_addr16[1] != 0) {
 			modified = 1;
+		}
 		in6->s6_addr16[1] = 0;
 	}
 
-	return (modified);
+	return modified;
 }

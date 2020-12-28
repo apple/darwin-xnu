@@ -48,11 +48,11 @@ extern kern_return_t kern_invalid(void);
 uintptr_t
 get_tpidrro(void)
 {
-	uintptr_t	uthread;
+	uintptr_t       uthread;
 #if __arm__
-	uthread = __builtin_arm_mrc(15, 0, 13, 0, 3);	// TPIDRURO
+	uthread = __builtin_arm_mrc(15, 0, 13, 0, 3);   // TPIDRURO
 #else
-	__asm__ volatile("mrs %0, TPIDRRO_EL0" : "=r" (uthread));
+	__asm__ volatile ("mrs %0, TPIDRRO_EL0" : "=r" (uthread));
 #endif
 	return uthread;
 }
@@ -61,9 +61,9 @@ void
 set_tpidrro(uintptr_t uthread)
 {
 #if __arm__
-	 __builtin_arm_mcr(15, 0, uthread, 13, 0, 3);	// TPIDRURO
+	__builtin_arm_mcr(15, 0, uthread, 13, 0, 3);    // TPIDRURO
 #else
-	__asm__ volatile("msr TPIDRRO_EL0, %0" : : "r" (uthread));
+	__asm__ volatile ("msr TPIDRRO_EL0, %0" : : "r" (uthread));
 #endif
 }
 
@@ -76,17 +76,16 @@ thread_set_cthread_self(vm_address_t self)
 vm_address_t
 thread_get_cthread_self(void)
 {
-	uintptr_t	self;
+	uintptr_t       self;
 
 	self = get_tpidrro();
 #if __arm__
 	self &= ~3;
 	assert( self == current_thread()->machine.cthread_self);
-	return ((kern_return_t) current_thread()->machine.cthread_self);
+	return (kern_return_t) current_thread()->machine.cthread_self;
 #else
 	self &= MACHDEP_CTHREAD_MASK;
 	assert( self == current_thread()->machine.cthread_self);
 	return self;
 #endif
 }
-

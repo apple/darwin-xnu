@@ -27,28 +27,27 @@
  */
 #ifdef KERNEL
 #ifndef _STRUCT_USER64_TIMEX
-#define _STRUCT_USER64_TIMEX	struct user64_timex
+#define _STRUCT_USER64_TIMEX    struct user64_timex
 _STRUCT_USER64_TIMEX
 {
 	u_int32_t modes;
-	user64_long_t	offset;
-	user64_long_t	freq;
-	user64_long_t	maxerror;
-	user64_long_t	esterror;
-	__int32_t	status;
-	user64_long_t	constant;
-	user64_long_t	precision;
-	user64_long_t	tolerance;
+	user64_long_t   offset;
+	user64_long_t   freq;
+	user64_long_t   maxerror;
+	user64_long_t   esterror;
+	__int32_t       status;
+	user64_long_t   constant;
+	user64_long_t   precision;
+	user64_long_t   tolerance;
 
-	user64_long_t	ppsfreq;
-	user64_long_t	jitter;
-	__int32_t	shift;
-	user64_long_t	stabil;
-	user64_long_t	jitcnt;
-	user64_long_t	calcnt;
-	user64_long_t	errcnt;
-	user64_long_t	stbcnt;
-
+	user64_long_t   ppsfreq;
+	user64_long_t   jitter;
+	__int32_t       shift;
+	user64_long_t   stabil;
+	user64_long_t   jitcnt;
+	user64_long_t   calcnt;
+	user64_long_t   errcnt;
+	user64_long_t   stbcnt;
 };
 #endif /* _STRUCT_USER64_TIMEX */
 #endif /* KERNEL */

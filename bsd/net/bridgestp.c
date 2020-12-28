@@ -95,12 +95,12 @@
 #include <kern/thread.h>
 
 decl_lck_mtx_data(static, bstp_task_mtx_data);
-static lck_mtx_t		*bstp_task_mtx = &bstp_task_mtx_data;
-static lck_grp_t 		*bstp_task_grp = NULL;
-static lck_attr_t 		*bstp_task_attr = NULL;
-static thread_t			bstp_task_thread;
-static TAILQ_HEAD(bstp_task_queue, bstp_task) 
-						bstp_task_queue = TAILQ_HEAD_INITIALIZER(bstp_task_queue);
+static lck_mtx_t                *bstp_task_mtx = &bstp_task_mtx_data;
+static lck_grp_t                *bstp_task_grp = NULL;
+static lck_attr_t               *bstp_task_attr = NULL;
+static thread_t                 bstp_task_thread;
+static TAILQ_HEAD(bstp_task_queue, bstp_task)
+bstp_task_queue = TAILQ_HEAD_INITIALIZER(bstp_task_queue);
 static struct bstp_task *bstp_task_queue_running = NULL;
 
 static void bstp_create_task_thread(void);
@@ -117,104 +117,105 @@ static void bstp_task_drain(struct bstp_task *);
 
 
 
-#define	BSTP_LOCK_INIT(_bs)		(_bs)->bs_mtx = lck_mtx_alloc_init(bstp_lock_grp, bstp_lock_attr)
-#define	BSTP_LOCK_DESTROY(_bs)	lck_mtx_free((_bs)->bs_mtx, bstp_lock_grp)
-#define	BSTP_LOCK(_bs)			lck_mtx_lock((_bs)->bs_mtx)
-#define	BSTP_UNLOCK(_bs)		lck_mtx_unlock((_bs)->bs_mtx)
-#define	BSTP_LOCK_ASSERT(_bs)	LCK_MTX_ASSERT((_bs)->bs_mtx, LCK_MTX_ASSERT_OWNED)
+#define BSTP_LOCK_INIT(_bs)             (_bs)->bs_mtx = lck_mtx_alloc_init(bstp_lock_grp, bstp_lock_attr)
+#define BSTP_LOCK_DESTROY(_bs)  lck_mtx_free((_bs)->bs_mtx, bstp_lock_grp)
+#define BSTP_LOCK(_bs)                  lck_mtx_lock((_bs)->bs_mtx)
+#define BSTP_UNLOCK(_bs)                lck_mtx_unlock((_bs)->bs_mtx)
+#define BSTP_LOCK_ASSERT(_bs)   LCK_MTX_ASSERT((_bs)->bs_mtx, LCK_MTX_ASSERT_OWNED)
 
 
-#ifdef	BRIDGESTP_DEBUG
-#define	DPRINTF(fmt, arg...)	printf("bstp: " fmt, ##arg)
+#ifdef  BRIDGESTP_DEBUG
+#define DPRINTF(fmt, arg...)    printf("bstp: " fmt, ##arg)
 #else
-#define	DPRINTF(fmt, arg...)
+#define DPRINTF(fmt, arg...)
 #endif
 
-#define	PV2ADDR(pv, eaddr)	do {		\
-	eaddr[0] = pv >> 40;			\
-	eaddr[1] = pv >> 32;			\
-	eaddr[2] = pv >> 24;			\
-	eaddr[3] = pv >> 16;			\
-	eaddr[4] = pv >> 8;			\
-	eaddr[5] = pv >> 0;			\
+#define PV2ADDR(pv, eaddr)      do {            \
+	eaddr[0] = pv >> 40;                    \
+	eaddr[1] = pv >> 32;                    \
+	eaddr[2] = pv >> 24;                    \
+	eaddr[3] = pv >> 16;                    \
+	eaddr[4] = pv >> 8;                     \
+	eaddr[5] = pv >> 0;                     \
 } while (0)
 
-#define	INFO_BETTER	1
-#define	INFO_SAME	0
-#define	INFO_WORSE	-1
+#define INFO_BETTER     1
+#define INFO_SAME       0
+#define INFO_WORSE      -1
 
 LIST_HEAD(, bstp_state) bstp_list;
 decl_lck_mtx_data(static, bstp_list_mtx_data);
-static lck_mtx_t		*bstp_list_mtx = &bstp_list_mtx_data;
-static lck_grp_t 		*bstp_lock_grp = NULL;
-static lck_attr_t 		*bstp_lock_attr = NULL;
+static lck_mtx_t                *bstp_list_mtx = &bstp_list_mtx_data;
+static lck_grp_t                *bstp_lock_grp = NULL;
+static lck_attr_t               *bstp_lock_attr = NULL;
 
-static void	bstp_transmit(struct bstp_state *, struct bstp_port *);
-static void	bstp_transmit_bpdu(struct bstp_state *, struct bstp_port *);
-static void	bstp_transmit_tcn(struct bstp_state *, struct bstp_port *);
-static void	bstp_decode_bpdu(struct bstp_port *, struct bstp_cbpdu *,
-		    struct bstp_config_unit *);
-static void	bstp_send_bpdu(struct bstp_state *, struct bstp_port *,
-		    struct bstp_cbpdu *);
-static void	bstp_enqueue(struct ifnet *, struct mbuf *);
-static int	bstp_pdu_flags(struct bstp_port *);
-static void	bstp_received_stp(struct bstp_state *, struct bstp_port *,
-		    struct mbuf **, struct bstp_tbpdu *);
-static void	bstp_received_rstp(struct bstp_state *, struct bstp_port *,
-		    struct mbuf **, struct bstp_tbpdu *);
-static void	bstp_received_tcn(struct bstp_state *, struct bstp_port *,
-		    struct bstp_tcn_unit *);
-static void	bstp_received_bpdu(struct bstp_state *, struct bstp_port *,
-		    struct bstp_config_unit *);
-static int	bstp_pdu_rcvtype(struct bstp_port *, struct bstp_config_unit *);
-static int	bstp_pdu_bettersame(struct bstp_port *, int);
-static int	bstp_info_cmp(struct bstp_pri_vector *,
-		    struct bstp_pri_vector *);
-static int	bstp_info_superior(struct bstp_pri_vector *,
-		    struct bstp_pri_vector *);
-static void	bstp_assign_roles(struct bstp_state *);
-static void	bstp_update_roles(struct bstp_state *, struct bstp_port *);
-static void	bstp_update_state(struct bstp_state *, struct bstp_port *);
-static void	bstp_update_tc(struct bstp_port *);
-static void	bstp_update_info(struct bstp_port *);
-static void	bstp_set_other_tcprop(struct bstp_port *);
-static void	bstp_set_all_reroot(struct bstp_state *);
-static void	bstp_set_all_sync(struct bstp_state *);
-static void	bstp_set_port_state(struct bstp_port *, int);
-static void	bstp_set_port_role(struct bstp_port *, int);
-static void	bstp_set_port_proto(struct bstp_port *, int);
-static void	bstp_set_port_tc(struct bstp_port *, int);
-static void	bstp_set_timer_tc(struct bstp_port *);
-static void	bstp_set_timer_msgage(struct bstp_port *);
-static int	bstp_rerooted(struct bstp_state *, struct bstp_port *);
-static uint32_t	bstp_calc_path_cost(struct bstp_port *);
-static void	bstp_notify_state(void *, int);
-static void	bstp_notify_rtage(void *, int);
-static void	bstp_ifupdstatus(struct bstp_state *, struct bstp_port *);
-static void	bstp_enable_port(struct bstp_state *, struct bstp_port *);
-static void	bstp_disable_port(struct bstp_state *, struct bstp_port *);
-static void	bstp_tick(void *);
-static void	bstp_timer_start(struct bstp_timer *, uint16_t);
-static void	bstp_timer_stop(struct bstp_timer *);
-static void	bstp_timer_latch(struct bstp_timer *);
-static int	bstp_timer_expired(struct bstp_timer *);
-static void	bstp_hello_timer_expiry(struct bstp_state *,
-		    struct bstp_port *);
-static void	bstp_message_age_expiry(struct bstp_state *,
-		    struct bstp_port *);
-static void	bstp_migrate_delay_expiry(struct bstp_state *,
-		    struct bstp_port *);
-static void	bstp_edge_delay_expiry(struct bstp_state *,
-		    struct bstp_port *);
-static int	bstp_addr_cmp(const uint8_t *, const uint8_t *);
-static int	bstp_same_bridgeid(uint64_t, uint64_t);
-static void	bstp_reinit(struct bstp_state *);
+static void     bstp_transmit(struct bstp_state *, struct bstp_port *);
+static void     bstp_transmit_bpdu(struct bstp_state *, struct bstp_port *);
+static void     bstp_transmit_tcn(struct bstp_state *, struct bstp_port *);
+static void     bstp_decode_bpdu(struct bstp_port *, struct bstp_cbpdu *,
+    struct bstp_config_unit *);
+static void     bstp_send_bpdu(struct bstp_state *, struct bstp_port *,
+    struct bstp_cbpdu *);
+static void     bstp_enqueue(struct ifnet *, struct mbuf *);
+static int      bstp_pdu_flags(struct bstp_port *);
+static void     bstp_received_stp(struct bstp_state *, struct bstp_port *,
+    struct mbuf **, struct bstp_tbpdu *);
+static void     bstp_received_rstp(struct bstp_state *, struct bstp_port *,
+    struct mbuf **, struct bstp_tbpdu *);
+static void     bstp_received_tcn(struct bstp_state *, struct bstp_port *,
+    struct bstp_tcn_unit *);
+static void     bstp_received_bpdu(struct bstp_state *, struct bstp_port *,
+    struct bstp_config_unit *);
+static int      bstp_pdu_rcvtype(struct bstp_port *, struct bstp_config_unit *);
+static int      bstp_pdu_bettersame(struct bstp_port *, int);
+static int      bstp_info_cmp(struct bstp_pri_vector *,
+    struct bstp_pri_vector *);
+static int      bstp_info_superior(struct bstp_pri_vector *,
+    struct bstp_pri_vector *);
+static void     bstp_assign_roles(struct bstp_state *);
+static void     bstp_update_roles(struct bstp_state *, struct bstp_port *);
+static void     bstp_update_state(struct bstp_state *, struct bstp_port *);
+static void     bstp_update_tc(struct bstp_port *);
+static void     bstp_update_info(struct bstp_port *);
+static void     bstp_set_other_tcprop(struct bstp_port *);
+static void     bstp_set_all_reroot(struct bstp_state *);
+static void     bstp_set_all_sync(struct bstp_state *);
+static void     bstp_set_port_state(struct bstp_port *, int);
+static void     bstp_set_port_role(struct bstp_port *, int);
+static void     bstp_set_port_proto(struct bstp_port *, int);
+static void     bstp_set_port_tc(struct bstp_port *, int);
+static void     bstp_set_timer_tc(struct bstp_port *);
+static void     bstp_set_timer_msgage(struct bstp_port *);
+static int      bstp_rerooted(struct bstp_state *, struct bstp_port *);
+static uint32_t bstp_calc_path_cost(struct bstp_port *);
+static void     bstp_notify_state(void *, int);
+static void     bstp_notify_rtage(void *, int);
+static void     bstp_ifupdstatus(struct bstp_state *, struct bstp_port *);
+static void     bstp_enable_port(struct bstp_state *, struct bstp_port *);
+static void     bstp_disable_port(struct bstp_state *, struct bstp_port *);
+static void     bstp_tick(void *);
+static void     bstp_timer_start(struct bstp_timer *, uint16_t);
+static void     bstp_timer_stop(struct bstp_timer *);
+static void     bstp_timer_latch(struct bstp_timer *);
+static int      bstp_timer_expired(struct bstp_timer *);
+static void     bstp_hello_timer_expiry(struct bstp_state *,
+    struct bstp_port *);
+static void     bstp_message_age_expiry(struct bstp_state *,
+    struct bstp_port *);
+static void     bstp_migrate_delay_expiry(struct bstp_state *,
+    struct bstp_port *);
+static void     bstp_edge_delay_expiry(struct bstp_state *,
+    struct bstp_port *);
+static int      bstp_addr_cmp(const uint8_t *, const uint8_t *);
+static int      bstp_same_bridgeid(uint64_t, uint64_t);
+static void     bstp_reinit(struct bstp_state *);
 
 static void
 bstp_transmit(struct bstp_state *bs, struct bstp_port *bp)
 {
-	if (bs->bs_running == 0)
+	if (bs->bs_running == 0) {
 		return;
+	}
 
 	/*
 	 * a PDU can only be sent if we have tx quota left and the
@@ -225,23 +226,24 @@ bstp_transmit(struct bstp_state *bs, struct bstp_port *bp)
 		bstp_hello_timer_expiry(bs, bp);
 		return;
 	}
-	if (bp->bp_txcount > bs->bs_txholdcount)
+	if (bp->bp_txcount > bs->bs_txholdcount) {
 		/* Ran out of karma */
 		return;
+	}
 
 	if (bp->bp_protover == BSTP_PROTO_RSTP) {
 		bstp_transmit_bpdu(bs, bp);
 		bp->bp_tc_ack = 0;
 	} else { /* STP */
 		switch (bp->bp_role) {
-			case BSTP_ROLE_DESIGNATED:
-				bstp_transmit_bpdu(bs, bp);
-				bp->bp_tc_ack = 0;
-				break;
+		case BSTP_ROLE_DESIGNATED:
+			bstp_transmit_bpdu(bs, bp);
+			bp->bp_tc_ack = 0;
+			break;
 
-			case BSTP_ROLE_ROOT:
-				bstp_transmit_tcn(bs, bp);
-				break;
+		case BSTP_ROLE_ROOT:
+			bstp_transmit_tcn(bs, bp);
+			break;
 		}
 	}
 	bstp_timer_start(&bp->bp_hello_timer, bp->bp_desg_htime);
@@ -272,13 +274,13 @@ bstp_transmit_bpdu(struct bstp_state *bs, struct bstp_port *bp)
 	bpdu.cbu_flags = bstp_pdu_flags(bp);
 
 	switch (bp->bp_protover) {
-		case BSTP_PROTO_STP:
-			bpdu.cbu_bpdutype = BSTP_MSGTYPE_CFG;
-			break;
+	case BSTP_PROTO_STP:
+		bpdu.cbu_bpdutype = BSTP_MSGTYPE_CFG;
+		break;
 
-		case BSTP_PROTO_RSTP:
-			bpdu.cbu_bpdutype = BSTP_MSGTYPE_RSTP;
-			break;
+	case BSTP_PROTO_RSTP:
+		bpdu.cbu_bpdutype = BSTP_MSGTYPE_RSTP;
+		break;
 	}
 
 	bstp_send_bpdu(bs, bp, &bpdu);
@@ -292,17 +294,19 @@ bstp_transmit_tcn(struct bstp_state *bs, struct bstp_port *bp)
 	struct ether_header *eh;
 	struct mbuf *m;
 	int touched = bs ? 1 : 0;
-	
+
 	touched++;
 
 	KASSERT(bp == bs->bs_root_port, ("%s: bad root port\n", __func__));
 
-	if ((ifp->if_flags & IFF_RUNNING) == 0)
+	if ((ifp->if_flags & IFF_RUNNING) == 0) {
 		return;
+	}
 
 	MGETHDR(m, M_DONTWAIT, MT_DATA);
-	if (m == NULL)
+	if (m == NULL) {
 		return;
+	}
 
 	m->m_pkthdr.rcvif = ifp;
 	m->m_pkthdr.len = sizeof(*eh) + sizeof(bpdu);
@@ -362,40 +366,40 @@ bstp_decode_bpdu(struct bstp_port *bp, struct bstp_cbpdu *cpdu,
 	/* Strip off unused flags in STP mode */
 	flags = cpdu->cbu_flags;
 	switch (cpdu->cbu_protover) {
-		case BSTP_PROTO_STP:
-			flags &= BSTP_PDU_STPMASK;
-			/* A STP BPDU explicitly conveys a Designated Port */
-			cu->cu_role = BSTP_ROLE_DESIGNATED;
-			break;
+	case BSTP_PROTO_STP:
+		flags &= BSTP_PDU_STPMASK;
+		/* A STP BPDU explicitly conveys a Designated Port */
+		cu->cu_role = BSTP_ROLE_DESIGNATED;
+		break;
 
-		case BSTP_PROTO_RSTP:
-			flags &= BSTP_PDU_RSTPMASK;
-			break;
+	case BSTP_PROTO_RSTP:
+		flags &= BSTP_PDU_RSTPMASK;
+		break;
 	}
 
 	cu->cu_topology_change_ack =
-		(flags & BSTP_PDU_F_TCA) ? 1 : 0;
+	    (flags & BSTP_PDU_F_TCA) ? 1 : 0;
 	cu->cu_proposal =
-		(flags & BSTP_PDU_F_P) ? 1 : 0;
+	    (flags & BSTP_PDU_F_P) ? 1 : 0;
 	cu->cu_agree =
-		(flags & BSTP_PDU_F_A) ? 1 : 0;
+	    (flags & BSTP_PDU_F_A) ? 1 : 0;
 	cu->cu_learning =
-		(flags & BSTP_PDU_F_L) ? 1 : 0;
+	    (flags & BSTP_PDU_F_L) ? 1 : 0;
 	cu->cu_forwarding =
-		(flags & BSTP_PDU_F_F) ? 1 : 0;
+	    (flags & BSTP_PDU_F_F) ? 1 : 0;
 	cu->cu_topology_change =
-		(flags & BSTP_PDU_F_TC) ? 1 : 0;
+	    (flags & BSTP_PDU_F_TC) ? 1 : 0;
 
 	switch ((flags & BSTP_PDU_PRMASK) >> BSTP_PDU_PRSHIFT) {
-		case BSTP_PDU_F_ROOT:
-			cu->cu_role = BSTP_ROLE_ROOT;
-			break;
-		case BSTP_PDU_F_ALT:
-			cu->cu_role = BSTP_ROLE_ALTERNATE;
-			break;
-		case BSTP_PDU_F_DESG:
-			cu->cu_role = BSTP_ROLE_DESIGNATED;
-			break;
+	case BSTP_PDU_F_ROOT:
+		cu->cu_role = BSTP_ROLE_ROOT;
+		break;
+	case BSTP_PDU_F_ALT:
+		cu->cu_role = BSTP_ROLE_ALTERNATE;
+		break;
+	case BSTP_PDU_F_DESG:
+		cu->cu_role = BSTP_ROLE_DESIGNATED;
+		break;
 	}
 }
 
@@ -411,12 +415,14 @@ bstp_send_bpdu(struct bstp_state *bs, struct bstp_port *bp,
 
 	ifp = bp->bp_ifp;
 
-	if ((ifp->if_flags & IFF_RUNNING) == 0)
+	if ((ifp->if_flags & IFF_RUNNING) == 0) {
 		return;
+	}
 
 	MGETHDR(m, M_DONTWAIT, MT_DATA);
-	if (m == NULL)
+	if (m == NULL) {
 		return;
+	}
 
 	eh = mtod(m, struct ether_header *);
 
@@ -428,25 +434,25 @@ bstp_send_bpdu(struct bstp_state *bs, struct bstp_port *bp,
 	memcpy(eh->ether_dhost, bstp_etheraddr, ETHER_ADDR_LEN);
 
 	switch (bpdu->cbu_bpdutype) {
-		case BSTP_MSGTYPE_CFG:
-			bpdu->cbu_protover = BSTP_PROTO_STP;
-			m->m_pkthdr.len = sizeof(*eh) + BSTP_BPDU_STP_LEN;
-			eh->ether_type = htons(BSTP_BPDU_STP_LEN);
-			memcpy(mtod(m, caddr_t) + sizeof(*eh), bpdu,
-			    BSTP_BPDU_STP_LEN);
-			break;
+	case BSTP_MSGTYPE_CFG:
+		bpdu->cbu_protover = BSTP_PROTO_STP;
+		m->m_pkthdr.len = sizeof(*eh) + BSTP_BPDU_STP_LEN;
+		eh->ether_type = htons(BSTP_BPDU_STP_LEN);
+		memcpy(mtod(m, caddr_t) + sizeof(*eh), bpdu,
+		    BSTP_BPDU_STP_LEN);
+		break;
 
-		case BSTP_MSGTYPE_RSTP:
-			bpdu->cbu_protover = BSTP_PROTO_RSTP;
-			bpdu->cbu_versionlen = htons(0);
-			m->m_pkthdr.len = sizeof(*eh) + BSTP_BPDU_RSTP_LEN;
-			eh->ether_type = htons(BSTP_BPDU_RSTP_LEN);
-			memcpy(mtod(m, caddr_t) + sizeof(*eh), bpdu,
-			    BSTP_BPDU_RSTP_LEN);
-			break;
+	case BSTP_MSGTYPE_RSTP:
+		bpdu->cbu_protover = BSTP_PROTO_RSTP;
+		bpdu->cbu_versionlen = htons(0);
+		m->m_pkthdr.len = sizeof(*eh) + BSTP_BPDU_RSTP_LEN;
+		eh->ether_type = htons(BSTP_BPDU_RSTP_LEN);
+		memcpy(mtod(m, caddr_t) + sizeof(*eh), bpdu,
+		    BSTP_BPDU_RSTP_LEN);
+		break;
 
-		default:
-			panic("not implemented");
+	default:
+		panic("not implemented");
 	}
 	m->m_pkthdr.rcvif = ifp;
 	m->m_len = m->m_pkthdr.len;
@@ -460,9 +466,9 @@ bstp_enqueue(struct ifnet *dst_ifp, struct mbuf *m)
 {
 	errno_t error = 0;
 	u_int32_t len = m->m_pkthdr.len;
-	
-	m->m_flags |= M_PROTO1; //set to avoid loops 
-	
+
+	m->m_flags |= M_PROTO1; //set to avoid loops
+
 	error = ifnet_output_raw(dst_ifp, 0, m);
 	if (error == 0) {
 		(void) ifnet_stat_increment_out(dst_ifp, 1, len, 0);
@@ -476,56 +482,60 @@ bstp_pdu_flags(struct bstp_port *bp)
 {
 	int flags = 0;
 
-	if (bp->bp_proposing && bp->bp_state != BSTP_IFSTATE_FORWARDING)
+	if (bp->bp_proposing && bp->bp_state != BSTP_IFSTATE_FORWARDING) {
 		flags |= BSTP_PDU_F_P;
+	}
 
-	if (bp->bp_agree)
+	if (bp->bp_agree) {
 		flags |= BSTP_PDU_F_A;
+	}
 
-	if (bp->bp_tc_timer.active)
+	if (bp->bp_tc_timer.active) {
 		flags |= BSTP_PDU_F_TC;
+	}
 
-	if (bp->bp_tc_ack)
+	if (bp->bp_tc_ack) {
 		flags |= BSTP_PDU_F_TCA;
+	}
 
 	switch (bp->bp_state) {
-		case BSTP_IFSTATE_LEARNING:
-			flags |= BSTP_PDU_F_L;
-			break;
+	case BSTP_IFSTATE_LEARNING:
+		flags |= BSTP_PDU_F_L;
+		break;
 
-		case BSTP_IFSTATE_FORWARDING:
-			flags |= (BSTP_PDU_F_L | BSTP_PDU_F_F);
-			break;
+	case BSTP_IFSTATE_FORWARDING:
+		flags |= (BSTP_PDU_F_L | BSTP_PDU_F_F);
+		break;
 	}
 
 	switch (bp->bp_role) {
-		case BSTP_ROLE_ROOT:
-			flags |=
-				(BSTP_PDU_F_ROOT << BSTP_PDU_PRSHIFT);
-			break;
+	case BSTP_ROLE_ROOT:
+		flags |=
+		    (BSTP_PDU_F_ROOT << BSTP_PDU_PRSHIFT);
+		break;
 
-		case BSTP_ROLE_ALTERNATE:
-		case BSTP_ROLE_BACKUP:	/* fall through */
-			flags |=
-				(BSTP_PDU_F_ALT << BSTP_PDU_PRSHIFT);
-			break;
+	case BSTP_ROLE_ALTERNATE:
+	case BSTP_ROLE_BACKUP:          /* fall through */
+		flags |=
+		    (BSTP_PDU_F_ALT << BSTP_PDU_PRSHIFT);
+		break;
 
-		case BSTP_ROLE_DESIGNATED:
-			flags |=
-				(BSTP_PDU_F_DESG << BSTP_PDU_PRSHIFT);
-			break;
+	case BSTP_ROLE_DESIGNATED:
+		flags |=
+		    (BSTP_PDU_F_DESG << BSTP_PDU_PRSHIFT);
+		break;
 	}
 
 	/* Strip off unused flags in either mode */
 	switch (bp->bp_protover) {
-		case BSTP_PROTO_STP:
-			flags &= BSTP_PDU_STPMASK;
-			break;
-		case BSTP_PROTO_RSTP:
-			flags &= BSTP_PDU_RSTPMASK;
-			break;
+	case BSTP_PROTO_STP:
+		flags &= BSTP_PDU_STPMASK;
+		break;
+	case BSTP_PROTO_RSTP:
+		flags &= BSTP_PDU_RSTPMASK;
+		break;
 	}
-	return (flags);
+	return flags;
 }
 
 struct mbuf *
@@ -538,7 +548,7 @@ bstp_input(struct bstp_port *bp, __unused struct ifnet *ifp, struct mbuf *m)
 
 	if (bp->bp_active == 0) {
 		m_freem(m);
-		return (NULL);
+		return NULL;
 	}
 
 	BSTP_LOCK(bs);
@@ -546,43 +556,50 @@ bstp_input(struct bstp_port *bp, __unused struct ifnet *ifp, struct mbuf *m)
 	eh = mtod(m, struct ether_header *);
 
 	len = ntohs(eh->ether_type);
-	if (len < sizeof(tpdu))
+	if (len < sizeof(tpdu)) {
 		goto out;
+	}
 
 	m_adj(m, ETHER_HDR_LEN);
 
-	if (m->m_pkthdr.len > len)
+	if (m->m_pkthdr.len > len) {
 		m_adj(m, len - m->m_pkthdr.len);
+	}
 	if ((unsigned int)m->m_len < sizeof(tpdu) &&
-	    (m = m_pullup(m, sizeof(tpdu))) == NULL)
+	    (m = m_pullup(m, sizeof(tpdu))) == NULL) {
 		goto out;
+	}
 
 	memcpy(&tpdu, mtod(m, caddr_t), sizeof(tpdu));
 
 	/* basic packet checks */
 	if (tpdu.tbu_dsap != LLC_8021D_LSAP ||
 	    tpdu.tbu_ssap != LLC_8021D_LSAP ||
-	    tpdu.tbu_ctl != LLC_UI)
+	    tpdu.tbu_ctl != LLC_UI) {
 		goto out;
-	if (tpdu.tbu_protoid != BSTP_PROTO_ID)
+	}
+	if (tpdu.tbu_protoid != BSTP_PROTO_ID) {
 		goto out;
+	}
 
 	/*
 	 * We can treat later versions of the PDU as the same as the maximum
 	 * version we implement. All additional parameters/flags are ignored.
 	 */
-	if (tpdu.tbu_protover > BSTP_PROTO_MAX)
+	if (tpdu.tbu_protover > BSTP_PROTO_MAX) {
 		tpdu.tbu_protover = BSTP_PROTO_MAX;
+	}
 
 	if (tpdu.tbu_protover != bp->bp_protover) {
 		/*
 		 * Wait for the migration delay timer to expire before changing
 		 * protocol version to avoid flip-flops.
 		 */
-		if (bp->bp_flags & BSTP_PORT_CANMIGRATE)
+		if (bp->bp_flags & BSTP_PORT_CANMIGRATE) {
 			bstp_set_port_proto(bp, tpdu.tbu_protover);
-		else
+		} else {
 			goto out;
+		}
 	}
 
 	/* Clear operedge upon receiving a PDU on the port */
@@ -591,19 +608,20 @@ bstp_input(struct bstp_port *bp, __unused struct ifnet *ifp, struct mbuf *m)
 	    BSTP_DEFAULT_MIGRATE_DELAY);
 
 	switch (tpdu.tbu_protover) {
-		case BSTP_PROTO_STP:
-			bstp_received_stp(bs, bp, &m, &tpdu);
-			break;
+	case BSTP_PROTO_STP:
+		bstp_received_stp(bs, bp, &m, &tpdu);
+		break;
 
-		case BSTP_PROTO_RSTP:
-			bstp_received_rstp(bs, bp, &m, &tpdu);
-			break;
+	case BSTP_PROTO_RSTP:
+		bstp_received_rstp(bs, bp, &m, &tpdu);
+		break;
 	}
 out:
 	BSTP_UNLOCK(bs);
-	if (m)
+	if (m) {
 		m_freem(m);
-	return (NULL);
+	}
+	return NULL;
 }
 
 static void
@@ -621,8 +639,9 @@ bstp_received_stp(struct bstp_state *bs, struct bstp_port *bp,
 		break;
 	case BSTP_MSGTYPE_CFG:
 		if ((*mp)->m_len < BSTP_BPDU_STP_LEN &&
-		    (*mp = m_pullup(*mp, BSTP_BPDU_STP_LEN)) == NULL)
+		    (*mp = m_pullup(*mp, BSTP_BPDU_STP_LEN)) == NULL) {
 			return;
+		}
 		memcpy(&cpdu, mtod(*mp, caddr_t), BSTP_BPDU_STP_LEN);
 
 		bstp_decode_bpdu(bp, &cpdu, cu);
@@ -638,12 +657,14 @@ bstp_received_rstp(struct bstp_state *bs, struct bstp_port *bp,
 	struct bstp_cbpdu cpdu;
 	struct bstp_config_unit *cu = &bp->bp_msg_cu;
 
-	if (tpdu->tbu_bpdutype != BSTP_MSGTYPE_RSTP)
+	if (tpdu->tbu_bpdutype != BSTP_MSGTYPE_RSTP) {
 		return;
+	}
 
 	if ((*mp)->m_len < BSTP_BPDU_RSTP_LEN &&
-	    (*mp = m_pullup(*mp, BSTP_BPDU_RSTP_LEN)) == NULL)
+	    (*mp = m_pullup(*mp, BSTP_BPDU_RSTP_LEN)) == NULL) {
 		return;
+	}
 	memcpy(&cpdu, mtod(*mp, caddr_t), BSTP_BPDU_RSTP_LEN);
 
 	bstp_decode_bpdu(bp, &cpdu, cu);
@@ -668,84 +689,94 @@ bstp_received_bpdu(struct bstp_state *bs, struct bstp_port *bp,
 
 	/* We need to have transitioned to INFO_MINE before proceeding */
 	switch (bp->bp_infois) {
-		case BSTP_INFO_DISABLED:
-		case BSTP_INFO_AGED:
-			return;
+	case BSTP_INFO_DISABLED:
+	case BSTP_INFO_AGED:
+		return;
 	}
 
 	type = bstp_pdu_rcvtype(bp, cu);
 
 	switch (type) {
-		case BSTP_PDU_SUPERIOR:
-			bs->bs_allsynced = 0;
-			bp->bp_agreed = 0;
+	case BSTP_PDU_SUPERIOR:
+		bs->bs_allsynced = 0;
+		bp->bp_agreed = 0;
+		bp->bp_proposing = 0;
+
+		if (cu->cu_proposal && cu->cu_forwarding == 0) {
+			bp->bp_proposed = 1;
+		}
+		if (cu->cu_topology_change) {
+			bp->bp_rcvdtc = 1;
+		}
+		if (cu->cu_topology_change_ack) {
+			bp->bp_rcvdtca = 1;
+		}
+
+		if (bp->bp_agree &&
+		    !bstp_pdu_bettersame(bp, BSTP_INFO_RECEIVED)) {
+			bp->bp_agree = 0;
+		}
+
+		/* copy the received priority and timers to the port */
+		bp->bp_port_pv = cu->cu_pv;
+		bp->bp_port_msg_age = cu->cu_message_age;
+		bp->bp_port_max_age = cu->cu_max_age;
+		bp->bp_port_fdelay = cu->cu_forward_delay;
+		bp->bp_port_htime =
+		    (cu->cu_hello_time > BSTP_MIN_HELLO_TIME ?
+		    cu->cu_hello_time : BSTP_MIN_HELLO_TIME);
+
+		/* set expiry for the new info */
+		bstp_set_timer_msgage(bp);
+
+		bp->bp_infois = BSTP_INFO_RECEIVED;
+		bstp_assign_roles(bs);
+		break;
+
+	case BSTP_PDU_REPEATED:
+		if (cu->cu_proposal && cu->cu_forwarding == 0) {
+			bp->bp_proposed = 1;
+		}
+		if (cu->cu_topology_change) {
+			bp->bp_rcvdtc = 1;
+		}
+		if (cu->cu_topology_change_ack) {
+			bp->bp_rcvdtca = 1;
+		}
+
+		/* rearm the age timer */
+		bstp_set_timer_msgage(bp);
+		break;
+
+	case BSTP_PDU_INFERIOR:
+		if (cu->cu_learning) {
+			bp->bp_agreed = 1;
 			bp->bp_proposing = 0;
+		}
+		break;
 
-			if (cu->cu_proposal && cu->cu_forwarding == 0)
-				bp->bp_proposed = 1;
-			if (cu->cu_topology_change)
-				bp->bp_rcvdtc = 1;
-			if (cu->cu_topology_change_ack)
-				bp->bp_rcvdtca = 1;
+	case BSTP_PDU_INFERIORALT:
+		/*
+		 * only point to point links are allowed fast
+		 * transitions to forwarding.
+		 */
+		if (cu->cu_agree && bp->bp_ptp_link) {
+			bp->bp_agreed = 1;
+			bp->bp_proposing = 0;
+		} else {
+			bp->bp_agreed = 0;
+		}
 
-			if (bp->bp_agree &&
-			    !bstp_pdu_bettersame(bp, BSTP_INFO_RECEIVED))
-				bp->bp_agree = 0;
+		if (cu->cu_topology_change) {
+			bp->bp_rcvdtc = 1;
+		}
+		if (cu->cu_topology_change_ack) {
+			bp->bp_rcvdtca = 1;
+		}
+		break;
 
-			/* copy the received priority and timers to the port */
-			bp->bp_port_pv = cu->cu_pv;
-			bp->bp_port_msg_age = cu->cu_message_age;
-			bp->bp_port_max_age = cu->cu_max_age;
-			bp->bp_port_fdelay = cu->cu_forward_delay;
-			bp->bp_port_htime =
-				(cu->cu_hello_time > BSTP_MIN_HELLO_TIME ?
-				 cu->cu_hello_time : BSTP_MIN_HELLO_TIME);
-
-			/* set expiry for the new info */
-			bstp_set_timer_msgage(bp);
-
-			bp->bp_infois = BSTP_INFO_RECEIVED;
-			bstp_assign_roles(bs);
-			break;
-
-		case BSTP_PDU_REPEATED:
-			if (cu->cu_proposal && cu->cu_forwarding == 0)
-				bp->bp_proposed = 1;
-			if (cu->cu_topology_change)
-				bp->bp_rcvdtc = 1;
-			if (cu->cu_topology_change_ack)
-				bp->bp_rcvdtca = 1;
-
-			/* rearm the age timer */
-			bstp_set_timer_msgage(bp);
-			break;
-
-		case BSTP_PDU_INFERIOR:
-			if (cu->cu_learning) {
-				bp->bp_agreed = 1;
-				bp->bp_proposing = 0;
-			}
-			break;
-
-		case BSTP_PDU_INFERIORALT:
-			/*
-			 * only point to point links are allowed fast
-			 * transitions to forwarding.
-			 */
-			if (cu->cu_agree && bp->bp_ptp_link) {
-				bp->bp_agreed = 1;
-				bp->bp_proposing = 0;
-			} else
-				bp->bp_agreed = 0;
-
-			if (cu->cu_topology_change)
-				bp->bp_rcvdtc = 1;
-			if (cu->cu_topology_change_ack)
-				bp->bp_rcvdtca = 1;
-			break;
-
-		case BSTP_PDU_OTHER:
-			return;	/* do nothing */
+	case BSTP_PDU_OTHER:
+		return;         /* do nothing */
 	}
 	/* update the state machines with the new data */
 	bstp_update_state(bs, bp);
@@ -761,39 +792,42 @@ bstp_pdu_rcvtype(struct bstp_port *bp, struct bstp_config_unit *cu)
 
 	switch (cu->cu_role) {
 	case BSTP_ROLE_DESIGNATED:
-		if (bstp_info_superior(&bp->bp_port_pv, &cu->cu_pv))
+		if (bstp_info_superior(&bp->bp_port_pv, &cu->cu_pv)) {
 			/* bpdu priority is superior */
 			type = BSTP_PDU_SUPERIOR;
-		else if (bstp_info_cmp(&bp->bp_port_pv, &cu->cu_pv) ==
+		} else if (bstp_info_cmp(&bp->bp_port_pv, &cu->cu_pv) ==
 		    INFO_SAME) {
 			if (bp->bp_port_msg_age != cu->cu_message_age ||
 			    bp->bp_port_max_age != cu->cu_max_age ||
 			    bp->bp_port_fdelay != cu->cu_forward_delay ||
-			    bp->bp_port_htime != cu->cu_hello_time)
+			    bp->bp_port_htime != cu->cu_hello_time) {
 				/* bpdu priority is equal and timers differ */
 				type = BSTP_PDU_SUPERIOR;
-			else
+			} else {
 				/* bpdu is equal */
 				type = BSTP_PDU_REPEATED;
-		} else
+			}
+		} else {
 			/* bpdu priority is worse */
 			type = BSTP_PDU_INFERIOR;
+		}
 
 		break;
 
 	case BSTP_ROLE_ROOT:
 	case BSTP_ROLE_ALTERNATE:
 	case BSTP_ROLE_BACKUP:
-		if (bstp_info_cmp(&bp->bp_port_pv, &cu->cu_pv) <= INFO_SAME)
+		if (bstp_info_cmp(&bp->bp_port_pv, &cu->cu_pv) <= INFO_SAME) {
 			/*
 			 * not a designated port and priority is the same or
 			 * worse
 			 */
 			type = BSTP_PDU_INFERIORALT;
+		}
 		break;
 	}
 
-	return (type);
+	return type;
 }
 
 static int
@@ -801,42 +835,52 @@ bstp_pdu_bettersame(struct bstp_port *bp, int newinfo)
 {
 	if (newinfo == BSTP_INFO_RECEIVED &&
 	    bp->bp_infois == BSTP_INFO_RECEIVED &&
-	    bstp_info_cmp(&bp->bp_port_pv, &bp->bp_msg_cu.cu_pv) >= INFO_SAME)
-		return (1);
+	    bstp_info_cmp(&bp->bp_port_pv, &bp->bp_msg_cu.cu_pv) >= INFO_SAME) {
+		return 1;
+	}
 
 	if (newinfo == BSTP_INFO_MINE &&
 	    bp->bp_infois == BSTP_INFO_MINE &&
-	    bstp_info_cmp(&bp->bp_port_pv, &bp->bp_desg_pv) >= INFO_SAME)
-		return (1);
+	    bstp_info_cmp(&bp->bp_port_pv, &bp->bp_desg_pv) >= INFO_SAME) {
+		return 1;
+	}
 
-	return (0);
+	return 0;
 }
 
 static int
 bstp_info_cmp(struct bstp_pri_vector *pv,
     struct bstp_pri_vector *cpv)
 {
-	if (cpv->pv_root_id < pv->pv_root_id)
-		return (INFO_BETTER);
-	if (cpv->pv_root_id > pv->pv_root_id)
-		return (INFO_WORSE);
+	if (cpv->pv_root_id < pv->pv_root_id) {
+		return INFO_BETTER;
+	}
+	if (cpv->pv_root_id > pv->pv_root_id) {
+		return INFO_WORSE;
+	}
 
-	if (cpv->pv_cost < pv->pv_cost)
-		return (INFO_BETTER);
-	if (cpv->pv_cost > pv->pv_cost)
-		return (INFO_WORSE);
+	if (cpv->pv_cost < pv->pv_cost) {
+		return INFO_BETTER;
+	}
+	if (cpv->pv_cost > pv->pv_cost) {
+		return INFO_WORSE;
+	}
 
-	if (cpv->pv_dbridge_id < pv->pv_dbridge_id)
-		return (INFO_BETTER);
-	if (cpv->pv_dbridge_id > pv->pv_dbridge_id)
-		return (INFO_WORSE);
+	if (cpv->pv_dbridge_id < pv->pv_dbridge_id) {
+		return INFO_BETTER;
+	}
+	if (cpv->pv_dbridge_id > pv->pv_dbridge_id) {
+		return INFO_WORSE;
+	}
 
-	if (cpv->pv_dport_id < pv->pv_dport_id)
-		return (INFO_BETTER);
-	if (cpv->pv_dport_id > pv->pv_dport_id)
-		return (INFO_WORSE);
+	if (cpv->pv_dport_id < pv->pv_dport_id) {
+		return INFO_BETTER;
+	}
+	if (cpv->pv_dport_id > pv->pv_dport_id) {
+		return INFO_WORSE;
+	}
 
-	return (INFO_SAME);
+	return INFO_SAME;
 }
 
 /*
@@ -851,9 +895,10 @@ bstp_info_superior(struct bstp_pri_vector *pv,
 {
 	if (bstp_info_cmp(pv, cpv) == INFO_BETTER ||
 	    (bstp_same_bridgeid(pv->pv_dbridge_id, cpv->pv_dbridge_id) &&
-	    (cpv->pv_dport_id & 0xfff) == (pv->pv_dport_id & 0xfff)))
-		return (1);
-	return (0);
+	    (cpv->pv_dport_id & 0xfff) == (pv->pv_dport_id & 0xfff))) {
+		return 1;
+	}
+	return 0;
 }
 
 static void
@@ -872,8 +917,9 @@ bstp_assign_roles(struct bstp_state *bs)
 
 	/* check if any recieved info supersedes us */
 	LIST_FOREACH(bp, &bs->bs_bplist, bp_next) {
-		if (bp->bp_infois != BSTP_INFO_RECEIVED)
+		if (bp->bp_infois != BSTP_INFO_RECEIVED) {
 			continue;
+		}
 
 		pv = bp->bp_port_pv;
 		pv.pv_cost += bp->bp_path_cost;
@@ -931,8 +977,9 @@ bstp_assign_roles(struct bstp_state *bs)
 			    (bp->bp_port_msg_age != rbp->bp_port_msg_age ||
 			    bp->bp_port_max_age != rbp->bp_port_max_age ||
 			    bp->bp_port_fdelay != rbp->bp_port_fdelay ||
-			    bp->bp_port_htime != rbp->bp_port_htime)))
+			    bp->bp_port_htime != rbp->bp_port_htime))) {
 				bstp_update_info(bp);
+			}
 			break;
 
 		case BSTP_INFO_RECEIVED:
@@ -944,7 +991,7 @@ bstp_assign_roles(struct bstp_state *bs)
 				bstp_set_port_role(bp, BSTP_ROLE_ROOT);
 				bs->bs_root_port = bp;
 			} else if (bstp_info_cmp(&bp->bp_port_pv,
-				    &bp->bp_desg_pv) == INFO_BETTER) {
+			    &bp->bp_desg_pv) == INFO_BETTER) {
 				/*
 				 * the port priority is lower than the root
 				 * port.
@@ -953,8 +1000,8 @@ bstp_assign_roles(struct bstp_state *bs)
 				bstp_update_info(bp);
 			} else {
 				if (bstp_same_bridgeid(
-				    bp->bp_port_pv.pv_dbridge_id,
-				    bs->bs_bridge_pv.pv_dbridge_id)) {
+					    bp->bp_port_pv.pv_dbridge_id,
+					    bs->bs_bridge_pv.pv_dbridge_id)) {
 					/*
 					 * the designated bridge refers to
 					 * another port on this bridge.
@@ -988,7 +1035,7 @@ bstp_update_state(struct bstp_state *bs, struct bstp_port *bp)
 		synced = 1;
 		LIST_FOREACH(bp2, &bs->bs_bplist, bp_next) {
 			if (!(bp2->bp_synced ||
-			     bp2->bp_role == BSTP_ROLE_ROOT)) {
+			    bp2->bp_role == BSTP_ROLE_ROOT)) {
 				synced = 0;
 				break;
 			}
@@ -1108,7 +1155,7 @@ bstp_update_roles(struct bstp_state *bs, struct bstp_port *bp)
 			bp->bp_flags |= BSTP_PORT_NEWINFO;
 			bstp_timer_start(&bp->bp_edge_delay_timer,
 			    (bp->bp_ptp_link ? BSTP_DEFAULT_MIGRATE_DELAY :
-			     bp->bp_desg_max_age));
+			    bp->bp_desg_max_age));
 			DPRINTF("%s -> DESIGNATED_PROPOSE\n",
 			    bp->bp_ifp->if_xname);
 		}
@@ -1119,8 +1166,9 @@ bstp_update_roles(struct bstp_state *bs, struct bstp_port *bp)
 		    (bp->bp_recent_root_timer.active == 0 || !bp->bp_reroot) &&
 		    !bp->bp_sync) {
 #ifdef  BRIDGESTP_DEBUG
-			if (bp->bp_agreed)
+			if (bp->bp_agreed) {
 				DPRINTF("%s -> AGREED\n", bp->bp_ifp->if_xname);
+			}
 #endif /* BRIDGESTP_DEBUG */
 			/*
 			 * If agreed|operedge then go straight to forwarding,
@@ -1131,8 +1179,9 @@ bstp_update_roles(struct bstp_state *bs, struct bstp_port *bp)
 				bstp_set_port_state(bp,
 				    BSTP_IFSTATE_FORWARDING);
 				bp->bp_agreed = bp->bp_protover;
-			} else if (bp->bp_state == BSTP_IFSTATE_DISCARDING)
+			} else if (bp->bp_state == BSTP_IFSTATE_DISCARDING) {
 				bstp_set_port_state(bp, BSTP_IFSTATE_LEARNING);
+			}
 		}
 
 		if (((bp->bp_sync && !bp->bp_synced) ||
@@ -1150,65 +1199,73 @@ bstp_update_roles(struct bstp_state *bs, struct bstp_port *bp)
 		break;
 	}
 
-	if (bp->bp_flags & BSTP_PORT_NEWINFO)
+	if (bp->bp_flags & BSTP_PORT_NEWINFO) {
 		bstp_transmit(bs, bp);
+	}
 }
 
 static void
 bstp_update_tc(struct bstp_port *bp)
 {
 	switch (bp->bp_tcstate) {
-		case BSTP_TCSTATE_ACTIVE:
-			if ((bp->bp_role != BSTP_ROLE_DESIGNATED &&
-			    bp->bp_role != BSTP_ROLE_ROOT) || bp->bp_operedge)
-				bstp_set_port_tc(bp, BSTP_TCSTATE_LEARNING);
+	case BSTP_TCSTATE_ACTIVE:
+		if ((bp->bp_role != BSTP_ROLE_DESIGNATED &&
+		    bp->bp_role != BSTP_ROLE_ROOT) || bp->bp_operedge) {
+			bstp_set_port_tc(bp, BSTP_TCSTATE_LEARNING);
+		}
 
-			if (bp->bp_rcvdtcn)
-				bstp_set_port_tc(bp, BSTP_TCSTATE_TCN);
-			if (bp->bp_rcvdtc)
-				bstp_set_port_tc(bp, BSTP_TCSTATE_TC);
+		if (bp->bp_rcvdtcn) {
+			bstp_set_port_tc(bp, BSTP_TCSTATE_TCN);
+		}
+		if (bp->bp_rcvdtc) {
+			bstp_set_port_tc(bp, BSTP_TCSTATE_TC);
+		}
 
-			if (bp->bp_tc_prop && !bp->bp_operedge)
-				bstp_set_port_tc(bp, BSTP_TCSTATE_PROPAG);
+		if (bp->bp_tc_prop && !bp->bp_operedge) {
+			bstp_set_port_tc(bp, BSTP_TCSTATE_PROPAG);
+		}
 
-			if (bp->bp_rcvdtca)
-				bstp_set_port_tc(bp, BSTP_TCSTATE_ACK);
-			break;
+		if (bp->bp_rcvdtca) {
+			bstp_set_port_tc(bp, BSTP_TCSTATE_ACK);
+		}
+		break;
 
-		case BSTP_TCSTATE_INACTIVE:
-			if ((bp->bp_state == BSTP_IFSTATE_LEARNING ||
-			    bp->bp_state == BSTP_IFSTATE_FORWARDING) &&
-			    bp->bp_fdbflush == 0)
-				bstp_set_port_tc(bp, BSTP_TCSTATE_LEARNING);
-			break;
+	case BSTP_TCSTATE_INACTIVE:
+		if ((bp->bp_state == BSTP_IFSTATE_LEARNING ||
+		    bp->bp_state == BSTP_IFSTATE_FORWARDING) &&
+		    bp->bp_fdbflush == 0) {
+			bstp_set_port_tc(bp, BSTP_TCSTATE_LEARNING);
+		}
+		break;
 
-		case BSTP_TCSTATE_LEARNING:
-			if (bp->bp_rcvdtc || bp->bp_rcvdtcn || bp->bp_rcvdtca ||
-			    bp->bp_tc_prop)
-				bstp_set_port_tc(bp, BSTP_TCSTATE_LEARNING);
-			else if (bp->bp_role != BSTP_ROLE_DESIGNATED &&
-				 bp->bp_role != BSTP_ROLE_ROOT &&
-				 bp->bp_state == BSTP_IFSTATE_DISCARDING)
-				bstp_set_port_tc(bp, BSTP_TCSTATE_INACTIVE);
+	case BSTP_TCSTATE_LEARNING:
+		if (bp->bp_rcvdtc || bp->bp_rcvdtcn || bp->bp_rcvdtca ||
+		    bp->bp_tc_prop) {
+			bstp_set_port_tc(bp, BSTP_TCSTATE_LEARNING);
+		} else if (bp->bp_role != BSTP_ROLE_DESIGNATED &&
+		    bp->bp_role != BSTP_ROLE_ROOT &&
+		    bp->bp_state == BSTP_IFSTATE_DISCARDING) {
+			bstp_set_port_tc(bp, BSTP_TCSTATE_INACTIVE);
+		}
 
-			if ((bp->bp_role == BSTP_ROLE_DESIGNATED ||
-			    bp->bp_role == BSTP_ROLE_ROOT) &&
-			    bp->bp_state == BSTP_IFSTATE_FORWARDING &&
-			    !bp->bp_operedge)
-				bstp_set_port_tc(bp, BSTP_TCSTATE_DETECTED);
-			break;
+		if ((bp->bp_role == BSTP_ROLE_DESIGNATED ||
+		    bp->bp_role == BSTP_ROLE_ROOT) &&
+		    bp->bp_state == BSTP_IFSTATE_FORWARDING &&
+		    !bp->bp_operedge) {
+			bstp_set_port_tc(bp, BSTP_TCSTATE_DETECTED);
+		}
+		break;
 
-		/* these are transient states and go straight back to ACTIVE */
-		case BSTP_TCSTATE_DETECTED:
-		case BSTP_TCSTATE_TCN:
-		case BSTP_TCSTATE_TC:
-		case BSTP_TCSTATE_PROPAG:
-		case BSTP_TCSTATE_ACK:
-			DPRINTF("Invalid TC state for %s\n",
-			    bp->bp_ifp->if_xname);
-			break;
+	/* these are transient states and go straight back to ACTIVE */
+	case BSTP_TCSTATE_DETECTED:
+	case BSTP_TCSTATE_TCN:
+	case BSTP_TCSTATE_TC:
+	case BSTP_TCSTATE_PROPAG:
+	case BSTP_TCSTATE_ACK:
+		DPRINTF("Invalid TC state for %s\n",
+		    bp->bp_ifp->if_xname);
+		break;
 	}
-
 }
 
 static void
@@ -1219,8 +1276,9 @@ bstp_update_info(struct bstp_port *bp)
 	bp->bp_proposing = 0;
 	bp->bp_proposed = 0;
 
-	if (bp->bp_agreed && !bstp_pdu_bettersame(bp, BSTP_INFO_MINE))
+	if (bp->bp_agreed && !bstp_pdu_bettersame(bp, BSTP_INFO_MINE)) {
 		bp->bp_agreed = 0;
+	}
 
 	if (bp->bp_synced && !bp->bp_agreed) {
 		bp->bp_synced = 0;
@@ -1249,8 +1307,9 @@ bstp_set_other_tcprop(struct bstp_port *bp)
 	BSTP_LOCK_ASSERT(bs);
 
 	LIST_FOREACH(bp2, &bs->bs_bplist, bp_next) {
-		if (bp2 == bp)
+		if (bp2 == bp) {
 			continue;
+		}
 		bp2->bp_tc_prop = 1;
 	}
 }
@@ -1263,7 +1322,7 @@ bstp_set_all_reroot(struct bstp_state *bs)
 	BSTP_LOCK_ASSERT(bs);
 
 	LIST_FOREACH(bp, &bs->bs_bplist, bp_next)
-		bp->bp_reroot = 1;
+	bp->bp_reroot = 1;
 }
 
 static void
@@ -1275,7 +1334,7 @@ bstp_set_all_sync(struct bstp_state *bs)
 
 	LIST_FOREACH(bp, &bs->bs_bplist, bp_next) {
 		bp->bp_sync = 1;
-		bp->bp_synced = 0;	/* Not explicit in spec */
+		bp->bp_synced = 0;      /* Not explicit in spec */
 	}
 
 	bs->bs_allsynced = 0;
@@ -1284,34 +1343,35 @@ bstp_set_all_sync(struct bstp_state *bs)
 static void
 bstp_set_port_state(struct bstp_port *bp, int state)
 {
-	if (bp->bp_state == state)
+	if (bp->bp_state == state) {
 		return;
+	}
 
 	bp->bp_state = state;
 
 	switch (bp->bp_state) {
-		case BSTP_IFSTATE_DISCARDING:
-			DPRINTF("state changed to DISCARDING on %s\n",
-			    bp->bp_ifp->if_xname);
-			break;
+	case BSTP_IFSTATE_DISCARDING:
+		DPRINTF("state changed to DISCARDING on %s\n",
+		    bp->bp_ifp->if_xname);
+		break;
 
-		case BSTP_IFSTATE_LEARNING:
-			DPRINTF("state changed to LEARNING on %s\n",
-			    bp->bp_ifp->if_xname);
+	case BSTP_IFSTATE_LEARNING:
+		DPRINTF("state changed to LEARNING on %s\n",
+		    bp->bp_ifp->if_xname);
 
-			bstp_timer_start(&bp->bp_forward_delay_timer,
-			    bp->bp_protover == BSTP_PROTO_RSTP ?
-			    bp->bp_desg_htime : bp->bp_desg_fdelay);
-			break;
+		bstp_timer_start(&bp->bp_forward_delay_timer,
+		    bp->bp_protover == BSTP_PROTO_RSTP ?
+		    bp->bp_desg_htime : bp->bp_desg_fdelay);
+		break;
 
-		case BSTP_IFSTATE_FORWARDING:
-			DPRINTF("state changed to FORWARDING on %s\n",
-			    bp->bp_ifp->if_xname);
+	case BSTP_IFSTATE_FORWARDING:
+		DPRINTF("state changed to FORWARDING on %s\n",
+		    bp->bp_ifp->if_xname);
 
-			bstp_timer_stop(&bp->bp_forward_delay_timer);
-			/* Record that we enabled forwarding */
-			bp->bp_forward_transitions++;
-			break;
+		bstp_timer_stop(&bp->bp_forward_delay_timer);
+		/* Record that we enabled forwarding */
+		bp->bp_forward_transitions++;
+		break;
 	}
 
 	/* notify the parent bridge */
@@ -1323,32 +1383,33 @@ bstp_set_port_role(struct bstp_port *bp, int role)
 {
 	struct bstp_state *bs = bp->bp_bs;
 
-	if (bp->bp_role == role)
+	if (bp->bp_role == role) {
 		return;
+	}
 
 	/* perform pre-change tasks */
 	switch (bp->bp_role) {
-		case BSTP_ROLE_DISABLED:
-			bstp_timer_start(&bp->bp_forward_delay_timer,
-			    bp->bp_desg_max_age);
-			break;
+	case BSTP_ROLE_DISABLED:
+		bstp_timer_start(&bp->bp_forward_delay_timer,
+		    bp->bp_desg_max_age);
+		break;
 
-		case BSTP_ROLE_BACKUP:
-			bstp_timer_start(&bp->bp_recent_backup_timer,
-			    bp->bp_desg_htime * 2);
-			/* fall through */
-		case BSTP_ROLE_ALTERNATE:
-			bstp_timer_start(&bp->bp_forward_delay_timer,
-			    bp->bp_desg_fdelay);
-			bp->bp_sync = 0;
-			bp->bp_synced = 1;
-			bp->bp_reroot = 0;
-			break;
+	case BSTP_ROLE_BACKUP:
+		bstp_timer_start(&bp->bp_recent_backup_timer,
+		    bp->bp_desg_htime * 2);
+	/* fall through */
+	case BSTP_ROLE_ALTERNATE:
+		bstp_timer_start(&bp->bp_forward_delay_timer,
+		    bp->bp_desg_fdelay);
+		bp->bp_sync = 0;
+		bp->bp_synced = 1;
+		bp->bp_reroot = 0;
+		break;
 
-		case BSTP_ROLE_ROOT:
-			bstp_timer_start(&bp->bp_recent_root_timer,
-			    BSTP_DEFAULT_FORWARD_DELAY);
-			break;
+	case BSTP_ROLE_ROOT:
+		bstp_timer_start(&bp->bp_recent_root_timer,
+		    BSTP_DEFAULT_FORWARD_DELAY);
+		break;
 	}
 
 	bp->bp_role = role;
@@ -1358,34 +1419,34 @@ bstp_set_port_role(struct bstp_port *bp, int role)
 
 	/* initialise the new role */
 	switch (bp->bp_role) {
-		case BSTP_ROLE_DISABLED:
-		case BSTP_ROLE_ALTERNATE:
-		case BSTP_ROLE_BACKUP:
-			DPRINTF("%s role -> ALT/BACK/DISABLED\n",
-			    bp->bp_ifp->if_xname);
-			bstp_set_port_state(bp, BSTP_IFSTATE_DISCARDING);
-			bstp_timer_stop(&bp->bp_recent_root_timer);
-			bstp_timer_latch(&bp->bp_forward_delay_timer);
-			bp->bp_sync = 0;
-			bp->bp_synced = 1;
-			bp->bp_reroot = 0;
-			break;
+	case BSTP_ROLE_DISABLED:
+	case BSTP_ROLE_ALTERNATE:
+	case BSTP_ROLE_BACKUP:
+		DPRINTF("%s role -> ALT/BACK/DISABLED\n",
+		    bp->bp_ifp->if_xname);
+		bstp_set_port_state(bp, BSTP_IFSTATE_DISCARDING);
+		bstp_timer_stop(&bp->bp_recent_root_timer);
+		bstp_timer_latch(&bp->bp_forward_delay_timer);
+		bp->bp_sync = 0;
+		bp->bp_synced = 1;
+		bp->bp_reroot = 0;
+		break;
 
-		case BSTP_ROLE_ROOT:
-			DPRINTF("%s role -> ROOT\n",
-			    bp->bp_ifp->if_xname);
-			bstp_set_port_state(bp, BSTP_IFSTATE_DISCARDING);
-			bstp_timer_latch(&bp->bp_recent_root_timer);
-			bp->bp_proposing = 0;
-			break;
+	case BSTP_ROLE_ROOT:
+		DPRINTF("%s role -> ROOT\n",
+		    bp->bp_ifp->if_xname);
+		bstp_set_port_state(bp, BSTP_IFSTATE_DISCARDING);
+		bstp_timer_latch(&bp->bp_recent_root_timer);
+		bp->bp_proposing = 0;
+		break;
 
-		case BSTP_ROLE_DESIGNATED:
-			DPRINTF("%s role -> DESIGNATED\n",
-			    bp->bp_ifp->if_xname);
-			bstp_timer_start(&bp->bp_hello_timer,
-			    bp->bp_desg_htime);
-			bp->bp_agree = 0;
-			break;
+	case BSTP_ROLE_DESIGNATED:
+		DPRINTF("%s role -> DESIGNATED\n",
+		    bp->bp_ifp->if_xname);
+		bstp_timer_start(&bp->bp_hello_timer,
+		    bp->bp_desg_htime);
+		bp->bp_agree = 0;
+		break;
 	}
 
 	/* let the TC state know that the role changed */
@@ -1399,24 +1460,25 @@ bstp_set_port_proto(struct bstp_port *bp, int proto)
 
 	/* supported protocol versions */
 	switch (proto) {
-		case BSTP_PROTO_STP:
-			/* we can downgrade protocols only */
-			bstp_timer_stop(&bp->bp_migrate_delay_timer);
-			/* clear unsupported features */
-			bp->bp_operedge = 0;
-			/* STP compat mode only uses 16 bits of the 32 */
-			if (bp->bp_path_cost > 65535)
-				bp->bp_path_cost = 65535;
-			break;
+	case BSTP_PROTO_STP:
+		/* we can downgrade protocols only */
+		bstp_timer_stop(&bp->bp_migrate_delay_timer);
+		/* clear unsupported features */
+		bp->bp_operedge = 0;
+		/* STP compat mode only uses 16 bits of the 32 */
+		if (bp->bp_path_cost > 65535) {
+			bp->bp_path_cost = 65535;
+		}
+		break;
 
-		case BSTP_PROTO_RSTP:
-			bstp_timer_start(&bp->bp_migrate_delay_timer,
-			    bs->bs_migration_delay);
-			break;
+	case BSTP_PROTO_RSTP:
+		bstp_timer_start(&bp->bp_migrate_delay_timer,
+		    bs->bs_migration_delay);
+		break;
 
-		default:
-			DPRINTF("Unsupported STP version %d\n", proto);
-			return;
+	default:
+		DPRINTF("Unsupported STP version %d\n", proto);
+		return;
 	}
 
 	bp->bp_protover = proto;
@@ -1432,71 +1494,72 @@ bstp_set_port_tc(struct bstp_port *bp, int state)
 
 	/* initialise the new state */
 	switch (bp->bp_tcstate) {
-		case BSTP_TCSTATE_ACTIVE:
-			DPRINTF("%s -> TC_ACTIVE\n", bp->bp_ifp->if_xname);
-			/* nothing to do */
-			break;
+	case BSTP_TCSTATE_ACTIVE:
+		DPRINTF("%s -> TC_ACTIVE\n", bp->bp_ifp->if_xname);
+		/* nothing to do */
+		break;
 
-		case BSTP_TCSTATE_INACTIVE:
-			bstp_timer_stop(&bp->bp_tc_timer);
-			/* flush routes on the parent bridge */
-			bp->bp_fdbflush = 1;
-			bstp_task_enqueue(&bp->bp_rtagetask);
-			bp->bp_tc_ack = 0;
-			DPRINTF("%s -> TC_INACTIVE\n", bp->bp_ifp->if_xname);
-			break;
+	case BSTP_TCSTATE_INACTIVE:
+		bstp_timer_stop(&bp->bp_tc_timer);
+		/* flush routes on the parent bridge */
+		bp->bp_fdbflush = 1;
+		bstp_task_enqueue(&bp->bp_rtagetask);
+		bp->bp_tc_ack = 0;
+		DPRINTF("%s -> TC_INACTIVE\n", bp->bp_ifp->if_xname);
+		break;
 
-		case BSTP_TCSTATE_LEARNING:
-			bp->bp_rcvdtc = 0;
-			bp->bp_rcvdtcn = 0;
-			bp->bp_rcvdtca = 0;
-			bp->bp_tc_prop = 0;
-			DPRINTF("%s -> TC_LEARNING\n", bp->bp_ifp->if_xname);
-			break;
+	case BSTP_TCSTATE_LEARNING:
+		bp->bp_rcvdtc = 0;
+		bp->bp_rcvdtcn = 0;
+		bp->bp_rcvdtca = 0;
+		bp->bp_tc_prop = 0;
+		DPRINTF("%s -> TC_LEARNING\n", bp->bp_ifp->if_xname);
+		break;
 
-		case BSTP_TCSTATE_DETECTED:
-			bstp_set_timer_tc(bp);
-			bstp_set_other_tcprop(bp);
-			/* send out notification */
-			bp->bp_flags |= BSTP_PORT_NEWINFO;
-			bstp_transmit(bs, bp);
-			/* reviewed for getmicrotime usage */
-			getmicrotime(&bs->bs_last_tc_time);
-			DPRINTF("%s -> TC_DETECTED\n", bp->bp_ifp->if_xname);
-			bp->bp_tcstate = BSTP_TCSTATE_ACTIVE; /* UCT */
-			break;
+	case BSTP_TCSTATE_DETECTED:
+		bstp_set_timer_tc(bp);
+		bstp_set_other_tcprop(bp);
+		/* send out notification */
+		bp->bp_flags |= BSTP_PORT_NEWINFO;
+		bstp_transmit(bs, bp);
+		/* reviewed for getmicrotime usage */
+		getmicrotime(&bs->bs_last_tc_time);
+		DPRINTF("%s -> TC_DETECTED\n", bp->bp_ifp->if_xname);
+		bp->bp_tcstate = BSTP_TCSTATE_ACTIVE;         /* UCT */
+		break;
 
-		case BSTP_TCSTATE_TCN:
-			bstp_set_timer_tc(bp);
-			DPRINTF("%s -> TC_TCN\n", bp->bp_ifp->if_xname);
-			/* fall through */
-		case BSTP_TCSTATE_TC:
-			bp->bp_rcvdtc = 0;
-			bp->bp_rcvdtcn = 0;
-			if (bp->bp_role == BSTP_ROLE_DESIGNATED)
-				bp->bp_tc_ack = 1;
+	case BSTP_TCSTATE_TCN:
+		bstp_set_timer_tc(bp);
+		DPRINTF("%s -> TC_TCN\n", bp->bp_ifp->if_xname);
+	/* fall through */
+	case BSTP_TCSTATE_TC:
+		bp->bp_rcvdtc = 0;
+		bp->bp_rcvdtcn = 0;
+		if (bp->bp_role == BSTP_ROLE_DESIGNATED) {
+			bp->bp_tc_ack = 1;
+		}
 
-			bstp_set_other_tcprop(bp);
-			DPRINTF("%s -> TC_TC\n", bp->bp_ifp->if_xname);
-			bp->bp_tcstate = BSTP_TCSTATE_ACTIVE; /* UCT */
-			break;
+		bstp_set_other_tcprop(bp);
+		DPRINTF("%s -> TC_TC\n", bp->bp_ifp->if_xname);
+		bp->bp_tcstate = BSTP_TCSTATE_ACTIVE;         /* UCT */
+		break;
 
-		case BSTP_TCSTATE_PROPAG:
-			/* flush routes on the parent bridge */
-			bp->bp_fdbflush = 1;
-			bstp_task_enqueue(&bp->bp_rtagetask);
-			bp->bp_tc_prop = 0;
-			bstp_set_timer_tc(bp);
-			DPRINTF("%s -> TC_PROPAG\n", bp->bp_ifp->if_xname);
-			bp->bp_tcstate = BSTP_TCSTATE_ACTIVE; /* UCT */
-			break;
+	case BSTP_TCSTATE_PROPAG:
+		/* flush routes on the parent bridge */
+		bp->bp_fdbflush = 1;
+		bstp_task_enqueue(&bp->bp_rtagetask);
+		bp->bp_tc_prop = 0;
+		bstp_set_timer_tc(bp);
+		DPRINTF("%s -> TC_PROPAG\n", bp->bp_ifp->if_xname);
+		bp->bp_tcstate = BSTP_TCSTATE_ACTIVE;         /* UCT */
+		break;
 
-		case BSTP_TCSTATE_ACK:
-			bstp_timer_stop(&bp->bp_tc_timer);
-			bp->bp_rcvdtca = 0;
-			DPRINTF("%s -> TC_ACK\n", bp->bp_ifp->if_xname);
-			bp->bp_tcstate = BSTP_TCSTATE_ACTIVE; /* UCT */
-			break;
+	case BSTP_TCSTATE_ACK:
+		bstp_timer_stop(&bp->bp_tc_timer);
+		bp->bp_rcvdtca = 0;
+		DPRINTF("%s -> TC_ACK\n", bp->bp_ifp->if_xname);
+		bp->bp_tcstate = BSTP_TCSTATE_ACTIVE;         /* UCT */
+		break;
 	}
 }
 
@@ -1505,20 +1568,21 @@ bstp_set_timer_tc(struct bstp_port *bp)
 {
 	struct bstp_state *bs = bp->bp_bs;
 
-	if (bp->bp_tc_timer.active)
+	if (bp->bp_tc_timer.active) {
 		return;
+	}
 
 	switch (bp->bp_protover) {
-		case BSTP_PROTO_RSTP:
-			bstp_timer_start(&bp->bp_tc_timer,
-			    bp->bp_desg_htime + BSTP_TICK_VAL);
-			bp->bp_flags |= BSTP_PORT_NEWINFO;
-			break;
+	case BSTP_PROTO_RSTP:
+		bstp_timer_start(&bp->bp_tc_timer,
+		    bp->bp_desg_htime + BSTP_TICK_VAL);
+		bp->bp_flags |= BSTP_PORT_NEWINFO;
+		break;
 
-		case BSTP_PROTO_STP:
-			bstp_timer_start(&bp->bp_tc_timer,
-			    bs->bs_root_max_age + bs->bs_root_fdelay);
-			break;
+	case BSTP_PROTO_STP:
+		bstp_timer_start(&bp->bp_tc_timer,
+		    bs->bs_root_max_age + bs->bs_root_fdelay);
+		break;
 	}
 }
 
@@ -1529,9 +1593,10 @@ bstp_set_timer_msgage(struct bstp_port *bp)
 	    bp->bp_port_max_age) {
 		bstp_timer_start(&bp->bp_message_age_timer,
 		    bp->bp_port_htime * 3);
-	} else
+	} else {
 		/* expires immediately */
 		bstp_timer_start(&bp->bp_message_age_timer, 0);
+	}
 }
 
 static int
@@ -1541,14 +1606,15 @@ bstp_rerooted(struct bstp_state *bs, struct bstp_port *bp)
 	int rr_set = 0;
 
 	LIST_FOREACH(bp2, &bs->bs_bplist, bp_next) {
-		if (bp2 == bp)
+		if (bp2 == bp) {
 			continue;
+		}
 		if (bp2->bp_recent_root_timer.active) {
 			rr_set = 1;
 			break;
 		}
 	}
-	return (!rr_set);
+	return !rr_set;
 }
 
 int
@@ -1558,17 +1624,19 @@ bstp_set_htime(struct bstp_state *bs, int t)
 	t *=  BSTP_TICK_VAL;
 
 	/* value can only be changed in leagacy stp mode */
-	if (bs->bs_protover != BSTP_PROTO_STP)
-		return (EPERM);
+	if (bs->bs_protover != BSTP_PROTO_STP) {
+		return EPERM;
+	}
 
-	if (t < BSTP_MIN_HELLO_TIME || t > BSTP_MAX_HELLO_TIME)
-		return (EINVAL);
+	if (t < BSTP_MIN_HELLO_TIME || t > BSTP_MAX_HELLO_TIME) {
+		return EINVAL;
+	}
 
 	BSTP_LOCK(bs);
 	bs->bs_bridge_htime = t;
 	bstp_reinit(bs);
 	BSTP_UNLOCK(bs);
-	return (0);
+	return 0;
 }
 
 int
@@ -1577,14 +1645,15 @@ bstp_set_fdelay(struct bstp_state *bs, int t)
 	/* convert seconds to ticks */
 	t *= BSTP_TICK_VAL;
 
-	if (t < BSTP_MIN_FORWARD_DELAY || t > BSTP_MAX_FORWARD_DELAY)
-		return (EINVAL);
+	if (t < BSTP_MIN_FORWARD_DELAY || t > BSTP_MAX_FORWARD_DELAY) {
+		return EINVAL;
+	}
 
 	BSTP_LOCK(bs);
 	bs->bs_bridge_fdelay = t;
 	bstp_reinit(bs);
 	BSTP_UNLOCK(bs);
-	return (0);
+	return 0;
 }
 
 int
@@ -1593,14 +1662,15 @@ bstp_set_maxage(struct bstp_state *bs, int t)
 	/* convert seconds to ticks */
 	t *= BSTP_TICK_VAL;
 
-	if (t < BSTP_MIN_MAX_AGE || t > BSTP_MAX_MAX_AGE)
-		return (EINVAL);
+	if (t < BSTP_MIN_MAX_AGE || t > BSTP_MAX_MAX_AGE) {
+		return EINVAL;
+	}
 
 	BSTP_LOCK(bs);
 	bs->bs_bridge_max_age = t;
 	bstp_reinit(bs);
 	BSTP_UNLOCK(bs);
-	return (0);
+	return 0;
 }
 
 int
@@ -1609,15 +1679,16 @@ bstp_set_holdcount(struct bstp_state *bs, int count)
 	struct bstp_port *bp;
 
 	if (count < BSTP_MIN_HOLD_COUNT ||
-	    count > BSTP_MAX_HOLD_COUNT)
-		return (EINVAL);
+	    count > BSTP_MAX_HOLD_COUNT) {
+		return EINVAL;
+	}
 
 	BSTP_LOCK(bs);
 	bs->bs_txholdcount = count;
 	LIST_FOREACH(bp, &bs->bs_bplist, bp_next)
-		bp->bp_txcount = 0;
+	bp->bp_txcount = 0;
 	BSTP_UNLOCK(bs);
-	return (0);
+	return 0;
 }
 
 int
@@ -1626,13 +1697,13 @@ bstp_set_protocol(struct bstp_state *bs, int proto)
 	struct bstp_port *bp;
 
 	switch (proto) {
-		/* Supported protocol versions */
-		case BSTP_PROTO_STP:
-		case BSTP_PROTO_RSTP:
-			break;
+	/* Supported protocol versions */
+	case BSTP_PROTO_STP:
+	case BSTP_PROTO_RSTP:
+		break;
 
-		default:
-			return (EINVAL);
+	default:
+		return EINVAL;
 	}
 
 	BSTP_LOCK(bs);
@@ -1649,14 +1720,15 @@ bstp_set_protocol(struct bstp_state *bs, int proto)
 	}
 	bstp_reinit(bs);
 	BSTP_UNLOCK(bs);
-	return (0);
+	return 0;
 }
 
 int
 bstp_set_priority(struct bstp_state *bs, int pri)
 {
-	if (pri < 0 || pri > BSTP_MAX_PRIORITY)
-		return (EINVAL);
+	if (pri < 0 || pri > BSTP_MAX_PRIORITY) {
+		return EINVAL;
+	}
 
 	/* Limit to steps of 4096 */
 	pri -= pri % 4096;
@@ -1665,7 +1737,7 @@ bstp_set_priority(struct bstp_state *bs, int pri)
 	bs->bs_bridge_priority = pri;
 	bstp_reinit(bs);
 	BSTP_UNLOCK(bs);
-	return (0);
+	return 0;
 }
 
 int
@@ -1673,8 +1745,9 @@ bstp_set_port_priority(struct bstp_port *bp, int pri)
 {
 	struct bstp_state *bs = bp->bp_bs;
 
-	if (pri < 0 || pri > BSTP_MAX_PORT_PRIORITY)
-		return (EINVAL);
+	if (pri < 0 || pri > BSTP_MAX_PORT_PRIORITY) {
+		return EINVAL;
+	}
 
 	/* Limit to steps of 16 */
 	pri -= pri % 16;
@@ -1683,7 +1756,7 @@ bstp_set_port_priority(struct bstp_port *bp, int pri)
 	bp->bp_priority = pri;
 	bstp_reinit(bs);
 	BSTP_UNLOCK(bs);
-	return (0);
+	return 0;
 }
 
 int
@@ -1691,16 +1764,18 @@ bstp_set_path_cost(struct bstp_port *bp, uint32_t path_cost)
 {
 	struct bstp_state *bs = bp->bp_bs;
 
-	if (path_cost > BSTP_MAX_PATH_COST)
-		return (EINVAL);
+	if (path_cost > BSTP_MAX_PATH_COST) {
+		return EINVAL;
+	}
 
 	/* STP compat mode only uses 16 bits of the 32 */
-	if (bp->bp_protover == BSTP_PROTO_STP && path_cost > 65535)
+	if (bp->bp_protover == BSTP_PROTO_STP && path_cost > 65535) {
 		path_cost = 65535;
+	}
 
 	BSTP_LOCK(bs);
 
-	if (path_cost == 0) {	/* use auto */
+	if (path_cost == 0) {   /* use auto */
 		bp->bp_flags &= ~BSTP_PORT_ADMCOST;
 		bp->bp_path_cost = bstp_calc_path_cost(bp);
 	} else {
@@ -1709,7 +1784,7 @@ bstp_set_path_cost(struct bstp_port *bp, uint32_t path_cost)
 	}
 	bstp_reinit(bs);
 	BSTP_UNLOCK(bs);
-	return (0);
+	return 0;
 }
 
 int
@@ -1718,12 +1793,13 @@ bstp_set_edge(struct bstp_port *bp, int set)
 	struct bstp_state *bs = bp->bp_bs;
 
 	BSTP_LOCK(bs);
-	if ((bp->bp_operedge = set) == 0)
+	if ((bp->bp_operedge = set) == 0) {
 		bp->bp_flags &= ~BSTP_PORT_ADMEDGE;
-	else
+	} else {
 		bp->bp_flags |= BSTP_PORT_ADMEDGE;
+	}
 	BSTP_UNLOCK(bs);
-	return (0);
+	return 0;
 }
 
 int
@@ -1735,12 +1811,14 @@ bstp_set_autoedge(struct bstp_port *bp, int set)
 	if (set) {
 		bp->bp_flags |= BSTP_PORT_AUTOEDGE;
 		/* we may be able to transition straight to edge */
-		if (bp->bp_edge_delay_timer.active == 0)
+		if (bp->bp_edge_delay_timer.active == 0) {
 			bstp_edge_delay_expiry(bs, bp);
-	} else
+		}
+	} else {
 		bp->bp_flags &= ~BSTP_PORT_AUTOEDGE;
+	}
 	BSTP_UNLOCK(bs);
-	return (0);
+	return 0;
 }
 
 int
@@ -1751,7 +1829,7 @@ bstp_set_ptp(struct bstp_port *bp, int set)
 	BSTP_LOCK(bs);
 	bp->bp_ptp_link = set;
 	BSTP_UNLOCK(bs);
-	return (0);
+	return 0;
 }
 
 int
@@ -1762,12 +1840,14 @@ bstp_set_autoptp(struct bstp_port *bp, int set)
 	BSTP_LOCK(bs);
 	if (set) {
 		bp->bp_flags |= BSTP_PORT_AUTOPTP;
-		if (bp->bp_role != BSTP_ROLE_DISABLED)
+		if (bp->bp_role != BSTP_ROLE_DISABLED) {
 			bstp_ifupdstatus(bs, bp);
-	} else
+		}
+	} else {
 		bp->bp_flags &= ~BSTP_PORT_AUTOPTP;
+	}
 	BSTP_UNLOCK(bs);
-	return (0);
+	return 0;
 }
 
 /*
@@ -1780,29 +1860,33 @@ bstp_calc_path_cost(struct bstp_port *bp)
 	uint32_t path_cost;
 
 	/* If the priority has been manually set then retain the value */
-	if (bp->bp_flags & BSTP_PORT_ADMCOST)
+	if (bp->bp_flags & BSTP_PORT_ADMCOST) {
 		return bp->bp_path_cost;
+	}
 
 	if (bp->bp_if_link_state == LINK_STATE_DOWN) {
 		/* Recalc when the link comes up again */
 		bp->bp_flags |= BSTP_PORT_PNDCOST;
-		return (BSTP_DEFAULT_PATH_COST);
+		return BSTP_DEFAULT_PATH_COST;
 	}
 
-	if (ifp->if_baudrate < 1000)
-		return (BSTP_DEFAULT_PATH_COST);
+	if (ifp->if_baudrate < 1000) {
+		return BSTP_DEFAULT_PATH_COST;
+	}
 
- 	/* formula from section 17.14, IEEE Std 802.1D-2004 */
+	/* formula from section 17.14, IEEE Std 802.1D-2004 */
 	path_cost = 20000000000ULL / (ifp->if_baudrate / 1000);
 
-	if (path_cost > BSTP_MAX_PATH_COST)
+	if (path_cost > BSTP_MAX_PATH_COST) {
 		path_cost = BSTP_MAX_PATH_COST;
+	}
 
 	/* STP compat mode only uses 16 bits of the 32 */
-	if (bp->bp_protover == BSTP_PROTO_STP && path_cost > 65535)
+	if (bp->bp_protover == BSTP_PROTO_STP && path_cost > 65535) {
 		path_cost = 65535;
+	}
 
-	return (path_cost);
+	return path_cost;
 }
 
 /*
@@ -1815,8 +1899,9 @@ bstp_notify_state(void *arg, __unused int pending)
 	struct bstp_port *bp = (struct bstp_port *)arg;
 	struct bstp_state *bs = bp->bp_bs;
 
-	if (bp->bp_active == 1 && bs->bs_state_cb != NULL)
+	if (bp->bp_active == 1 && bs->bs_state_cb != NULL) {
 		(*bs->bs_state_cb)(bp->bp_ifp, bp->bp_state);
+	}
 }
 
 /*
@@ -1832,19 +1917,20 @@ bstp_notify_rtage(void *arg, __unused int pending)
 
 	BSTP_LOCK(bs);
 	switch (bp->bp_protover) {
-		case BSTP_PROTO_STP:
-			/* convert to seconds */
-			age = bp->bp_desg_fdelay / BSTP_TICK_VAL;
-			break;
+	case BSTP_PROTO_STP:
+		/* convert to seconds */
+		age = bp->bp_desg_fdelay / BSTP_TICK_VAL;
+		break;
 
-		case BSTP_PROTO_RSTP:
-			age = 0;
-			break;
+	case BSTP_PROTO_RSTP:
+		age = 0;
+		break;
 	}
 	BSTP_UNLOCK(bs);
 
-	if (bp->bp_active == 1 && bs->bs_rtage_cb != NULL)
+	if (bp->bp_active == 1 && bs->bs_rtage_cb != NULL) {
 		(*bs->bs_rtage_cb)(bp->bp_ifp, age);
+	}
 
 	/* flush is complete */
 	BSTP_LOCK(bs);
@@ -1903,21 +1989,24 @@ bstp_ifupdstatus(struct bstp_state *bs, struct bstp_port *bp)
 				bp->bp_flags &= ~BSTP_PORT_PNDCOST;
 			}
 
-			if (bp->bp_role == BSTP_ROLE_DISABLED)
+			if (bp->bp_role == BSTP_ROLE_DISABLED) {
 				bstp_enable_port(bs, bp);
+			}
 		} else {
 			if (bp->bp_role != BSTP_ROLE_DISABLED) {
 				bstp_disable_port(bs, bp);
 				if ((bp->bp_flags & BSTP_PORT_ADMEDGE) &&
-				    bp->bp_protover == BSTP_PROTO_RSTP)
+				    bp->bp_protover == BSTP_PROTO_RSTP) {
 					bp->bp_operedge = 1;
+				}
 			}
 		}
 		return;
 	}
 
-	if (bp->bp_infois != BSTP_INFO_DISABLED)
+	if (bp->bp_infois != BSTP_INFO_DISABLED) {
 		bstp_disable_port(bs, bp);
+	}
 }
 
 static void
@@ -1943,13 +2032,14 @@ bstp_tick(void *arg)
 
 	BSTP_LOCK(bs);
 
-	if (bs->bs_running == 0)
+	if (bs->bs_running == 0) {
 		return;
+	}
 
 	/* slow timer to catch missed link events */
 	if (bstp_timer_expired(&bs->bs_link_timer)) {
 		LIST_FOREACH(bp, &bs->bs_bplist, bp_next)
-			bstp_ifupdstatus(bs, bp);
+		bstp_ifupdstatus(bs, bp);
 		bstp_timer_start(&bs->bs_link_timer, BSTP_LINK_TIMER);
 	}
 
@@ -1960,23 +2050,28 @@ bstp_tick(void *arg)
 		bstp_timer_expired(&bp->bp_forward_delay_timer);
 		bstp_timer_expired(&bp->bp_recent_backup_timer);
 
-		if (bstp_timer_expired(&bp->bp_hello_timer))
+		if (bstp_timer_expired(&bp->bp_hello_timer)) {
 			bstp_hello_timer_expiry(bs, bp);
+		}
 
-		if (bstp_timer_expired(&bp->bp_message_age_timer))
+		if (bstp_timer_expired(&bp->bp_message_age_timer)) {
 			bstp_message_age_expiry(bs, bp);
+		}
 
-		if (bstp_timer_expired(&bp->bp_migrate_delay_timer))
+		if (bstp_timer_expired(&bp->bp_migrate_delay_timer)) {
 			bstp_migrate_delay_expiry(bs, bp);
+		}
 
-		if (bstp_timer_expired(&bp->bp_edge_delay_timer))
+		if (bstp_timer_expired(&bp->bp_edge_delay_timer)) {
 			bstp_edge_delay_expiry(bs, bp);
+		}
 
 		/* update the various state machines for the port */
 		bstp_update_state(bs, bp);
 
-		if (bp->bp_txcount > 0)
+		if (bp->bp_txcount > 0) {
 			bp->bp_txcount--;
+		}
 	}
 
 	BSTP_UNLOCK(bs);
@@ -2012,14 +2107,15 @@ bstp_timer_latch(struct bstp_timer *t)
 static int
 bstp_timer_expired(struct bstp_timer *t)
 {
-	if (t->active == 0 || t->latched)
-		return (0);
+	if (t->active == 0 || t->latched) {
+		return 0;
+	}
 	t->value -= BSTP_TICK_VAL;
 	if (t->value <= 0) {
 		bstp_timer_stop(t);
-		return (1);
+		return 1;
 	}
-	return (0);
+	return 0;
 }
 
 static void
@@ -2028,7 +2124,7 @@ bstp_hello_timer_expiry(struct bstp_state *bs, struct bstp_port *bp)
 	if ((bp->bp_flags & BSTP_PORT_NEWINFO) ||
 	    bp->bp_role == BSTP_ROLE_DESIGNATED ||
 	    (bp->bp_role == BSTP_ROLE_ROOT &&
-	     bp->bp_tc_timer.active == 1)) {
+	    bp->bp_tc_timer.active == 1)) {
 		bstp_timer_start(&bp->bp_hello_timer, bp->bp_desg_htime);
 		bp->bp_flags |= BSTP_PORT_NEWINFO;
 		bstp_transmit(bs, bp);
@@ -2071,7 +2167,7 @@ bstp_addr_cmp(const uint8_t *a, const uint8_t *b)
 		d = ((int)a[i]) - ((int)b[i]);
 	}
 
-	return (d);
+	return d;
 }
 
 /*
@@ -2086,10 +2182,11 @@ bstp_same_bridgeid(uint64_t id1, uint64_t id2)
 	PV2ADDR(id1, addr1);
 	PV2ADDR(id2, addr2);
 
-	if (bstp_addr_cmp(addr1, addr2) == 0)
-		return (1);
+	if (bstp_addr_cmp(addr1, addr2) == 0) {
+		return 1;
+	}
 
-	return (0);
+	return 0;
 }
 
 void
@@ -2098,7 +2195,7 @@ bstp_reinit(struct bstp_state *bs)
 	struct bstp_port *bp;
 	struct ifnet *ifp, *mif;
 	u_char *e_addr;
-	static const u_char llzero[ETHER_ADDR_LEN];	/* 00:00:00:00:00:00 */
+	static const u_char llzero[ETHER_ADDR_LEN];     /* 00:00:00:00:00:00 */
 
 	BSTP_LOCK_ASSERT(bs);
 
@@ -2111,11 +2208,13 @@ bstp_reinit(struct bstp_state *bs)
 	 */
 	ifnet_head_lock_shared();
 	TAILQ_FOREACH(ifp, &ifnet_head, if_link) {
-		if (ifp->if_type != IFT_ETHER)
+		if (ifp->if_type != IFT_ETHER) {
 			continue;
+		}
 
-		if (bstp_addr_cmp(IF_LLADDR(ifp), llzero) == 0)
+		if (bstp_addr_cmp(IF_LLADDR(ifp), llzero) == 0) {
 			continue;
+		}
 
 		if (mif == NULL) {
 			mif = ifp;
@@ -2158,8 +2257,9 @@ bstp_reinit(struct bstp_state *bs)
 	bs->bs_bridge_pv.pv_dport_id = 0;
 	bs->bs_bridge_pv.pv_port_id = 0;
 
-	if (bs->bs_running)
+	if (bs->bs_running) {
 		bsd_untimeout(bstp_tick, bs);
+	}
 
 	LIST_FOREACH(bp, &bs->bs_bplist, bp_next) {
 		bp->bp_port_id = (bp->bp_priority << 8) |
@@ -2231,7 +2331,7 @@ bstp_stop(struct bstp_state *bs)
 	BSTP_LOCK(bs);
 
 	LIST_FOREACH(bp, &bs->bs_bplist, bp_next)
-		bstp_set_port_state(bp, BSTP_IFSTATE_DISCARDING);
+	bstp_set_port_state(bp, BSTP_IFSTATE_DISCARDING);
 
 	bs->bs_running = 0;
 	bsd_untimeout(bstp_tick, bs);
@@ -2252,14 +2352,14 @@ bstp_create(struct bstp_state *bs, struct bstp_port *bp, struct ifnet *ifp)
 
 	/* Init state */
 	bp->bp_infois = BSTP_INFO_DISABLED;
-	bp->bp_flags = BSTP_PORT_AUTOEDGE|BSTP_PORT_AUTOPTP;
+	bp->bp_flags = BSTP_PORT_AUTOEDGE | BSTP_PORT_AUTOPTP;
 	bstp_set_port_state(bp, BSTP_IFSTATE_DISCARDING);
 	bstp_set_port_proto(bp, bs->bs_protover);
 	bstp_set_port_role(bp, BSTP_ROLE_DISABLED);
 	bstp_set_port_tc(bp, BSTP_TCSTATE_INACTIVE);
 	bp->bp_path_cost = bstp_calc_path_cost(bp);
 	BSTP_UNLOCK(bs);
-	return (0);
+	return 0;
 }
 
 int
@@ -2271,11 +2371,11 @@ bstp_enable(struct bstp_port *bp)
 	KASSERT(bp->bp_active == 0, ("already a bstp member"));
 
 	switch (ifp->if_type) {
-		case IFT_ETHER:	/* These can do spanning tree. */
-			break;
-		default:
-			/* Nothing else can. */
-			return (EINVAL);
+	case IFT_ETHER:         /* These can do spanning tree. */
+		break;
+	default:
+		/* Nothing else can. */
+		return EINVAL;
 	}
 
 	BSTP_LOCK(bs);
@@ -2285,7 +2385,7 @@ bstp_enable(struct bstp_port *bp)
 	bstp_reinit(bs);
 	bstp_update_roles(bs, bp);
 	BSTP_UNLOCK(bs);
-	return (0);
+	return 0;
 }
 
 void
@@ -2340,7 +2440,7 @@ static void
 bstp_create_task_thread(void)
 {
 	kern_return_t error;
-	
+
 	lck_grp_attr_t *lck_grp_attr = NULL;
 
 	lck_grp_attr = lck_grp_attr_alloc_init();
@@ -2362,31 +2462,32 @@ bstp_task_thread_func(void)
 	struct bstp_task *bt, *tvar;
 
 	lck_mtx_lock(bstp_task_mtx);
-	
+
 	do {
-		while(TAILQ_EMPTY(&bstp_task_queue)) {
+		while (TAILQ_EMPTY(&bstp_task_queue)) {
 			wakeup(&bstp_task_queue_running);
 			msleep(&bstp_task_queue, bstp_task_mtx, PZERO, "bstp_task_queue", NULL);
 		}
-	
-		TAILQ_FOREACH_SAFE(bt, &bstp_task_queue, bt_next, tvar) {	
+
+		TAILQ_FOREACH_SAFE(bt, &bstp_task_queue, bt_next, tvar) {
 			int count = bt->bt_count;
-	
+
 			bt->bt_count = 0;
-		
+
 			bstp_task_queue_running = bt;
 			lck_mtx_unlock(bstp_task_mtx);
-			
+
 			(*bt->bt_func)(bt->bt_context, count);
-			
+
 			lck_mtx_lock(bstp_task_mtx);
 			bstp_task_queue_running = NULL;
 
-			if (bt->bt_count == 0)
-				TAILQ_REMOVE(&bstp_task_queue, bt, bt_next); 
+			if (bt->bt_count == 0) {
+				TAILQ_REMOVE(&bstp_task_queue, bt, bt_next);
+			}
 		}
 	} while (1);
-	
+
 	/* UNREACHED */
 }
 
@@ -2401,12 +2502,12 @@ bstp_task_enqueue(struct bstp_task *bt)
 		wakeup(&bstp_task_queue);
 		return;
 	}
-	
+
 	bt->bt_count = 1;
 	TAILQ_INSERT_TAIL(&bstp_task_queue, bt, bt_next);
-	
+
 	lck_mtx_unlock(bstp_task_mtx);
-	
+
 	wakeup(&bstp_task_queue);
 }
 
@@ -2421,5 +2522,3 @@ bstp_task_drain(struct bstp_task *bt)
 	}
 	lck_mtx_unlock(bstp_task_mtx);
 }
-
-

@@ -79,7 +79,7 @@ timer_delta(timer_t timer, uint64_t *prev_in_cur_out)
 {
 	uint64_t old = *prev_in_cur_out;
 	uint64_t new = *prev_in_cur_out = timer_grab(timer);
-	return (new - old);
+	return new - old;
 }
 
 static void
@@ -89,11 +89,11 @@ timer_advance(timer_t timer, uint64_t delta)
 	timer->all_bits += delta;
 #else /* defined(__LP64__) */
 	extern void timer_advance_internal_32(timer_t timer, uint32_t high,
-			uint32_t low);
+	    uint32_t low);
 	uint64_t low = delta + timer->low_bits;
 	if (low >> 32) {
 		timer_advance_internal_32(timer,
-				(uint32_t)(timer->high_bits + (low >> 32)), (uint32_t)low);
+		    (uint32_t)(timer->high_bits + (low >> 32)), (uint32_t)low);
 	} else {
 		timer->low_bits = (uint32_t)low;
 	}

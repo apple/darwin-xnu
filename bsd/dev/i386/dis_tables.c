@@ -40,9 +40,6 @@
  * It needs to be in sync with this file.
  */
 
-/*
- * #pragma ident       "@(#)dis_tables.c       1.18    08/05/24 SMI"
- */
 #include <sys/dtrace.h>
 #include <sys/dtrace_glue.h>
 #include <sys/dis_tables.h>

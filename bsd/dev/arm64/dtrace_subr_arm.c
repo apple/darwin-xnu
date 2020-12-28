@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2007 Apple Inc. All rights reserved.
+ *  Copyright (c) 2007-2018 Apple Inc. All rights reserved.
  */
 /*
  * CDDL HEADER START
@@ -27,10 +27,6 @@
  * Use is subject to license terms.
  */
 
-/*
- * #pragma ident	"@(#)dtrace_subr.c	1.12	05/06/08 SMI"
- */
-
 #include <sys/dtrace.h>
 #include <sys/dtrace_glue.h>
 #include <sys/dtrace_impl.h>
@@ -41,7 +37,7 @@
 #include <kern/debug.h>
 #include <arm/proc_reg.h>
 
-int             (*dtrace_pid_probe_ptr) (arm_saved_state_t *);
+int             (*dtrace_pid_probe_ptr)(arm_saved_state_t *);
 int             (*dtrace_return_probe_ptr) (arm_saved_state_t *);
 
 kern_return_t
@@ -65,27 +61,11 @@ dtrace_user_probe(arm_saved_state_t *regs)
 
 	kauth_cred_uthread_update(uthread, p);
 
-	if (is_saved_state32(regs)) {
-		if (saved_state32(regs)->cpsr & PSR_TF) {
-			uint16_t pc;
-			if (copyin((user_addr_t)saved_state32(regs)->pc, &pc, sizeof(uint16_t))) {
-				return KERN_FAILURE;
-			}
-			is_fasttrap = (pc == FASTTRAP_THUMB32_RET_INSTR);
-		} else {
-			uint32_t pc;
-			if (copyin((user_addr_t)saved_state32(regs)->pc, &pc, sizeof(uint32_t))) {
-				return KERN_FAILURE;
-			}
-			is_fasttrap = (pc == FASTTRAP_ARM32_RET_INSTR);
-		}
-	} else {
-		uint32_t pc;
-		if (copyin((user_addr_t)saved_state64(regs)->pc, &pc, sizeof(uint32_t))) {
-			return KERN_FAILURE;
-		}
-		is_fasttrap = (pc == FASTTRAP_ARM64_RET_INSTR);
+	uint32_t pc;
+	if (copyin((user_addr_t)saved_state64(regs)->pc, &pc, sizeof(uint32_t))) {
+		return KERN_FAILURE;
 	}
+	is_fasttrap = (pc == FASTTRAP_ARM64_RET_INSTR);
 
 	if (is_fasttrap) {
 		uint8_t step = uthread->t_dtrace_step;
@@ -110,12 +90,12 @@ dtrace_user_probe(arm_saved_state_t *regs)
 		 */
 		if (step == 0) {
 			/*
-			 * APPLE NOTE: We're returning KERN_FAILURE, which causes 
+			 * APPLE NOTE: We're returning KERN_FAILURE, which causes
 			 * the generic signal handling code to take over, which will effectively
 			 * deliver a EXC_BAD_INSTRUCTION to the user process.
 			 */
 			return KERN_FAILURE;
-		} 
+		}
 
 		/*
 		 * If we hit this trap unrelated to a return probe, we're
@@ -139,8 +119,9 @@ dtrace_user_probe(arm_saved_state_t *regs)
 		rwp = &CPU->cpu_ft_lock;
 		lck_rw_lock_shared(rwp);
 
-		if (dtrace_return_probe_ptr != NULL)
+		if (dtrace_return_probe_ptr != NULL) {
 			(void) (*dtrace_return_probe_ptr)(regs);
+		}
 		lck_rw_unlock_shared(rwp);
 
 		set_saved_state_pc(regs, npc);
@@ -182,38 +163,11 @@ dtrace_user_probe(arm_saved_state_t *regs)
 		 *
 		 * Note that the PC points to the instruction that caused the fault.
 		 */
-		if (is_saved_state32(regs)) {
-			if (saved_state32(regs)->cpsr & PSR_TF) {
-				uint16_t instr;
-				if (fuword16(saved_state32(regs)->pc, &instr) == 0 && instr != FASTTRAP_THUMB32_INSTR) {
-					return KERN_SUCCESS;
-				}
-			} else {
-				uint32_t instr;
-				if (fuword32(saved_state32(regs)->pc, &instr) == 0 && instr != FASTTRAP_ARM32_INSTR) {
-					return KERN_SUCCESS;
-				}
-			}
-		} else {
-			uint32_t instr;
-			if (fuword32(saved_state64(regs)->pc, &instr) == 0 && instr != FASTTRAP_ARM64_INSTR) {
-				return KERN_SUCCESS;
-			}
+		uint32_t instr;
+		if (fuword32(saved_state64(regs)->pc, &instr) == 0 && instr != FASTTRAP_ARM64_INSTR) {
+			return KERN_SUCCESS;
 		}
 	}
 
 	return KERN_FAILURE;
-}
-
-void
-dtrace_safe_synchronous_signal(void)
-{
-	/* Not implemented */
-}
-
-int
-dtrace_safe_defer_signal(void)
-{
-	/* Not implemented */
-	return 0;
 }

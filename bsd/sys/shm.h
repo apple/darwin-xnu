@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*	$NetBSD: shm.h,v 1.15 1994/06/29 06:45:17 cgd Exp $	*/
@@ -90,15 +90,15 @@
  * that MUST be able to store values at least as large as a type unsigned
  * short.
  */
-typedef unsigned short	shmatt_t;
+typedef unsigned short  shmatt_t;
 
 
 /*
  * Possible flag values which may be OR'ed into the third argument to
  * shmat()
  */
-#define SHM_RDONLY	010000	/* [XSI] Attach read-only (else read-write) */
-#define SHM_RND		020000	/* [XSI] Round attach address to SHMLBA */
+#define SHM_RDONLY      010000  /* [XSI] Attach read-only (else read-write) */
+#define SHM_RND         020000  /* [XSI] Round attach address to SHMLBA */
 
 /*
  * This value is symbolic, and generally not expected to be sed by user
@@ -109,10 +109,10 @@ typedef unsigned short	shmatt_t;
  *		headers at this time, to avoid the resulting namespace
  *		pollution, which is why we discourages its use.
  */
-#define SHMLBA      4096	/* [XSI] Segment low boundary address multiple*/
+#define SHMLBA      4096        /* [XSI] Segment low boundary address multiple*/
 
 /* "official" access mode definitions; somewhat braindead since you have
-   to specify (SHM_* >> 3) for group and (SHM_* >> 6) for world permissions */
+ *  to specify (SHM_* >> 3) for group and (SHM_* >> 6) for world permissions */
 #define SHM_R       (IPC_R)
 #define SHM_W       (IPC_W)
 
@@ -127,7 +127,7 @@ typedef unsigned short	shmatt_t;
 #if __DARWIN_UNIX03 || defined(KERNEL)
 /*
  * Structure used internally.
- * 
+ *
  * This structure is exposed because standards dictate that it is used as
  * the third argment to shmctl().
  *
@@ -137,37 +137,37 @@ typedef unsigned short	shmatt_t;
 #if (defined(_POSIX_C_SOURCE) && !defined(_DARWIN_C_SOURCE))
 struct shmid_ds
 #else
-#define	shmid_ds	__shmid_ds_new
+#define shmid_ds        __shmid_ds_new
 struct __shmid_ds_new
 #endif
 {
-	struct __ipc_perm_new shm_perm;	/* [XSI] Operation permission value */
-	size_t		shm_segsz;	/* [XSI] Size of segment in bytes */
-	pid_t		shm_lpid;	/* [XSI] PID of last shared memory op */
-	pid_t		shm_cpid;	/* [XSI] PID of creator */
-	shmatt_t	shm_nattch;	/* [XSI] Number of current attaches */
-	time_t		shm_atime;	/* [XSI] Time of last shmat() */
-	time_t		shm_dtime;	/* [XSI] Time of last shmdt() */
-	time_t		shm_ctime;	/* [XSI] Time of last shmctl() change */
-	void		*shm_internal;	/* reserved for kernel use */
+	struct __ipc_perm_new shm_perm; /* [XSI] Operation permission value */
+	size_t          shm_segsz;      /* [XSI] Size of segment in bytes */
+	pid_t           shm_lpid;       /* [XSI] PID of last shared memory op */
+	pid_t           shm_cpid;       /* [XSI] PID of creator */
+	shmatt_t        shm_nattch;     /* [XSI] Number of current attaches */
+	time_t          shm_atime;      /* [XSI] Time of last shmat() */
+	time_t          shm_dtime;      /* [XSI] Time of last shmdt() */
+	time_t          shm_ctime;      /* [XSI] Time of last shmctl() change */
+	void            *shm_internal;  /* reserved for kernel use */
 };
-#else	/* !__DARWIN_UNIX03 */
-#define	shmid_ds	__shmid_ds_old
-#endif	/* !__DARWIN_UNIX03 */
+#else   /* !__DARWIN_UNIX03 */
+#define shmid_ds        __shmid_ds_old
+#endif  /* !__DARWIN_UNIX03 */
 
 #if !__DARWIN_UNIX03
 struct __shmid_ds_old {
-	struct __ipc_perm_old shm_perm;	/* [XSI] Operation permission value */
-	size_t		shm_segsz;	/* [XSI] Size of segment in bytes */
-	pid_t		shm_lpid;	/* [XSI] PID of last shared memory op */
-	pid_t		shm_cpid;	/* [XSI] PID of creator */
-	shmatt_t	shm_nattch;	/* [XSI] Number of current attaches */
-	time_t		shm_atime;	/* [XSI] Time of last shmat() */
-	time_t		shm_dtime;	/* [XSI] Time of last shmdt() */
-	time_t		shm_ctime;	/* [XSI] Time of last shmctl() change */
-	void		*shm_internal;	/* reserved for kernel use */
+	struct __ipc_perm_old shm_perm; /* [XSI] Operation permission value */
+	size_t          shm_segsz;      /* [XSI] Size of segment in bytes */
+	pid_t           shm_lpid;       /* [XSI] PID of last shared memory op */
+	pid_t           shm_cpid;       /* [XSI] PID of creator */
+	shmatt_t        shm_nattch;     /* [XSI] Number of current attaches */
+	time_t          shm_atime;      /* [XSI] Time of last shmat() */
+	time_t          shm_dtime;      /* [XSI] Time of last shmdt() */
+	time_t          shm_ctime;      /* [XSI] Time of last shmctl() change */
+	void            *shm_internal;  /* reserved for kernel use */
 };
-#endif	/* !__DARWIN_UNIX03 */
+#endif  /* !__DARWIN_UNIX03 */
 
 #pragma pack()
 
@@ -175,12 +175,12 @@ struct __shmid_ds_old {
 
 __BEGIN_DECLS
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-int	shmsys(int, ...);
+int     shmsys(int, ...);
 #endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
-void	*shmat (int, const void *, int);
-int	shmctl(int, int, struct shmid_ds *) __DARWIN_ALIAS(shmctl);
-int	shmdt(const void *);
-int	shmget(key_t, size_t, int);
+void    *shmat(int, const void *, int);
+int     shmctl(int, int, struct shmid_ds *) __DARWIN_ALIAS(shmctl);
+int     shmdt(const void *);
+int     shmget(key_t, size_t, int);
 __END_DECLS
 
 #endif /* !KERNEL */

@@ -2,7 +2,7 @@
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*	$NetBSD: sysv_ipc.c,v 1.7 1994/06/29 06:33:11 cgd Exp $	*/
@@ -60,7 +60,7 @@
 
 #include <sys/param.h>
 #include <sys/ipc.h>
-#include <sys/stat.h>	/* mode constants */
+#include <sys/stat.h>   /* mode constants */
 #include <sys/ucred.h>
 #include <sys/kauth.h>
 
@@ -100,27 +100,30 @@
 int
 ipcperm(kauth_cred_t cred, struct ipc_perm *perm, int mode_req)
 {
-	uid_t	uid = kauth_cred_getuid(cred);	/* avoid multiple calls */
-	int	want_mod_controlinfo = (mode_req & IPC_M);
-	int	is_member;
-	mode_t	mode_owner = (perm->mode & S_IRWXU);
-	mode_t	mode_group = (perm->mode & S_IRWXG) << 3;
-	mode_t	mode_world = (perm->mode & S_IRWXO) << 6;
+	uid_t   uid = kauth_cred_getuid(cred);  /* avoid multiple calls */
+	int     want_mod_controlinfo = (mode_req & IPC_M);
+	int     is_member;
+	mode_t  mode_owner = (perm->mode & S_IRWXU);
+	mode_t  mode_group = (perm->mode & S_IRWXG) << 3;
+	mode_t  mode_world = (perm->mode & S_IRWXO) << 6;
 
 	/* Grant all rights to super user */
-	if (!suser(cred, (u_short *)NULL))
-		return (0);
+	if (!suser(cred, (u_short *)NULL)) {
+		return 0;
+	}
 
 	/* Grant or deny rights based on ownership */
 	if (uid == perm->cuid || uid == perm->uid) {
-		if (want_mod_controlinfo)
-			return (0);
+		if (want_mod_controlinfo) {
+			return 0;
+		}
 
-		return ((mode_req & mode_owner) == mode_req ? 0 : EACCES);
+		return (mode_req & mode_owner) == mode_req ? 0 : EACCES;
 	} else {
 		/* everyone else who wants to modify control info is denied */
-		if (want_mod_controlinfo)
-			return (EPERM);
+		if (want_mod_controlinfo) {
+			return EPERM;
+		}
 	}
 
 	/*
@@ -129,30 +132,30 @@ ipcperm(kauth_cred_t cred, struct ipc_perm *perm, int mode_req)
 	 * common case.
 	 */
 	if ((mode_req & mode_group & mode_world) == mode_req) {
-		return (0);
+		return 0;
 	} else {
 		if ((mode_req & mode_group) != mode_req) {
 			if ((!kauth_cred_ismember_gid(cred, perm->gid, &is_member) && is_member) &&
 			    ((perm->gid == perm->cgid) ||
-			     (!kauth_cred_ismember_gid(cred, perm->cgid, &is_member) && is_member))) {
-			    	return (EACCES);
+			    (!kauth_cred_ismember_gid(cred, perm->cgid, &is_member) && is_member))) {
+				return EACCES;
 			} else {
 				if ((mode_req & mode_world) != mode_req) {
-					return (EACCES);
+					return EACCES;
 				} else {
-					return (0);
+					return 0;
 				}
 			}
 		} else {
 			if ((!kauth_cred_ismember_gid(cred, perm->gid, &is_member) && is_member) ||
 			    ((perm->gid != perm->cgid) &&
-			     (!kauth_cred_ismember_gid(cred, perm->cgid, &is_member) && is_member))) {
-			    	return (0);
+			    (!kauth_cred_ismember_gid(cred, perm->cgid, &is_member) && is_member))) {
+				return 0;
 			} else {
 				if ((mode_req & mode_world) != mode_req) {
-					return (EACCES);
+					return EACCES;
 				} else {
-					return (0);
+					return 0;
 				}
 			}
 		}

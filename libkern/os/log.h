@@ -53,8 +53,21 @@ extern bool startup_serial_logging_active;
 extern uint64_t startup_serial_num_procs;
 #endif /* XNU_KERNEL_PRIVATE */
 
+#ifdef KERNEL
+#define OS_LOG_BUFFER_MAX_SIZE 256
+#else
+#define OS_LOG_BUFFER_MAX_SIZE 1024
+#endif
+
+// The OS_LOG_BUFFER_MAX_SIZE limit includes the metadata that
+// must be included in the os_log firehose buffer
+#define OS_LOG_DATA_MAX_SIZE (OS_LOG_BUFFER_MAX_SIZE - 16)
+
 OS_ALWAYS_INLINE static inline void _os_log_verify_format_str(__unused const char *msg, ...) __attribute__((format(os_log, 1, 2)));
-OS_ALWAYS_INLINE static inline void _os_log_verify_format_str(__unused const char *msg, ...) { /* placeholder */ }
+OS_ALWAYS_INLINE static inline void
+_os_log_verify_format_str(__unused const char *msg, ...)                                       /* placeholder */
+{
+}
 
 #if OS_OBJECT_USE_OBJC
 OS_OBJECT_DECL(os_log);
@@ -77,7 +90,7 @@ typedef struct os_log_s *os_log_t;
  * Use this to log a message in accordance with current system settings.
  */
 #define OS_LOG_DEFAULT OS_OBJECT_GLOBAL_OBJECT(os_log_t, _os_log_default)
-__OSX_AVAILABLE_STARTING(__MAC_10_12,__IPHONE_10_0)
+__OSX_AVAILABLE_STARTING(__MAC_10_12, __IPHONE_10_0)
 OS_EXPORT
 struct os_log_s _os_log_default;
 
@@ -105,11 +118,11 @@ struct os_log_s _os_log_default;
  * potentially more than one process, usually used by daemons and services.
  */
 OS_ENUM(os_log_type, uint8_t,
-        OS_LOG_TYPE_DEFAULT = 0x00,
-        OS_LOG_TYPE_INFO    = 0x01,
-        OS_LOG_TYPE_DEBUG   = 0x02,
-        OS_LOG_TYPE_ERROR   = 0x10,
-        OS_LOG_TYPE_FAULT   = 0x11);
+    OS_LOG_TYPE_DEFAULT = 0x00,
+    OS_LOG_TYPE_INFO    = 0x01,
+    OS_LOG_TYPE_DEBUG   = 0x02,
+    OS_LOG_TYPE_ERROR   = 0x10,
+    OS_LOG_TYPE_FAULT   = 0x11);
 
 /*!
  * @function os_log_create
@@ -124,7 +137,7 @@ OS_ENUM(os_log_type, uint8_t,
  * behavior for messages.
  *
  * A log object may customize logging system behavior for its messages by
- * adding a configuration file in /Library/LogPreferences. Most options 
+ * adding a configuration file in /Library/LogPreferences. Most options
  * accept 3 values: "Default", "Yes" or "No" as strings, where "Default"
  * signifies follow system behavior for the level of messages.
  *
@@ -143,7 +156,7 @@ OS_ENUM(os_log_type, uint8_t,
  *              <string>Default</string>
  *              <key>Persist</key>              <!-- Do not persist to disk, use memory-only buffer if enabled -->
  *              <string>No</string>
- *              <key>TTL</key>          	<!-- Follow system default behavior if persistence is enabled -->
+ *              <key>TTL</key>                  <!-- Follow system default behavior if persistence is enabled -->
  *              <string>Default</string>        <!-- Can specify in days with "d" or hours "h" (e.g., "4h" = 4 hours) -->
  *          </dict>
  *
@@ -165,7 +178,7 @@ OS_ENUM(os_log_type, uint8_t,
  *              <dict>
  *                  <key>Persist</key>          <!-- If enabled persist to disk -->
  *                  <string>Yes</string>
- *                  <key>TTL</key>          	<!-- Store Info messages for 2 days -->
+ *                  <key>TTL</key>              <!-- Store Info messages for 2 days -->
  *                  <string>2d</string>
  *              </dict>
  *
@@ -198,7 +211,7 @@ OS_ENUM(os_log_type, uint8_t,
  *
  * A value will always be returned to allow for dynamic enablement.
  */
-__OSX_AVAILABLE_STARTING(__MAC_10_12,__IPHONE_10_0)
+__OSX_AVAILABLE_STARTING(__MAC_10_12, __IPHONE_10_0)
 OS_EXPORT OS_NOTHROW OS_WARN_RESULT OS_OBJECT_RETURNS_RETAINED
 os_log_t
 os_log_create(const char *subsystem, const char *category);
@@ -250,7 +263,7 @@ os_log_debug_enabled(os_log_t log);
  * Insert a log message into the Unified Logging and Tracing system.
  *
  * @discussion
- * Insert a log message into the Unified Logging and Tracing system in 
+ * Insert a log message into the Unified Logging and Tracing system in
  * accordance with the preferences specified by the provided log object.
  * These messages cannot be disabled and therefore always captured either
  * to memory or disk.
@@ -287,7 +300,7 @@ os_log_debug_enabled(os_log_t log);
  * Insert a development log message into the Unified Logging and Tracing system.
  *
  * @discussion
- * Insert a log message into the Unified Logging and Tracing system in 
+ * Insert a log message into the Unified Logging and Tracing system in
  * accordance with the preferences specified by the provided log object.
  *
  * When an os_activity_id_t is present, the log message will also be scoped by
@@ -393,7 +406,7 @@ os_log_debug_enabled(os_log_t log);
  * @discussion
  * Log a fault message issue into the Unified Logging and Tracing system
  * signifying a multi-process (i.e., system error) related issue, either
- * due to interaction via IPC or some other.  Faults will gather information 
+ * due to interaction via IPC or some other.  Faults will gather information
  * from the entire process chain and record it for later inspection.
  *
  * When an os_activity_id_t is present, the log message will also be scoped by
@@ -448,6 +461,38 @@ os_log_debug_enabled(os_log_t log);
     _os_log_internal(&__dso_handle, log, type, _os_log_fmt, ##__VA_ARGS__);                 \
     __asm__(""); /* avoid tailcall */                                                       \
 })
+
+/*!
+ * @function os_log_driverKit
+ *
+ * @abstract
+ * Log a message using a specific type. This variant should be called only from dexts.
+ *
+ * @discussion
+ * Will log a message with the provided os_log_type_t.
+ *
+ * @param log
+ * Pass OS_LOG_DEFAULT or a log object previously created with os_log_create.
+ *
+ * @param type
+ * Pass a valid type from os_log_type_t.
+ *
+ * @param format
+ * A format string to generate a human-readable log message when the log
+ * line is decoded.  This string must be a constant string, not dynamically
+ * generated.  Supports all standard printf types and %@ (objects).
+ *
+ * @result
+ * Returns EPERM if the caller is not a driverKit process, 0 in case of success.
+ */
+#define os_log_driverKit(out, log, type, format, ...) __extension__({                            \
+    _Static_assert(__builtin_constant_p(format), "format string must be constant");         \
+    __attribute__((section("__TEXT,__os_log"))) static const char _os_log_fmt[] = format;   \
+    _os_log_verify_format_str(format, ##__VA_ARGS__);                                       \
+    (*(out)) = _os_log_internal_driverKit(&__dso_handle, log, type, _os_log_fmt, ##__VA_ARGS__);                 \
+    __asm__(""); /* avoid tailcall */                                                       \
+})
+
 
 /*!
  * @function os_log_sensitive_debug
@@ -508,6 +553,16 @@ OS_EXPORT OS_NOTHROW
 void
 _os_log_internal(void *dso, os_log_t log, os_log_type_t type, const char *message, ...);
 
+/*!
+ * @function _os_log_internal_driverKit
+ *
+ * @abstract
+ * Internal function used by macros.
+ */
+__WATCHOS_AVAILABLE(6.0) __OSX_AVAILABLE(10.15) __IOS_AVAILABLE(13.0) __TVOS_AVAILABLE(13.0)
+OS_EXPORT OS_NOTHROW
+int
+_os_log_internal_driverKit(void *dso, os_log_t log, os_log_type_t type, const char *message, ...);
 __END_DECLS
 
 #endif /* __os_log_h */

@@ -55,6 +55,6 @@ extern void arm_init_idle_cpu(cpu_data_t *args);
 
 extern void init_cpu_timebase(boolean_t enable_fiq);
 
-#define cpu_pause() do {} while (0)	/* Not for this architecture */
+#define cpu_pause() do {} while (0)     /* Not for this architecture */
 
 #endif /* _ARM_MACHINE_CPU_H_ */

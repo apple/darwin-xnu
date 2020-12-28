@@ -10,29 +10,43 @@
 #
 # Commands for the build environment
 #
+
 ##
 # Verbosity
 ##
+
 ifeq ($(RC_XBS),YES)
-VERBOSE = YES
+	VERBOSE = YES
 else
-VERBOSE = NO
+	VERBOSE = NO
 endif
+
+ECHO = echo
+
+LOG = echo
+makelog = $(info $1)
+ERR = $(ECHO) > /dev/stderr
+
+QUIET ?= 0
+ifneq ($(QUIET),0)
+	LOG = :
+	makelog =
+	ifeq ($(VERBOSE),YES)
+		override VERBOSE = NO
+	endif
+endif
+
 ifeq ($(VERBOSE),YES)
-_v =
-_vstdout =
+	_v =
+	_vstdout =
+	XCRUN = /usr/bin/xcrun -verbose
 else
-_v = @
-_vstdout = > /dev/null
+	_v = @
+	_vstdout = > /dev/null
+	XCRUN = /usr/bin/xcrun
 endif
 
 VERBOSE_GENERATED_MAKE_FRAGMENTS = NO
-
-ifeq ($(VERBOSE),YES)
-	XCRUN = /usr/bin/xcrun -verbose
-else
-	XCRUN = /usr/bin/xcrun
-endif
 
 SDKROOT ?= macosx
 HOST_SDKROOT ?= macosx
@@ -66,6 +80,15 @@ ifeq ($(PLATFORM),)
 	endif
 endif
 
+ifeq ($(PLATFORM),MacOSX)
+	ifeq (DriverKit,$(shell echo $(SDKROOT_RESOLVED) | sed 's,^.*/\([^/1-9]*\)[1-9][^/]*\.sdk$$,\1,'))
+		export PLATFORM := DriverKit
+		export DRIVERKIT ?= 1
+		export DRIVERKITROOT ?= /System/DriverKit
+		export DRIVERKITRUNTIMEROOT = $(DRIVERKITROOT)/Runtime
+	endif
+endif
+
 ifeq ($(SDKVERSION),)
      export SDKVERSION := $(shell $(XCRUN) -sdk $(SDKROOT) -show-sdk-version)
 endif
@@ -86,6 +109,9 @@ ifeq ($(MIGCOM),)
 endif
 ifeq ($(MIGCC),)
 	export MIGCC := $(CC)
+endif
+ifeq ($(IIG),)
+	export IIG := $(shell $(XCRUN) -sdk $(SDKROOT) -find iig)
 endif
 ifeq ($(STRIP),)
 	export STRIP := $(shell $(XCRUN) -sdk $(SDKROOT) -find strip)
@@ -123,7 +149,7 @@ endif
 #
 SUPPORTED_EMBEDDED_PLATFORMS := iPhoneOS iPhoneOSNano tvOS AppleTVOS WatchOS BridgeOS
 SUPPORTED_SIMULATOR_PLATFORMS := iPhoneSimulator iPhoneNanoSimulator tvSimulator AppleTVSimulator WatchSimulator
-SUPPORTED_PLATFORMS := MacOSX $(SUPPORTED_SIMULATOR_PLATFORMS) $(SUPPORTED_EMBEDDED_PLATFORMS)
+SUPPORTED_PLATFORMS := MacOSX DriverKit $(SUPPORTED_SIMULATOR_PLATFORMS) $(SUPPORTED_EMBEDDED_PLATFORMS)
 
 # Platform-specific tools
 ifneq ($(filter $(SUPPORTED_EMBEDDED_PLATFORMS),$(PLATFORM)),)
@@ -170,7 +196,6 @@ TOUCH = /usr/bin/touch
 SLEEP = /bin/sleep
 AWK = /usr/bin/awk
 SED = /usr/bin/sed
-ECHO = /bin/echo
 PLUTIL = /usr/bin/plutil
 
 #

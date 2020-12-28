@@ -2,7 +2,7 @@
  * Coyright (c) 2005-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -35,58 +35,58 @@
  * Refer to comments in bsd/sys/munge.h
  */
 
-static inline __attribute__((always_inline)) void 
+static inline __attribute__((always_inline)) void
 munge_32_to_64_unsigned(volatile uint64_t *dest, volatile uint32_t *src, int count);
 
-void 
+void
 munge_w(void *args)
 {
 	munge_32_to_64_unsigned(args, args, 1);
 }
 
-void 
+void
 munge_ww(void *args)
 {
 	munge_32_to_64_unsigned(args, args, 2);
 }
 
-void 
+void
 munge_www(void *args)
 {
 	munge_32_to_64_unsigned(args, args, 3);
 }
 
-void 
+void
 munge_wwww(void *args)
 {
 	munge_32_to_64_unsigned(args, args, 4);
 }
 
-void 
+void
 munge_wwwww(void *args)
 {
 	munge_32_to_64_unsigned(args, args, 5);
 }
 
-void 
+void
 munge_wwwwww(void *args)
 {
 	munge_32_to_64_unsigned(args, args, 6);
 }
 
-void 
+void
 munge_wwwwwww(void *args)
 {
 	munge_32_to_64_unsigned(args, args, 7);
 }
 
-void 
+void
 munge_wwwwwwww(void *args)
 {
 	munge_32_to_64_unsigned(args, args, 8);
 }
 
-void 
+void
 munge_wl(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
@@ -96,7 +96,7 @@ munge_wl(void *args)
 	out_args[0] = in_args[0];
 }
 
-void 
+void
 munge_wwl(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
@@ -107,7 +107,7 @@ munge_wwl(void *args)
 	out_args[0] = in_args[0];
 }
 
-void 
+void
 munge_wwlw(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
@@ -118,7 +118,7 @@ munge_wwlw(void *args)
 	out_args[1] = in_args[1];
 	out_args[0] = in_args[0];
 }
-void 
+void
 munge_wwlll(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
@@ -193,7 +193,7 @@ munge_wlwwwllw(void *args)
 	munge_wlwwwll(args);
 }
 
-void 
+void
 munge_wlwwlwlw(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
@@ -209,7 +209,7 @@ munge_wlwwlwlw(void *args)
 	out_args[0] = in_args[0];
 }
 
-void 
+void
 munge_wll(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
@@ -220,7 +220,7 @@ munge_wll(void *args)
 	out_args[0] = in_args[0];
 }
 
-void 
+void
 munge_wlll(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
@@ -232,7 +232,7 @@ munge_wlll(void *args)
 	out_args[0] = in_args[0];
 }
 
-void 
+void
 munge_wllll(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
@@ -258,7 +258,7 @@ munge_wllww(void *args)
 	out_args[0] = in_args[0];
 }
 
-void 
+void
 munge_wllwwll(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
@@ -273,7 +273,7 @@ munge_wllwwll(void *args)
 	out_args[0] = in_args[0];
 }
 
-void 
+void
 munge_wwwlw(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
@@ -286,7 +286,7 @@ munge_wwwlw(void *args)
 	out_args[0] = in_args[0];
 }
 
-void 
+void
 munge_wwwlww(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
@@ -299,8 +299,8 @@ munge_wwwlww(void *args)
 	out_args[1] = in_args[1];
 	out_args[0] = in_args[0];
 }
-	
-void 
+
+void
 munge_wwwl(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
@@ -312,7 +312,7 @@ munge_wwwl(void *args)
 	out_args[0] = in_args[0];
 }
 
-void 
+void
 munge_wwwwlw(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
@@ -326,7 +326,7 @@ munge_wwwwlw(void *args)
 	out_args[0] = in_args[0];
 }
 
-void 
+void
 munge_wwwwl(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
@@ -339,7 +339,7 @@ munge_wwwwl(void *args)
 	out_args[0] = in_args[0];
 }
 
-void 
+void
 munge_wwwwwl(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
@@ -353,7 +353,7 @@ munge_wwwwwl(void *args)
 	out_args[0] = in_args[0];
 }
 
-void 
+void
 munge_wwwwwlww(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
@@ -369,7 +369,7 @@ munge_wwwwwlww(void *args)
 	out_args[0] = in_args[0];
 }
 
-void 
+void
 munge_wwwwwllw(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
@@ -385,7 +385,7 @@ munge_wwwwwllw(void *args)
 	out_args[0] = in_args[0];
 }
 
-void 
+void
 munge_wwwwwlll(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
@@ -401,7 +401,7 @@ munge_wwwwwlll(void *args)
 	out_args[0] = in_args[0];
 }
 
-void 
+void
 munge_wwwwwwl(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
@@ -415,8 +415,8 @@ munge_wwwwwwl(void *args)
 	out_args[1] = in_args[1];
 	out_args[0] = in_args[0];
 }
-	
-void 
+
+void
 munge_wwwwwwlw(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
@@ -431,8 +431,8 @@ munge_wwwwwwlw(void *args)
 	out_args[1] = in_args[1];
 	out_args[0] = in_args[0];
 }
-	
-void 
+
+void
 munge_wwwwwwll(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
@@ -448,7 +448,7 @@ munge_wwwwwwll(void *args)
 	out_args[0] = in_args[0];
 }
 
-void 
+void
 munge_wsw(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
@@ -459,7 +459,7 @@ munge_wsw(void *args)
 	out_args[0] = in_args[0];
 }
 
-void 
+void
 munge_wws(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
@@ -470,7 +470,7 @@ munge_wws(void *args)
 	out_args[0] = in_args[0];
 }
 
-void 
+void
 munge_wwws(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
@@ -496,25 +496,25 @@ munge_wwwsw(void *args)
 	out_args[0] = in_args[0];
 }
 
-void 
+void
 munge_llllll(void *args __unused)
 {
 	/* Nothing to do, already all 64-bit */
 }
 
-void 
+void
 munge_ll(void *args __unused)
 {
 	/* Nothing to do, already all 64-bit */
 }
 
-void 
+void
 munge_l(void *args __unused)
 {
 	/* Nothing to do, already all 64-bit */
 }
 
-void 
+void
 munge_lw(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
@@ -524,29 +524,29 @@ munge_lw(void *args)
 	out_args[0] = *(volatile uint64_t*)&in_args[0];
 }
 
-void 
+void
 munge_lwww(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
 
-	out_args[3] = in_args[4]; 
+	out_args[3] = in_args[4];
 	out_args[2] = in_args[3];
 	out_args[1] = in_args[2];
 	out_args[0] = *(volatile uint64_t*)&in_args[0];
 }
 
-void 
+void
 munge_lwwwwwww(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
 
 	out_args[7] = in_args[8];
-	out_args[6] = in_args[7]; 
+	out_args[6] = in_args[7];
 	out_args[5] = in_args[6];
 	out_args[4] = in_args[5];
-	out_args[3] = in_args[4]; 
+	out_args[3] = in_args[4];
 	out_args[2] = in_args[3];
 	out_args[1] = in_args[2];
 	out_args[0] = *(volatile uint64_t*)&in_args[0];
@@ -570,7 +570,7 @@ munge_wwlwww(void *args)
 {
 	volatile uint64_t *out_args = (volatile uint64_t*)args;
 	volatile uint32_t *in_args = (volatile uint32_t*)args;
-	
+
 	out_args[5] = in_args[6];
 	out_args[4] = in_args[5];
 	out_args[3] = in_args[4];
@@ -610,15 +610,15 @@ munge_wwlwwwl(void *args)
 
 /*
  * Munge array of 32-bit values into an array of 64-bit values,
- * without sign extension.  Note, src and dest can be the same 
+ * without sign extension.  Note, src and dest can be the same
  * (copies from end of array)
  */
-static inline __attribute__((always_inline)) void 
+static inline __attribute__((always_inline)) void
 munge_32_to_64_unsigned(volatile uint64_t *dest, volatile uint32_t *src, int count)
 {
 	int i;
 
 	for (i = count - 1; i >= 0; i--) {
 		dest[i] = src[i];
-	}   
+	}
 }

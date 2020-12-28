@@ -478,36 +478,39 @@ def ShowAllIPC(cmd_args=None):
 
 # EndMacro: showallipc
 
-@lldb_command('showipcsummary')
-def ShowIPCSummary(cmd_args=None):
+@lldb_command('showipcsummary', fancy=True)
+def ShowIPCSummary(cmd_args=None, cmd_options={}, O=None):
     """ Summarizes the IPC state of all tasks. 
         This is a convenient way to dump some basic clues about IPC messaging. You can use the output to determine
         tasks that are candidates for further investigation.
     """
-    print GetTaskIPCSummary.header
-    ipc_table_size = 0
-    for t in kern.tasks:
-        (summary, table_size) = GetTaskIPCSummary(t)
-        ipc_table_size += table_size
-        print summary
-    for t in kern.terminated_tasks:
-        (summary, table_size) = GetTaskIPCSummary(t)
-        ipc_table_size += table_size
-    print "Total Table size: {:d}".format(ipc_table_size)
-    return
+    with O.table(GetTaskIPCSummary.header):
+        ipc_table_size = 0
+        for t in kern.tasks:
+            (summary, table_size) = GetTaskIPCSummary(t)
+            ipc_table_size += table_size
+            print summary
+        for t in kern.terminated_tasks:
+            (summary, table_size) = GetTaskIPCSummary(t)
+            ipc_table_size += table_size
+        print "Total Table size: {:d}".format(ipc_table_size)
 
 def GetKObjectFromPort(portval):
     """ Get Kobject description from the port.
         params: portval - core.value representation of 'ipc_port *' object
         returns: str - string of kobject information
     """
-    kobject_str = "{0: <#020x}".format(portval.kdata.kobject)
     io_bits = unsigned(portval.ip_object.io_bits)
-    objtype_index = io_bits & 0xfff
+    if io_bits & 0x400 :
+        kobject_val = portval.kdata.kolabel.ikol_kobject
+    else:
+        kobject_val = portval.kdata.kobject
+    kobject_str = "{0: <#020x}".format(kobject_val)
+    objtype_index = io_bits & 0x3ff
     if objtype_index < len(xnudefines.kobject_types) :
         objtype_str = xnudefines.kobject_types[objtype_index]
         if objtype_str == 'IOKIT_OBJ':
-            iokit_classnm = GetObjectTypeStr(portval.kdata.kobject)
+            iokit_classnm = GetObjectTypeStr(kobject_val)
             if not iokit_classnm:
                 iokit_classnm = "<unknown class>"
             else:
@@ -516,7 +519,7 @@ def GetKObjectFromPort(portval):
         else:
             desc_str = "kobject({0:s})".format(objtype_str)
             if xnudefines.kobject_types[objtype_index] in ('TASK_RESUME', 'TASK'):
-                desc_str += " " + GetProcNameForTask(Cast(portval.kdata.kobject, 'task *'))
+                desc_str += " " + GetProcNameForTask(Cast(kobject_val, 'task *'))
     else:
         desc_str = "kobject(UNKNOWN) {:d}".format(objtype_index)
     return kobject_str + " " + desc_str
@@ -561,9 +564,8 @@ def GetPortDestinationSummary(port):
     format_string = "{0: <20s} {1: <20s}"
     destname_str = ''
     destination_str = ''
-    ipc_space_kernel = unsigned(kern.globals.ipc_space_kernel)
     target_spaceval = port.data.receiver
-    if unsigned(target_spaceval) == ipc_space_kernel :
+    if int(port.ip_object.io_bits) & 0x800 :
         destname_str = GetKObjectFromPort(port)
     else:
         if int(port.ip_object.io_bits) & 0x80000000 :
@@ -592,6 +594,9 @@ def GetIPCEntrySummary(entry, ipc_name='', rights_filter=0):
             'S'     : Send right
             'R'     : Receive right
             'O'     : Send-once right
+            'm'     : Immovable send port
+            'i'     : Immovable receive port
+            'g'     : No grant port
         types of notifications:
             'd'     : Dead-Name notification requested
             's'     : Send-Possible notification armed
@@ -649,6 +654,12 @@ def GetIPCEntrySummary(entry, ipc_name='', rights_filter=0):
         if portval.ip_nsrequest != 0: right_str += 'n'
         # port-destroy notification requested
         if portval.ip_pdrequest != 0: right_str += 'x'
+        # Immovable receive rights
+        if portval.ip_immovable_receive != 0: right_str += 'i'
+        # Immovable send rights
+        if portval.ip_immovable_send != 0: right_str += 'm'
+        # No-grant Port
+        if portval.ip_no_grant != 0: right_str += 'g'
 
         # early-out if the rights-filter doesn't match
         if rights_filter != 0 and rights_filter != right_str:
@@ -662,7 +673,7 @@ def GetIPCEntrySummary(entry, ipc_name='', rights_filter=0):
         # 1 0     32
         # 1 1     16
         ie_gen_roll = { 0:'.64', 1:'.48', 2:'.32', 3:'.16' }
-        ipc_name = '{:s}{:s}'.format(strip(ipc_name), ie_gen_roll[(ie_bits & 0x00c00000) >> 22])
+        ipc_name = '{:s}{:s}'.format(ipc_name.strip(), ie_gen_roll[(ie_bits & 0x00c00000) >> 22])
 
         # now show the port destination part
         destname_str = GetPortDestinationSummary(Cast(ie_object, 'ipc_port_t'))
@@ -786,6 +797,9 @@ def ShowTaskRights(cmd_args=None, cmd_options={}):
                    'S'     : Send right
                    'R'     : Receive right
                    'O'     : Send-once right
+                   'm'     : Immovable send port
+                   'i'     : Immovable receive port
+                   'g'     : No grant port
                types of notifications:
                    'd'     : Dead-Name notification requested
                    's'     : Send-Possible notification armed
@@ -824,6 +838,9 @@ def ShowTaskRightsBt(cmd_args=None, cmd_options={}):
                    'S'     : Send right
                    'R'     : Receive right
                    'O'     : Send-once right
+                   'm'     : Immovable send port
+                   'i'     : Immovable receive port
+                   'g'     : No grant port
                types of notifications:
                    'd'     : Dead-Name notification requested
                    's'     : Send-Possible notification armed
@@ -864,6 +881,9 @@ def ShowAllRights(cmd_args=None, cmd_options={}):
                     'S'     : Send right
                     'R'     : Receive right
                     'O'     : Send-once right
+                    'm'     : Immovable send port
+                    'i'     : Immovable receive port
+                    'g'     : No grant port
                 types of notifications:
                     'd'     : Dead-Name notification requested
                     's'     : Send-Possible notification armed
@@ -1533,7 +1553,7 @@ def ShowMQueue(cmd_args=None, cmd_options={}):
         pset = unsigned(ArgumentStringToInt(cmd_args[0])) - unsigned(psetoff)
         print PrintPortSetSummary.header
         PrintPortSetSummary(kern.GetValueFromAddress(pset, 'struct ipc_pset *'), space)
-    elif int(wq_type) == 2:
+    elif int(wq_type) in [2, 1]:
         portoff = getfieldoffset('struct ipc_port', 'ip_messages')
         port = unsigned(ArgumentStringToInt(cmd_args[0])) - unsigned(portoff)
         print PrintPortSummary.header

@@ -1,3 +1,2 @@
-# KASAN
-san/kasan-arm64.c standard
-san/kasan-test-arm64.s standard
+san/kasan-arm64.c       optional config_kasan
+san/kasan-test-arm64.s  optional config_kasan

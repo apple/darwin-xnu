@@ -62,20 +62,20 @@ d_ioctl_t       random_ioctl;
  */
 static struct cdevsw random_cdevsw =
 {
-	random_open,		/* open */
-	random_close,		/* close */
-	random_read,		/* read */
-	random_write,		/* write */
-	random_ioctl,		/* ioctl */
+	random_open,            /* open */
+	random_close,           /* close */
+	random_read,            /* read */
+	random_write,           /* write */
+	random_ioctl,           /* ioctl */
 	(stop_fcn_t *)nulldev, /* stop */
 	(reset_fcn_t *)nulldev, /* reset */
-	NULL,				/* tty's */
-	eno_select,			/* select */
-	eno_mmap,			/* mmap */
-	eno_strat,			/* strategy */
-	eno_getc,			/* getc */
-	eno_putc,			/* putc */
-	0					/* type */
+	NULL,                           /* tty's */
+	eno_select,                     /* select */
+	eno_mmap,                       /* mmap */
+	eno_strat,                      /* strategy */
+	eno_getc,                       /* getc */
+	eno_putc,                       /* putc */
+	0                                       /* type */
 };
 
 
@@ -93,21 +93,20 @@ random_init(void)
 		panic("random_init: failed to allocate a major number!");
 	}
 
-	devfs_make_node(makedev (ret, RANDOM_MINOR), DEVFS_CHAR,
-		UID_ROOT, GID_WHEEL, 0666, "random", 0);
+	devfs_make_node(makedev(ret, RANDOM_MINOR), DEVFS_CHAR,
+	    UID_ROOT, GID_WHEEL, 0666, "random", 0);
 
 	/*
 	 * also make urandom
 	 * (which is exactly the same thing in our context)
 	 */
-	devfs_make_node(makedev (ret, URANDOM_MINOR), DEVFS_CHAR,
-		UID_ROOT, GID_WHEEL, 0666, "urandom", 0);
-
+	devfs_make_node(makedev(ret, URANDOM_MINOR), DEVFS_CHAR,
+	    UID_ROOT, GID_WHEEL, 0666, "urandom", 0);
 }
 
 int
-random_ioctl(	__unused dev_t dev, u_long cmd, __unused caddr_t data,
-				__unused int flag, __unused struct proc *p  )
+random_ioctl(   __unused dev_t dev, u_long cmd, __unused caddr_t data,
+    __unused int flag, __unused struct proc *p  )
 {
 	switch (cmd) {
 	case FIONBIO:
@@ -117,7 +116,7 @@ random_ioctl(	__unused dev_t dev, u_long cmd, __unused caddr_t data,
 		return ENODEV;
 	}
 
-	return (0);
+	return 0;
 }
 
 /*
@@ -133,15 +132,17 @@ random_open(__unused dev_t dev, int flags, __unused int devtype, __unused struct
 	 * make sure that we have privledges do so
 	 */
 	if (flags & FWRITE) {
-		if (securelevel >= 2)
-			return (EPERM);
+		if (securelevel >= 2) {
+			return EPERM;
+		}
 #ifndef __APPLE__
-		if ((securelevel >= 1) && proc_suser(p))
-			return (EPERM);
-#endif	/* !__APPLE__ */
+		if ((securelevel >= 1) && proc_suser(p)) {
+			return EPERM;
+		}
+#endif  /* !__APPLE__ */
 	}
 
-	return (0);
+	return 0;
 }
 
 
@@ -152,7 +153,7 @@ random_open(__unused dev_t dev, int flags, __unused int devtype, __unused struct
 int
 random_close(__unused dev_t dev, __unused int flags, __unused int mode, __unused struct proc *p)
 {
-	return (0);
+	return 0;
 }
 
 
@@ -161,29 +162,32 @@ random_close(__unused dev_t dev, __unused int flags, __unused int mode, __unused
  * prng.
  */
 int
-random_write (dev_t dev, struct uio *uio, __unused int ioflag)
+random_write(dev_t dev, struct uio *uio, __unused int ioflag)
 {
-    int retCode = 0;
-    char rdBuffer[256];
+	int retCode = 0;
+	char rdBuffer[256];
 
-    if (minor(dev) != RANDOM_MINOR)
-	return EPERM;
+	if (minor(dev) != RANDOM_MINOR) {
+		return EPERM;
+	}
 
-    /* Security server is sending us entropy */
+	/* Security server is sending us entropy */
 
-    while (uio_resid(uio) > 0 && retCode == 0) {
-        /* get the user's data */
-        int bytesToInput = MIN(uio_resid(uio),
-			       (user_ssize_t) sizeof(rdBuffer));
-        retCode = uiomove(rdBuffer, bytesToInput, uio);
-        if (retCode != 0)
-	    break;
-	retCode = write_random(rdBuffer, bytesToInput);
-        if (retCode != 0)
-	    break;
-    }
+	while (uio_resid(uio) > 0 && retCode == 0) {
+		/* get the user's data */
+		int bytesToInput = MIN(uio_resid(uio),
+		    (user_ssize_t) sizeof(rdBuffer));
+		retCode = uiomove(rdBuffer, bytesToInput, uio);
+		if (retCode != 0) {
+			break;
+		}
+		retCode = write_random(rdBuffer, bytesToInput);
+		if (retCode != 0) {
+			break;
+		}
+	}
 
-    return retCode;
+	return retCode;
 }
 
 /*
@@ -198,12 +202,13 @@ random_read(__unused dev_t dev, struct uio *uio, __unused int ioflag)
 	user_ssize_t bytes_remaining = uio_resid(uio);
 	while (bytes_remaining > 0 && retCode == 0) {
 		int bytesToRead = MIN(bytes_remaining,
-				      (user_ssize_t) sizeof(buffer));
+		    (user_ssize_t) sizeof(buffer));
 		read_random(buffer, bytesToRead);
 
 		retCode = uiomove(buffer, bytesToRead, uio);
-		if (retCode != 0)
+		if (retCode != 0) {
 			break;
+		}
 
 		bytes_remaining = uio_resid(uio);
 	}
@@ -218,13 +223,14 @@ u_int32_t
 RandomULong(void)
 {
 	u_int32_t buf;
-	read_random(&buf, sizeof (buf));
-	return (buf);
+	read_random(&buf, sizeof(buf));
+	return buf;
 }
 
 
 int
-getentropy(__unused struct proc * p, struct getentropy_args *gap, __unused int * ret) {
+getentropy(__unused struct proc * p, struct getentropy_args *gap, __unused int * ret)
+{
 	user_addr_t user_addr;
 	uint32_t user_size;
 	char buffer[256];

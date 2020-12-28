@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -36,19 +36,20 @@ __BEGIN_DECLS
 #ifdef KERNEL_PRIVATE
 
 #include <kern/kern_cdata.h>
+#include <os/refcnt.h>
 
 #ifdef XNU_KERNEL_PRIVATE
 #include <kern/locks.h>
 
 typedef struct os_reason {
-	decl_lck_mtx_data(,       	osr_lock)
-	unsigned int			osr_refcount;
-	uint32_t			osr_namespace;
-	uint64_t			osr_code;
-	uint64_t			osr_flags;
-	uint32_t			osr_bufsize;
-	struct kcdata_descriptor	osr_kcd_descriptor;
-	char 				*osr_kcd_buf;
+	decl_lck_mtx_data(, osr_lock);
+	os_refcnt_t                     osr_refcount;
+	uint32_t                        osr_namespace;
+	uint64_t                        osr_code;
+	uint64_t                        osr_flags;
+	uint32_t                        osr_bufsize;
+	struct kcdata_descriptor        osr_kcd_descriptor;
+	char                            *osr_kcd_buf;
 } *os_reason_t;
 
 #define OS_REASON_NULL ((os_reason_t) 0)
@@ -59,7 +60,7 @@ typedef struct os_reason {
 void os_reason_init(void);
 
 os_reason_t build_userspace_exit_reason(uint32_t reason_namespace, uint64_t reason_code, user_addr_t payload, uint32_t payload_size,
-					user_addr_t reason_string, uint64_t reason_flags);
+    user_addr_t reason_string, uint64_t reason_flags);
 char *launchd_exit_reason_get_string_desc(os_reason_t exit_reason);
 
 /* The blocking allocation is currently not exported to KEXTs */
@@ -76,7 +77,8 @@ int os_reason_alloc_buffer_noblock(os_reason_t cur_reason, uint32_t osr_bufsize)
 struct kcdata_descriptor * os_reason_get_kcdata_descriptor(os_reason_t cur_reason);
 void os_reason_ref(os_reason_t cur_reason);
 void os_reason_free(os_reason_t cur_reason);
-
+void os_reason_set_flags(os_reason_t cur_reason, uint64_t flags);
+void os_reason_set_description_data(os_reason_t cur_reason, uint32_t type, void *reason_data, uint32_t reason_data_len);
 #endif /* KERNEL_PRIVATE */
 
 /*
@@ -97,7 +99,8 @@ void os_reason_free(os_reason_t cur_reason);
 #define OS_REASON_REPORTCRASH   12
 #define OS_REASON_COREANIMATION 13
 #define OS_REASON_AGGREGATED    14
-#define OS_REASON_ASSERTIOND    15
+#define OS_REASON_RUNNINGBOARD  15
+#define OS_REASON_ASSERTIOND    OS_REASON_RUNNINGBOARD  /* old name */
 #define OS_REASON_SKYWALK       16
 #define OS_REASON_SETTINGS      17
 #define OS_REASON_LIBSYSTEM     18
@@ -107,11 +110,15 @@ void os_reason_free(os_reason_t cur_reason);
 #define OS_REASON_WATCHKIT      22
 #define OS_REASON_GUARD         23
 #define OS_REASON_ANALYTICS     24
+#define OS_REASON_SANDBOX       25
+#define OS_REASON_SECURITY      26
+#define OS_REASON_ENDPOINTSECURITY      27
+#define OS_REASON_PAC_EXCEPTION 28
 
 /*
  * Update whenever new OS_REASON namespaces are added.
  */
-#define OS_REASON_MAX_VALID_NAMESPACE OS_REASON_ANALYTICS
+#define OS_REASON_MAX_VALID_NAMESPACE OS_REASON_PAC_EXCEPTION
 
 #define OS_REASON_BUFFER_MAX_SIZE 5120
 
@@ -153,7 +160,8 @@ void os_reason_free(os_reason_t cur_reason);
  *
  * Outputs:             Does not return.
  */
-void abort_with_reason(uint32_t reason_namespace, uint64_t reason_code, const char *reason_string, uint64_t reason_flags) __attribute__((noreturn));
+void abort_with_reason(uint32_t reason_namespace, uint64_t reason_code, const char *reason_string, uint64_t reason_flags)
+__attribute__((noreturn, cold));
 
 /*
  * abort_with_payload: Used to exit the current process and pass along
@@ -171,7 +179,7 @@ void abort_with_reason(uint32_t reason_namespace, uint64_t reason_code, const ch
  * Outputs:             Does not return.
  */
 void abort_with_payload(uint32_t reason_namespace, uint64_t reason_code, void *payload, uint32_t payload_size, const char *reason_string,
-                                uint64_t reason_flags) __attribute__((noreturn));
+    uint64_t reason_flags) __attribute__((noreturn, cold));
 
 /*
  * terminate_with_reason: Used to terminate a specific process and pass along
@@ -210,7 +218,7 @@ int terminate_with_reason(int pid, uint32_t reason_namespace, uint64_t reason_co
  *                      returns 0 otherwise
  */
 int terminate_with_payload(int pid, uint32_t reason_namespace, uint64_t reason_code, void *payload, uint32_t payload_size,
-                                const char *reason_string, uint64_t reason_flags);
+    const char *reason_string, uint64_t reason_flags);
 #endif /* KERNEL */
 
 /*

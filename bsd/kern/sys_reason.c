@@ -46,16 +46,18 @@ extern int maxproc;
 /*
  * Lock group attributes for os_reason subsystem
  */
-lck_grp_attr_t	*os_reason_lock_grp_attr;
-lck_grp_t	*os_reason_lock_grp;
-lck_attr_t	*os_reason_lock_attr;
+lck_grp_attr_t  *os_reason_lock_grp_attr;
+lck_grp_t       *os_reason_lock_grp;
+lck_attr_t      *os_reason_lock_attr;
 
-#define OS_REASON_RESERVE_COUNT	100
-#define OS_REASON_MAX_COUNT	(maxproc + 100)
+os_refgrp_decl(static, os_reason_refgrp, "os_reason", NULL);
+
+#define OS_REASON_RESERVE_COUNT 100
+#define OS_REASON_MAX_COUNT     (maxproc + 100)
 
 static struct zone *os_reason_zone;
 static int os_reason_alloc_buffer_internal(os_reason_t cur_reason, uint32_t osr_bufsize,
-						boolean_t can_block);
+    boolean_t can_block);
 
 void
 os_reason_init()
@@ -73,7 +75,7 @@ os_reason_init()
 	 * Create OS reason zone.
 	 */
 	os_reason_zone = zinit(sizeof(struct os_reason), OS_REASON_MAX_COUNT * sizeof(struct os_reason),
-				OS_REASON_MAX_COUNT, "os reasons");
+	    OS_REASON_MAX_COUNT, "os reasons");
 	if (os_reason_zone == NULL) {
 		panic("failed to initialize os_reason_zone");
 	}
@@ -113,10 +115,10 @@ os_reason_create(uint32_t osr_namespace, uint64_t osr_code)
 		 */
 		if (os_reason_debug_disabled) {
 			kprintf("os_reason_create: failed to allocate reason with namespace: %u, code : %llu\n",
-					osr_namespace, osr_code);
+			    osr_namespace, osr_code);
 		} else {
 			panic("os_reason_create: failed to allocate reason with namespace: %u, code: %llu\n",
-					osr_namespace, osr_code);
+			    osr_namespace, osr_code);
 		}
 #endif
 		return new_reason;
@@ -131,7 +133,7 @@ os_reason_create(uint32_t osr_namespace, uint64_t osr_code)
 	new_reason->osr_kcd_buf = NULL;
 
 	lck_mtx_init(&new_reason->osr_lock, os_reason_lock_grp, os_reason_lock_attr);
-	new_reason->osr_refcount = 1;
+	os_ref_init(&new_reason->osr_refcount, &os_reason_refgrp);
 
 	return new_reason;
 }
@@ -164,7 +166,7 @@ os_reason_dealloc_buffer(os_reason_t cur_reason)
  * Returns:
  * 0 on success
  * EINVAL if the passed reason pointer is invalid or the requested size is
- * 	  larger than REASON_BUFFER_MAX_SIZE
+ *        larger than REASON_BUFFER_MAX_SIZE
  * EIO if we fail to initialize the kcdata buffer
  */
 int
@@ -183,7 +185,7 @@ os_reason_alloc_buffer(os_reason_t cur_reason, uint32_t osr_bufsize)
  * Returns:
  * 0 on success
  * EINVAL if the passed reason pointer is invalid or the requested size is
- * 	  larger than REASON_BUFFER_MAX_SIZE
+ *        larger than REASON_BUFFER_MAX_SIZE
  * ENOMEM if unable to allocate memory for the buffer
  * EIO if we fail to initialize the kcdata buffer
  */
@@ -195,7 +197,7 @@ os_reason_alloc_buffer_noblock(os_reason_t cur_reason, uint32_t osr_bufsize)
 
 static int
 os_reason_alloc_buffer_internal(os_reason_t cur_reason, uint32_t osr_bufsize,
-				boolean_t can_block)
+    boolean_t can_block)
 {
 	if (cur_reason == OS_REASON_NULL) {
 		return EINVAL;
@@ -230,7 +232,7 @@ os_reason_alloc_buffer_internal(os_reason_t cur_reason, uint32_t osr_bufsize,
 	cur_reason->osr_bufsize = osr_bufsize;
 
 	if (kcdata_memory_static_init(&cur_reason->osr_kcd_descriptor, (mach_vm_address_t) cur_reason->osr_kcd_buf,
-					KCDATA_BUFFER_BEGIN_OS_REASON, osr_bufsize, KCFLAG_USE_MEMCOPY) != KERN_SUCCESS) {
+	    KCDATA_BUFFER_BEGIN_OS_REASON, osr_bufsize, KCFLAG_USE_MEMCOPY) != KERN_SUCCESS) {
 		os_reason_dealloc_buffer(cur_reason);
 
 		lck_mtx_unlock(&cur_reason->osr_lock);
@@ -276,14 +278,8 @@ os_reason_ref(os_reason_t cur_reason)
 	}
 
 	lck_mtx_lock(&cur_reason->osr_lock);
-
-	assert(cur_reason->osr_refcount > 0);
-	if (os_add_overflow(cur_reason->osr_refcount, 1, &cur_reason->osr_refcount)) {
-		panic("os reason refcount overflow");
-	}
-
+	os_ref_retain_locked(&cur_reason->osr_refcount);
 	lck_mtx_unlock(&cur_reason->osr_lock);
-
 	return;
 }
 
@@ -300,12 +296,7 @@ os_reason_free(os_reason_t cur_reason)
 
 	lck_mtx_lock(&cur_reason->osr_lock);
 
-	if (cur_reason->osr_refcount == 0) {
-		panic("os_reason_free called on reason with zero refcount");
-	}
-
-	cur_reason->osr_refcount--;
-	if (cur_reason->osr_refcount != 0) {
+	if (os_ref_release_locked(&cur_reason->osr_refcount) > 0) {
 		lck_mtx_unlock(&cur_reason->osr_lock);
 		return;
 	}
@@ -316,4 +307,45 @@ os_reason_free(os_reason_t cur_reason)
 	lck_mtx_destroy(&cur_reason->osr_lock, os_reason_lock_grp);
 
 	zfree(os_reason_zone, cur_reason);
+}
+
+/*
+ * Sets flags on the passed reason.
+ */
+void
+os_reason_set_flags(os_reason_t cur_reason, uint64_t flags)
+{
+	if (cur_reason == OS_REASON_NULL) {
+		return;
+	}
+
+	lck_mtx_lock(&cur_reason->osr_lock);
+	cur_reason->osr_flags = flags;
+	lck_mtx_unlock(&cur_reason->osr_lock);
+}
+
+/*
+ * Allocates space and sets description data in kcd_descriptor on the passed reason.
+ */
+void
+os_reason_set_description_data(os_reason_t cur_reason, uint32_t type, void *reason_data, uint32_t reason_data_len)
+{
+	mach_vm_address_t osr_data_addr = 0;
+
+	if (cur_reason == OS_REASON_NULL) {
+		return;
+	}
+
+	if (0 != os_reason_alloc_buffer(cur_reason, kcdata_estimate_required_buffer_size(1, reason_data_len))) {
+		panic("os_reason failed to allocate");
+	}
+
+	lck_mtx_lock(&cur_reason->osr_lock);
+	if (KERN_SUCCESS != kcdata_get_memory_addr(&cur_reason->osr_kcd_descriptor, type, reason_data_len, &osr_data_addr)) {
+		panic("os_reason failed to get data address");
+	}
+	if (KERN_SUCCESS != kcdata_memcpy(&cur_reason->osr_kcd_descriptor, osr_data_addr, reason_data, reason_data_len)) {
+		panic("os_reason failed to copy description data");
+	}
+	lck_mtx_unlock(&cur_reason->osr_lock);
 }

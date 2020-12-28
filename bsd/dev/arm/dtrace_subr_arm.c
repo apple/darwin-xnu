@@ -27,10 +27,6 @@
  * Use is subject to license terms.
  */
 
-/*
- * #pragma ident	"@(#)dtrace_subr.c	1.12	05/06/08 SMI"
- */
-
 #include <sys/dtrace.h>
 #include <sys/dtrace_glue.h>
 #include <sys/dtrace_impl.h>
@@ -41,7 +37,7 @@
 #include <kern/debug.h>
 #include <arm/proc_reg.h>
 
-int             (*dtrace_pid_probe_ptr) (arm_saved_state_t *);
+int             (*dtrace_pid_probe_ptr)(arm_saved_state_t *);
 int             (*dtrace_return_probe_ptr) (arm_saved_state_t *);
 
 kern_return_t
@@ -88,12 +84,12 @@ dtrace_user_probe(arm_saved_state_t *regs, unsigned int instr)
 		 */
 		if (step == 0) {
 			/*
-			 * APPLE NOTE: We're returning KERN_FAILURE, which causes 
+			 * APPLE NOTE: We're returning KERN_FAILURE, which causes
 			 * the generic signal handling code to take over, which will effectively
 			 * deliver a EXC_BAD_INSTRUCTION to the user process.
 			 */
 			return KERN_FAILURE;
-		} 
+		}
 
 		/*
 		 * If we hit this trap unrelated to a return probe, we're
@@ -113,8 +109,9 @@ dtrace_user_probe(arm_saved_state_t *regs, unsigned int instr)
 		rwp = &CPU->cpu_ft_lock;
 		lck_rw_lock_shared(rwp);
 
-		if (dtrace_return_probe_ptr != NULL)
+		if (dtrace_return_probe_ptr != NULL) {
 			(void) (*dtrace_return_probe_ptr)(regs);
+		}
 		lck_rw_unlock_shared(rwp);
 
 		regs->pc = npc;
@@ -170,17 +167,4 @@ dtrace_user_probe(arm_saved_state_t *regs, unsigned int instr)
 	}
 
 	return KERN_FAILURE;
-}
-
-void
-dtrace_safe_synchronous_signal(void)
-{
-	/* Not implemented */
-}
-
-int
-dtrace_safe_defer_signal(void)
-{
-	/* Not implemented */
-	return 0;
 }

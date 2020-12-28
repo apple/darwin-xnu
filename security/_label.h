@@ -2,7 +2,7 @@
  * Copyright (c) 2007 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
@@ -62,7 +62,7 @@
  * $FreeBSD: src/sys/sys/_label.h,v 1.4 2003/05/08 19:49:42 rwatson Exp $
  */
 #ifndef _SECURITY_LABEL_H_
-#define	_SECURITY_LABEL_H_
+#define _SECURITY_LABEL_H_
 
 /*
  * XXXMAC: This shouldn't be exported to userland, but is because of ucred.h
@@ -70,22 +70,22 @@
  */
 #if CONFIG_EMBEDDED
 #if CONFIG_VNGUARD
-#define	MAC_MAX_SLOTS	4
+#define MAC_MAX_SLOTS   4
 #else
-#define	MAC_MAX_SLOTS	3
+#define MAC_MAX_SLOTS   3
 #endif
 #else
-#define	MAC_MAX_SLOTS	7
+#define MAC_MAX_SLOTS   7
 #endif
 
-#define	MAC_FLAG_INITIALIZED	0x0000001	/* Is initialized for use. */
+#define MAC_FLAG_INITIALIZED    0x0000001       /* Is initialized for use. */
 
 struct label {
-	int	l_flags;
+	int     l_flags;
 	union {
-		void	*l_ptr;
-		long	 l_long;
-	}	l_perpolicy[MAC_MAX_SLOTS];
+		void    *l_ptr;
+		long     l_long;
+	}       l_perpolicy[MAC_MAX_SLOTS];
 };
 
 #endif /* !_SECURITY_LABEL_H_ */

@@ -2,7 +2,7 @@
  * Copyright (c) 2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -86,7 +86,7 @@
     cpu_subtype_t cpusubtype;
 
 typedef struct mkext_basic_header {
-    MKEXT_HEADER_CORE
+	MKEXT_HEADER_CORE
 } mkext_basic_header;
 
 #define MKEXT_HDR_CAST(hdr)        ((mkext_basic_header *)(hdr))
@@ -159,16 +159,16 @@ typedef struct mkext_basic_header {
 #define kMKEXTLoadRequestDisableAutounloadKey "Disable Autounload"
 
 typedef struct mkext2_file_entry {
-    uint32_t  compressed_size;  // if zero, file is not compressed
-    uint32_t  full_size;        // full size of data w/o this struct
-    uint8_t   data[0];          // data is inline to this struct
+	uint32_t  compressed_size;// if zero, file is not compressed
+	uint32_t  full_size;    // full size of data w/o this struct
+	uint8_t   data[0];      // data is inline to this struct
 } mkext2_file_entry;
 
 typedef struct mkext2_header {
-    MKEXT_HEADER_CORE
-    uint32_t plist_offset;
-    uint32_t plist_compressed_size;
-    uint32_t plist_full_size;
+	MKEXT_HEADER_CORE
+	uint32_t plist_offset;
+	uint32_t plist_compressed_size;
+	uint32_t plist_full_size;
 } mkext2_header;
 
 #define MKEXT2_GET_ENTRY_COMPSIZE(ptr)   MKEXT_SWAP((ptr)->compressed_size)
@@ -197,21 +197,21 @@ typedef struct mkext2_header {
 // If all fields are 0 then this file slot is empty
 // If compsize is zero then the file isn't compressed.
 typedef struct mkext_file {
-    uint32_t offset;         // 4 bytes
-    uint32_t compsize;       // 4 bytes
-    uint32_t realsize;       // 4 bytes
-    uint32_t modifiedsecs;   // 4 bytes; cast to time_t to use
+	uint32_t offset;     // 4 bytes
+	uint32_t compsize;   // 4 bytes
+	uint32_t realsize;   // 4 bytes
+	uint32_t modifiedsecs; // 4 bytes; cast to time_t to use
 } mkext_file;
 
 // The plist file entry is mandatory, but module may be empty
 typedef struct mkext_kext {
-    mkext_file plist;        // 16 bytes
-    mkext_file module;       // 16 bytes
+	mkext_file plist;    // 16 bytes
+	mkext_file module;   // 16 bytes
 } mkext_kext;
 
 typedef struct mkext_header {
-    MKEXT_HEADER_CORE
-    mkext_kext kext[1];    // 32 bytes/entry
+	MKEXT_HEADER_CORE
+	mkext_kext kext[1]; // 32 bytes/entry
 } mkext_header;
 
 typedef mkext_header mkext1_header;
@@ -222,9 +222,9 @@ typedef mkext_header mkext1_header;
 #define MKEXT1_GET_ENTRY_FULLSIZE(ptr)   (MKEXT_SWAP(MKEXT1_ENTRY_CAST(ptr)->realsize))
 #define MKEXT1_GET_ENTRY_MODTIME(ptr)    ((time_t)MKEXT_SWAP(MKEXT1_ENTRY_CAST(ptr)->modifiedsecs))
 #define MKEXT1_ENTRY_EXISTS(ptr)         (MKEXT1_GET_ENTRY_OFFSET(ptr)   ||  \
-                                          MKEXT1_GET_ENTRY_FULLSIZE(ptr) ||  \
-                                          MKEXT_GET_ENTRY_COMPSIZE(ptr)  ||  \
-                                          MKEXT_GET_ENTRY_COMPSIZE(ptr))
+	                                  MKEXT1_GET_ENTRY_FULLSIZE(ptr) ||  \
+	                                  MKEXT_GET_ENTRY_COMPSIZE(ptr)  ||  \
+	                                  MKEXT_GET_ENTRY_COMPSIZE(ptr))
 
 #define MKEXT1_GET_KEXT(hdr, i)          ((mkext_kext *)&(MKEXT1_HDR_CAST(hdr)->kext[(i)]))
 #define MKEXT1_GET_KEXT_PLIST(hdr, i)    (MKEXT1_ENTRY_CAST(&(MKEXT1_GET_KEXT((hdr), (i))->plist)))

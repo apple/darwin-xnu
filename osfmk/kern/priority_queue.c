@@ -31,7 +31,7 @@
 
 #ifdef __LP64__
 static_assert(PRIORITY_QUEUE_ENTRY_CHILD_BITS >= VM_KERNEL_POINTER_SIGNIFICANT_BITS,
-		"Priority Queue child pointer packing failed");
+    "Priority Queue child pointer packing failed");
 #endif
 
 priority_queue_entry_t
@@ -77,7 +77,7 @@ pqueue_pair_meld(priority_queue_entry_t elt, priority_queue_compare_fn_t cmp_fn)
 
 void
 pqueue_destroy(struct priority_queue *q, size_t offset,
-		void (^callback)(void *e))
+    void (^callback)(void *e))
 {
 	assert(callback != NULL);
 	priority_queue_entry_t head = pqueue_unpack_root(q);
@@ -87,7 +87,9 @@ pqueue_destroy(struct priority_queue *q, size_t offset,
 		priority_queue_entry_t child_list = pqueue_entry_unpack_child(head);
 		if (child_list) {
 			tail->next = child_list;
-			while (tail->next) tail = tail->next;
+			while (tail->next) {
+				tail = tail->next;
+			}
 		}
 
 		priority_queue_entry_t elt = head;

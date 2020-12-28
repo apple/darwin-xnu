@@ -40,14 +40,14 @@
 #if !CC_KERNEL || !CC_USE_ASM
 
 const struct ccdigest_info ccsha256_ltc_di = {
-    .output_size = CCSHA256_OUTPUT_SIZE,
-    .state_size = CCSHA256_STATE_SIZE,
-    .block_size = CCSHA256_BLOCK_SIZE,
-    .oid_size = ccoid_sha256_len,
-    .oid = CC_DIGEST_OID_SHA256,
-    .initial_state = ccsha256_initial_state,
-    .compress = ccsha256_ltc_compress,
-    .final = ccdigest_final_64be,
+	.output_size = CCSHA256_OUTPUT_SIZE,
+	.state_size = CCSHA256_STATE_SIZE,
+	.block_size = CCSHA256_BLOCK_SIZE,
+	.oid_size = ccoid_sha256_len,
+	.oid = CC_DIGEST_OID_SHA256,
+	.initial_state = ccsha256_initial_state,
+	.compress = ccsha256_ltc_compress,
+	.final = ccdigest_final_64be,
 };
 
 #endif

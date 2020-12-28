@@ -242,7 +242,7 @@ kasan_fakestack_free(int sz_class, uptr dst, size_t realsz)
 
 	kasan_free_internal((void **)&dst, &sz, KASAN_HEAP_FAKESTACK, &zone, realsz, 1, FAKESTACK_QUARANTINE);
 	if (dst) {
-		zfree(zone, (void *)dst);
+		zfree(zone, dst);
 	}
 
 	kasan_unlock(flags);
@@ -286,7 +286,7 @@ kasan_init_fakestack(void)
 		assert(z);
 		zone_change(z, Z_NOCALLOUT, TRUE);
 		zone_change(z, Z_EXHAUST, TRUE);
-		zone_change(z, Z_EXPAND,  FALSE);
+		zone_change(z, Z_EXPAND, FALSE);
 		zone_change(z, Z_COLLECT, FALSE);
 		zone_change(z, Z_KASAN_QUARANTINE, FALSE);
 		zfill(z, maxsz / sz);
@@ -329,7 +329,8 @@ kasan_fakestack_free(int __unused sz_class, uptr __unused dst, size_t __unused r
 
 #endif
 
-void kasan_init_thread(struct kasan_thread_data *td)
+void
+kasan_init_thread(struct kasan_thread_data *td)
 {
 	LIST_INIT(&td->fakestack_head);
 }

@@ -145,6 +145,7 @@ The
 argument
 gives the size of
 .Fa changelist .
+.Pp
 The
 .Fa eventlist
 argument
@@ -158,11 +159,9 @@ The
 .Fa nevents
 argument determines the size of
 .Fa eventlist .
-If the KEVENT_FLAG_STACK_EVENTS flag is provided on the system call,
-the eventlist array is filled in in stack order (starting in the
-highest available index) instead of typical array order.
+.Pp
 The
-.Fa out_data
+.Fa data_out
 argument provides space for extra out data provided by specific filters.
 The
 .Fa data_available
@@ -170,6 +169,7 @@ argument's contents specified the space available in the data pool on input,
 and contains the amount still remaining on output.
 If the KEVENT_FLAG_STACK_DATA flag is specified on the system call,
 the data is allocated from the pool in stack order instead of typical heap order. 
+.Pp
 If
 .Fa timeout
 is a non-NULL pointer, it specifies a maximum interval to wait

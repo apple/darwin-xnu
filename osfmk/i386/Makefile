@@ -25,6 +25,7 @@ EXPORT_ONLY_FILES =	\
 		    locks_i386_inlines.h \
 		    machine_routines.h \
 		    machine_cpu.h \
+		    memory_types.h \
 		    mtrr.h \
 		    mp.h \
 		    mp_desc.h \
@@ -32,7 +33,7 @@ EXPORT_ONLY_FILES =	\
 		    pal_native.h \
 		    pal_routines.h \
 		    pal_hibernate.h \
-			panic_hooks.h \
+		    panic_hooks.h \
 		    pmCPU.h \
 		    pmap.h \
 		    proc_reg.h \

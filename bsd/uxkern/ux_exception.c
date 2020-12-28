@@ -54,46 +54,48 @@
  */
 static int
 ux_exception(int                        exception,
-             mach_exception_code_t      code,
-             mach_exception_subcode_t   subcode)
+    mach_exception_code_t      code,
+    mach_exception_subcode_t   subcode)
 {
 	int machine_signal = 0;
 
 	/* Try machine-dependent translation first. */
-	if ((machine_signal = machine_exception(exception, code, subcode)) != 0)
+	if ((machine_signal = machine_exception(exception, code, subcode)) != 0) {
 		return machine_signal;
+	}
 
-	switch(exception) {
-		case EXC_BAD_ACCESS:
-			if (code == KERN_INVALID_ADDRESS)
-				return SIGSEGV;
-			else
-				return SIGBUS;
+	switch (exception) {
+	case EXC_BAD_ACCESS:
+		if (code == KERN_INVALID_ADDRESS) {
+			return SIGSEGV;
+		} else {
+			return SIGBUS;
+		}
 
-		case EXC_BAD_INSTRUCTION:
-			return SIGILL;
+	case EXC_BAD_INSTRUCTION:
+		return SIGILL;
 
-		case EXC_ARITHMETIC:
-			return SIGFPE;
+	case EXC_ARITHMETIC:
+		return SIGFPE;
 
-		case EXC_EMULATION:
-			return SIGEMT;
+	case EXC_EMULATION:
+		return SIGEMT;
 
-		case EXC_SOFTWARE:
-			switch (code) {
-				case EXC_UNIX_BAD_SYSCALL:
-					return SIGSYS;
-				case EXC_UNIX_BAD_PIPE:
-					return SIGPIPE;
-				case EXC_UNIX_ABORT:
-					return SIGABRT;
-				case EXC_SOFT_SIGNAL:
-					return SIGKILL;
-			}
-			break;
+	case EXC_SOFTWARE:
+		switch (code) {
+		case EXC_UNIX_BAD_SYSCALL:
+			return SIGSYS;
+		case EXC_UNIX_BAD_PIPE:
+			return SIGPIPE;
+		case EXC_UNIX_ABORT:
+			return SIGABRT;
+		case EXC_SOFT_SIGNAL:
+			return SIGKILL;
+		}
+		break;
 
-		case EXC_BREAKPOINT:
-			return SIGTRAP;
+	case EXC_BREAKPOINT:
+		return SIGTRAP;
 	}
 
 	return 0;
@@ -104,16 +106,17 @@ ux_exception(int                        exception,
  */
 kern_return_t
 handle_ux_exception(thread_t                    thread,
-                    int                         exception,
-                    mach_exception_code_t       code,
-                    mach_exception_subcode_t    subcode)
+    int                         exception,
+    mach_exception_code_t       code,
+    mach_exception_subcode_t    subcode)
 {
 	/* Returns +1 proc reference */
 	proc_t p = proc_findthread(thread);
 
 	/* Can't deliver a signal without a bsd process reference */
-	if (p == NULL)
+	if (p == NULL) {
 		return KERN_FAILURE;
+	}
 
 	/* Translate exception and code to signal type */
 	int ux_signal = ux_exception(exception, code, subcode);
@@ -153,7 +156,7 @@ handle_ux_exception(thread_t                    thread,
 			    (ut->uu_sigwait & mask) ||
 			    (ut->uu_sigmask & mask) ||
 			    (ps->ps_sigact[SIGSEGV] == SIG_IGN) ||
-			    (! (ps->ps_sigonstack & mask))) {
+			    (!(ps->ps_sigonstack & mask))) {
 				p->p_sigignore &= ~mask;
 				p->p_sigcatch &= ~mask;
 				ps->ps_sigact[SIGSEGV] = SIG_DFL;
@@ -175,4 +178,3 @@ handle_ux_exception(thread_t                    thread,
 
 	return KERN_SUCCESS;
 }
-

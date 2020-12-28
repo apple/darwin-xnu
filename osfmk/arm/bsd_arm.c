@@ -25,7 +25,7 @@
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-#ifdef	MACH_BSD
+#ifdef  MACH_BSD
 #include <mach_debug.h>
 #include <mach_ldebug.h>
 
@@ -54,7 +54,7 @@
 kern_return_t
 thread_setsinglestep(__unused thread_t thread, __unused int on)
 {
-	return (KERN_FAILURE); /* XXX TODO */
+	return KERN_FAILURE; /* XXX TODO */
 }
 
 #if CONFIG_DTRACE
@@ -68,4 +68,4 @@ dtrace_get_cpu_int_stack_top(void)
 }
 #endif /* CONFIG_DTRACE */
 
-#endif				/* MACH_BSD */
+#endif                          /* MACH_BSD */

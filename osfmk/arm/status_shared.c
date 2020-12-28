@@ -48,8 +48,9 @@ saved_state_to_thread_state32(const arm_saved_state_t *saved_state, arm_thread_s
 	ts32->sp = (uint32_t)get_saved_state_sp(saved_state);
 	ts32->pc = (uint32_t)get_saved_state_pc(saved_state);
 	ts32->cpsr = get_saved_state_cpsr(saved_state);
-	for (i = 0; i < 13; i++)
+	for (i = 0; i < 13; i++) {
 		ts32->r[i] = (uint32_t)get_saved_state_reg(saved_state, i);
+	}
 }
 
 /*
@@ -70,12 +71,11 @@ thread_state32_to_saved_state(const arm_thread_state32_t *ts32, arm_saved_state_
 	set_saved_state_cpsr(saved_state, (ts32->cpsr & ~PSR64_MODE_MASK) | PSR64_MODE_RW_32);
 #elif defined(__arm__)
 	set_saved_state_cpsr(saved_state, (ts32->cpsr & ~PSR_USER_MASK) | (ts32->cpsr & PSR_USER_MASK));
-#else 
+#else
 #error Unknown architecture.
 #endif
 
-	for (i = 0; i < 13; i++)
+	for (i = 0; i < 13; i++) {
 		set_saved_state_reg(saved_state, i, ts32->r[i]);
+	}
 }
-
-

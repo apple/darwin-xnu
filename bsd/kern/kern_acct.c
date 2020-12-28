@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -68,7 +68,7 @@
 /* HISTORY
  * 08-May-95  Mac Gillon (mgillon) at NeXT
  *	Purged old history
- *  	New version based on 4.4
+ *      New version based on 4.4
  */
 /*
  * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
@@ -113,9 +113,9 @@
  * The former's operation is described in Leffler, et al., and the latter
  * was provided by UCB with the 4.4BSD-Lite release
  */
-comp_t	encode_comp_t(uint32_t, uint32_t);
-void	acctwatch(void *);
-void	acct_init(void);
+comp_t  encode_comp_t(uint32_t, uint32_t);
+void    acctwatch(void *);
+void    acct_init(void);
 
 /*
  * Accounting vnode pointer, and suspended accounting vnode pointer.  States
@@ -128,15 +128,15 @@ void	acct_init(void);
  *	NULL		!NULL		Accounting enabled, but suspended
  *	!NULL		!NULL		<not allowed>
  */
-struct	vnode *acctp;
-struct	vnode *suspend_acctp;
+struct  vnode *acctp;
+struct  vnode *suspend_acctp;
 
 /*
  * Values associated with enabling and disabling accounting
  */
-int	acctsuspend = 2;	/* stop accounting when < 2% free space left */
-int	acctresume = 4;		/* resume when free space risen to > 4% */
-int	acctchkfreq = 15;	/* frequency (in seconds) to check space */
+int     acctsuspend = 2;        /* stop accounting when < 2% free space left */
+int     acctresume = 4;         /* resume when free space risen to > 4% */
+int     acctchkfreq = 15;       /* frequency (in seconds) to check space */
 
 
 static lck_grp_t       *acct_subsys_lck_grp;
@@ -162,13 +162,14 @@ acct(proc_t p, struct acct_args *uap, __unused int *retval)
 {
 	struct nameidata nd;
 	int error;
-	struct vfs_context *ctx; 
+	struct vfs_context *ctx;
 
 	ctx = vfs_context_current();
 
 	/* Make sure that the caller is root. */
-	if ((error = suser(vfs_context_ucred(ctx), &p->p_acflag)))
-		return (error);
+	if ((error = suser(vfs_context_ucred(ctx), &p->p_acflag))) {
+		return error;
+	}
 
 	/*
 	 * If accounting is to be started to a file, open that file for
@@ -176,28 +177,30 @@ acct(proc_t p, struct acct_args *uap, __unused int *retval)
 	 */
 	if (uap->path != USER_ADDR_NULL) {
 		NDINIT(&nd, LOOKUP, OP_OPEN, NOFOLLOW, UIO_USERSPACE, uap->path, ctx);
-		if ((error = vn_open(&nd, FWRITE, 0)))
-			return (error);
+		if ((error = vn_open(&nd, FWRITE, 0))) {
+			return error;
+		}
 #if CONFIG_MACF
 		error = mac_system_check_acct(vfs_context_ucred(ctx), nd.ni_vp);
 		if (error) {
 			vnode_put(nd.ni_vp);
 			vn_close(nd.ni_vp, FWRITE, ctx);
-			return (error);
+			return error;
 		}
 #endif
 		vnode_put(nd.ni_vp);
 
 		if (nd.ni_vp->v_type != VREG) {
 			vn_close(nd.ni_vp, FWRITE, ctx);
-			return (EACCES);
+			return EACCES;
 		}
 	}
 #if CONFIG_MACF
 	else {
 		error = mac_system_check_acct(vfs_context_ucred(ctx), NULL);
-		if (error)
-			return (error);
+		if (error) {
+			return error;
+		}
 	}
 #endif
 
@@ -209,13 +212,13 @@ acct(proc_t p, struct acct_args *uap, __unused int *retval)
 	if (acctp != NULLVP || suspend_acctp != NULLVP) {
 		untimeout(acctwatch, NULL);
 		error = vn_close((acctp != NULLVP ? acctp : suspend_acctp),
-				FWRITE, vfs_context_current());
+		    FWRITE, vfs_context_current());
 
 		acctp = suspend_acctp = NULLVP;
 	}
 	if (uap->path == USER_ADDR_NULL) {
 		ACCT_SUBSYS_UNLOCK();
-		return (error);
+		return error;
 	}
 
 	/*
@@ -226,7 +229,7 @@ acct(proc_t p, struct acct_args *uap, __unused int *retval)
 	ACCT_SUBSYS_UNLOCK();
 
 	acctwatch(NULL);
-	return (error);
+	return error;
 }
 
 /*
@@ -253,7 +256,7 @@ acct_process(proc_t p)
 	vp = acctp;
 	if (vp == NULLVP) {
 		ACCT_SUBSYS_UNLOCK();
-		return (0);
+		return 0;
 	}
 
 	/*
@@ -282,10 +285,11 @@ acct_process(proc_t p)
 	tmp = ut;
 	timevaladd(&tmp, &st);
 	t = tmp.tv_sec * hz + tmp.tv_usec / tick;
-	if (t)
+	if (t) {
 		an_acct.ac_mem = (r->ru_ixrss + r->ru_idrss + r->ru_isrss) / t;
-	else
+	} else {
 		an_acct.ac_mem = 0;
+	}
 
 	/* (5) The number of disk I/O operations done */
 	an_acct.ac_io = encode_comp_t(r->ru_inblock + r->ru_oublock, 0);
@@ -297,17 +301,19 @@ acct_process(proc_t p)
 	an_acct.ac_gid = kauth_cred_getrgid(safecred);
 
 	/* (7) The terminal from which the process was started */
-	
+
 	sessp = proc_session(p);
 	if ((p->p_flag & P_CONTROLT) && (sessp != SESSION_NULL) && ((tp = SESSION_TP(sessp)) != TTY_NULL)) {
 		tty_lock(tp);
 		an_acct.ac_tty = tp->t_dev;
 		tty_unlock(tp);
-	 }else
+	} else {
 		an_acct.ac_tty = NODEV;
+	}
 
-	if (sessp != SESSION_NULL)
+	if (sessp != SESSION_NULL) {
 		session_rele(sessp);
+	}
 
 	/* (8) The boolean flags that tell how the process terminated, etc. */
 	an_acct.ac_flag = p->p_acflag;
@@ -316,16 +322,16 @@ acct_process(proc_t p)
 	 * Now, just write the accounting information to the file.
 	 */
 	if ((error = vnode_getwithref(vp)) == 0) {
-	        error = vn_rdwr(UIO_WRITE, vp, (caddr_t)&an_acct, sizeof (an_acct),
-				(off_t)0, UIO_SYSSPACE, IO_APPEND|IO_UNIT, safecred,
-				(int *)0, p);
+		error = vn_rdwr(UIO_WRITE, vp, (caddr_t)&an_acct, sizeof(an_acct),
+		    (off_t)0, UIO_SYSSPACE, IO_APPEND | IO_UNIT, safecred,
+		    (int *)0, p);
 		vnode_put(vp);
 	}
 
 	kauth_cred_unref(&safecred);
 	ACCT_SUBSYS_UNLOCK();
 
-	return (error);
+	return error;
 }
 
 /*
@@ -334,9 +340,9 @@ acct_process(proc_t p)
  * Leffler, et al., on page 63.
  */
 
-#define	MANTSIZE	13			/* 13 bit mantissa. */
-#define	EXPSIZE		3			/* Base 8 (3 bit) exponent. */
-#define	MAXFRACT	((1 << MANTSIZE) - 1)	/* Maximum fractional value. */
+#define MANTSIZE        13                      /* 13 bit mantissa. */
+#define EXPSIZE         3                       /* Base 8 (3 bit) exponent. */
+#define MAXFRACT        ((1 << MANTSIZE) - 1)   /* Maximum fractional value. */
 
 comp_t
 encode_comp_t(uint32_t s, uint32_t us)
@@ -346,11 +352,11 @@ encode_comp_t(uint32_t s, uint32_t us)
 	exp = 0;
 	rnd = 0;
 	s *= AHZ;
-	s += us / (1000000 / AHZ);	/* Maximize precision. */
+	s += us / (1000000 / AHZ);      /* Maximize precision. */
 
 	while (s > MAXFRACT) {
-	rnd = s & (1 << (EXPSIZE - 1));	/* Round up? */
-		s >>= EXPSIZE;		/* Base 8 exponent == 3 bit shift. */
+		rnd = s & (1 << (EXPSIZE - 1)); /* Round up? */
+		s >>= EXPSIZE;          /* Base 8 exponent == 3 bit shift. */
 		exp++;
 	}
 
@@ -361,9 +367,9 @@ encode_comp_t(uint32_t s, uint32_t us)
 	}
 
 	/* Clean it up and polish it off. */
-	exp <<= MANTSIZE;		/* Shift the exponent into place */
-	exp += s;			/* and add on the mantissa. */
-	return (exp);
+	exp <<= MANTSIZE;               /* Shift the exponent into place */
+	exp += s;                       /* and add on the mantissa. */
+	return exp;
 }
 
 /*
@@ -425,6 +431,6 @@ acctwatch(__unused void *a)
 		return;
 	}
 	ACCT_SUBSYS_UNLOCK();
-    
+
 	timeout(acctwatch, NULL, acctchkfreq * hz);
 }

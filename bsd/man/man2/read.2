@@ -205,6 +205,15 @@ An action is requested of a device that does not exist..
 .\" ===========
 .It Bq Er ENXIO
 A requested action cannot be performed by the device.
+.\" ===========
+.It Bq Er ESTALE
+An attempt to read a remote file through NFS that has already been deleted in
+the server.
+.\" ===========
+.It Bq Er ETIMEDOUT
+The connection timed out while reading a remote file from a soft mounted NFS
+volume (see
+.Xr mount_nfs 8 ) .
 .El
 .Pp
 The

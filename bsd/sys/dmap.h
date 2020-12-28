@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -62,7 +62,7 @@
  */
 
 #ifndef _SYS_DMAP_H_
-#define	_SYS_DMAP_H_
+#define _SYS_DMAP_H_
 
 #include <sys/appleapiopts.h>
 
@@ -71,12 +71,12 @@
  * Definitions for the mapping of vitual swap space to the physical swap
  * area - the disk map.
  */
-#define	NDMAP	38		/* size of the swap area map */
+#define NDMAP   38              /* size of the swap area map */
 
 struct dmap {
-	swblk_t dm_size;	/* current size used by process */
-	swblk_t dm_alloc;	/* amount of physical swap space allocated */
-	swblk_t dm_map[NDMAP];	/* first disk block number in each chunk */
+	swblk_t dm_size;        /* current size used by process */
+	swblk_t dm_alloc;       /* amount of physical swap space allocated */
+	swblk_t dm_map[NDMAP];  /* first disk block number in each chunk */
 };
 #ifdef KERNEL
 extern struct dmap zdmap;
@@ -85,10 +85,10 @@ extern int dmmin, dmmax, dmtext;
 
 /* The following structure is that ``returned'' from a call to vstodb(). */
 struct dblock {
-	swblk_t db_base;	/* base of physical contig drum block */
-	swblk_t db_size;	/* size of block */
+	swblk_t db_base;        /* base of physical contig drum block */
+	swblk_t db_size;        /* size of block */
 };
 
 #endif /* __APPLE_API_OBSOLETE */
 
-#endif	/* !_SYS_DMAP_H_ */
+#endif  /* !_SYS_DMAP_H_ */

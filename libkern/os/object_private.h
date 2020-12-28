@@ -66,24 +66,24 @@
 #define _OS_OBJECT_GLOBAL_REFCNT INT_MAX
 
 #define _OS_OBJECT_HEADER(isa, ref_cnt, xref_cnt) \
-        isa; /* must be pointer-sized */ \
-        int volatile ref_cnt; \
-        int volatile xref_cnt
+	isa; /* must be pointer-sized */ \
+	int volatile ref_cnt; \
+	int volatile xref_cnt
 
 #if OS_OBJECT_HAVE_OBJC_SUPPORT
 // Must match size of compiler-generated OBJC_CLASS structure rdar://10640168
 #define _OS_OBJECT_CLASS_HEADER() \
-		void *_os_obj_objc_class_t[5]
+	        void *_os_obj_objc_class_t[5]
 #else
 #define _OS_OBJECT_CLASS_HEADER() \
-		void (*_os_obj_xref_dispose)(_os_object_t); \
-		void (*_os_obj_dispose)(_os_object_t)
+	        void (*_os_obj_xref_dispose)(_os_object_t); \
+	        void (*_os_obj_dispose)(_os_object_t)
 #endif
 
 #define OS_OBJECT_CLASS(name) OS_##name
 
 #if OS_OBJECT_USE_OBJC
-__OSX_AVAILABLE_STARTING(__MAC_10_8,__IPHONE_6_0)
+__OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_6_0)
 OS_OBJECT_EXPORT
 @interface OS_OBJECT_CLASS(object) : NSObject
 - (void)_xref_dispose;
@@ -91,9 +91,9 @@ OS_OBJECT_EXPORT
 @end
 typedef OS_OBJECT_CLASS(object) *_os_object_t;
 #define _OS_OBJECT_DECL_SUBCLASS_INTERFACE(name, super) \
-		@interface OS_OBJECT_CLASS(name) : OS_OBJECT_CLASS(super) \
-		<OS_OBJECT_CLASS(name)> \
-		@end
+	        @interface OS_OBJECT_CLASS(name) : OS_OBJECT_CLASS(super) \
+	        <OS_OBJECT_CLASS(name)> \
+	        @end
 #else
 typedef struct _os_object_s *_os_object_t;
 #endif
@@ -102,41 +102,41 @@ __BEGIN_DECLS
 
 #if !_OS_OBJECT_OBJC_ARC
 
-__OSX_AVAILABLE_STARTING(__MAC_10_8,__IPHONE_6_0)
+    __OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_6_0)
 OS_OBJECT_EXPORT OS_OBJECT_MALLOC OS_OBJECT_WARN_RESULT OS_OBJECT_NOTHROW
 _os_object_t
 _os_object_alloc(const void *cls, size_t size);
 
-__OSX_AVAILABLE_STARTING(__MAC_10_9,__IPHONE_7_0)
+__OSX_AVAILABLE_STARTING(__MAC_10_9, __IPHONE_7_0)
 OS_OBJECT_EXPORT OS_OBJECT_MALLOC OS_OBJECT_WARN_RESULT OS_OBJECT_NOTHROW
 _os_object_t
 _os_object_alloc_realized(const void *cls, size_t size);
 
-__OSX_AVAILABLE_STARTING(__MAC_10_8,__IPHONE_6_0)
+__OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_6_0)
 OS_OBJECT_EXPORT OS_OBJECT_NONNULL OS_OBJECT_NOTHROW
 void _os_object_dealloc(_os_object_t object);
 
-__OSX_AVAILABLE_STARTING(__MAC_10_8,__IPHONE_6_0)
+__OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_6_0)
 OS_OBJECT_EXPORT OS_OBJECT_NONNULL OS_OBJECT_NOTHROW
 _os_object_t
 _os_object_retain(_os_object_t object);
 
-__OSX_AVAILABLE_STARTING(__MAC_10_11,__IPHONE_9_0)
+__OSX_AVAILABLE_STARTING(__MAC_10_11, __IPHONE_9_0)
 OS_OBJECT_EXPORT OS_OBJECT_NONNULL OS_OBJECT_NOTHROW
 _os_object_t
 _os_object_retain_with_resurrect(_os_object_t obj);
 
-__OSX_AVAILABLE_STARTING(__MAC_10_8,__IPHONE_6_0)
+__OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_6_0)
 OS_OBJECT_EXPORT OS_OBJECT_NONNULL OS_OBJECT_NOTHROW
 void
 _os_object_release(_os_object_t object);
 
-__OSX_AVAILABLE_STARTING(__MAC_10_8,__IPHONE_6_0)
+__OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_6_0)
 OS_OBJECT_EXPORT OS_OBJECT_NONNULL OS_OBJECT_NOTHROW
 _os_object_t
 _os_object_retain_internal(_os_object_t object);
 
-__OSX_AVAILABLE_STARTING(__MAC_10_8,__IPHONE_6_0)
+__OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_6_0)
 OS_OBJECT_EXPORT OS_OBJECT_NONNULL OS_OBJECT_NOTHROW
 void
 _os_object_release_internal(_os_object_t object);

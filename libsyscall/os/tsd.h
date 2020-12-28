@@ -58,7 +58,7 @@ __attribute__((always_inline))
 static __inline__ unsigned int
 _os_cpu_number(void)
 {
-#if defined(__arm__) && defined(_ARM_ARCH_6)
+#if defined(__arm__)
 	uintptr_t p;
 	__asm__("mrc	p15, 0, %[p], c13, c0, 3" : [p] "=&r" (p));
 	return (unsigned int)(p & 0x3ul);
@@ -116,16 +116,16 @@ __attribute__((always_inline, pure))
 static __inline__ void**
 _os_tsd_get_base(void)
 {
-#if defined(__arm__) && defined(_ARM_ARCH_6)
+#if defined(__arm__)
 	uintptr_t tsd;
-	__asm__("mrc p15, 0, %0, c13, c0, 3" : "=r" (tsd));
-	tsd &= ~0x3ul; /* lower 2-bits contain CPU number */
-#elif defined(__arm__) && defined(_ARM_ARCH_5)
-	register uintptr_t tsd asm ("r9");
+	__asm__("mrc p15, 0, %0, c13, c0, 3\n"
+                "bic %0, %0, #0x3\n" : "=r" (tsd));
+	/* lower 2-bits contain CPU number */
 #elif defined(__arm64__)
 	uint64_t tsd;
-	__asm__("mrs %0, TPIDRRO_EL0" : "=r" (tsd));
-	tsd &= ~0x7ull;
+	__asm__("mrs %0, TPIDRRO_EL0\n"
+                "bic %0, %0, #0x7\n" : "=r" (tsd));
+	/* lower 3-bits contain CPU number */
 #endif
 
 	return (void**)(uintptr_t)tsd;

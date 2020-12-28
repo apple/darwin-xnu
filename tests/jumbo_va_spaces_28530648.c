@@ -7,6 +7,7 @@
 #include <darwintest.h>
 #include <darwintest_utils.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
 
 #define GB (1ULL * 1024 * 1024 * 1024)
 
@@ -17,7 +18,11 @@
  */
 #define ALLOC_TEST_GB 54
 
+#if defined(ENTITLED)
 T_DECL(jumbo_va_spaces_28530648,
+#else
+T_DECL(jumbo_va_spaces_28530648_unentitled,
+#endif
 	"Verify that the \"dynamic-codesigning\" entitlement is required to utilize an extra-large "
 	"VA space on arm64",
 	T_META_NAMESPACE("xnu.vm"),

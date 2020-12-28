@@ -309,8 +309,8 @@ routine host_register_well_known_mach_voucher_attr_manager(
  * Update the global ATM diagnostic flag, readable from the commpage
  */
 routine host_set_atm_diagnostic_flag(
-        host_priv      : host_priv_t;
-    in  diagnostic_flag : uint32_t);
+		host		: host_t;
+	in	diagnostic_flag : uint32_t);
 
 #if !KERNEL && LIBSYSCALL_INTERFACE
 routine host_get_atm_diagnostic_flag(

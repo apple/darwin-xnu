@@ -43,9 +43,9 @@ struct secasvar;
 
 extern int ah6_input(struct mbuf **, int *, int);
 extern int ah6_output(struct mbuf *, u_char *, struct mbuf *,
-	struct secasvar *);
+    struct secasvar *);
 extern int ah6_calccksum(struct mbuf *, caddr_t, size_t,
-	const struct ah_algorithm *, struct secasvar *);
+    const struct ah_algorithm *, struct secasvar *);
 
 extern void ah6_ctlinput(int, struct sockaddr *, void *);
 #endif /* BSD_KERNEL_PRIVATE */

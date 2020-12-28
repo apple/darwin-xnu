@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -82,37 +82,37 @@
 typedef u_int16_t comp_t;
 
 struct acct {
-	char	  ac_comm[10];	/* command name */
-	comp_t	  ac_utime;	/* user time */
-	comp_t	  ac_stime;	/* system time */
-	comp_t	  ac_etime;	/* elapsed time */
-	u_int32_t ac_btime;	/* starting time */
-	uid_t	  ac_uid;	/* user id */
-	gid_t	  ac_gid;	/* group id */
-	u_int16_t ac_mem;	/* average memory usage */
-	comp_t	  ac_io;	/* count of IO blocks */
-	dev_t	  ac_tty;	/* controlling tty */
+	char      ac_comm[10];  /* command name */
+	comp_t    ac_utime;     /* user time */
+	comp_t    ac_stime;     /* system time */
+	comp_t    ac_etime;     /* elapsed time */
+	u_int32_t ac_btime;     /* starting time */
+	uid_t     ac_uid;       /* user id */
+	gid_t     ac_gid;       /* group id */
+	u_int16_t ac_mem;       /* average memory usage */
+	comp_t    ac_io;        /* count of IO blocks */
+	dev_t     ac_tty;       /* controlling tty */
 
-#define	AFORK	0x01		/* fork'd but not exec'd */
-#define	ASU	0x02		/* used super-user permissions */
-#define	ACOMPAT	0x04		/* used compatibility mode */
-#define	ACORE	0x08		/* dumped core */
-#define	AXSIG	0x10		/* killed by a signal */
-	u_int8_t  ac_flag;	/* accounting flags */
+#define AFORK   0x01            /* fork'd but not exec'd */
+#define ASU     0x02            /* used super-user permissions */
+#define ACOMPAT 0x04            /* used compatibility mode */
+#define ACORE   0x08            /* dumped core */
+#define AXSIG   0x10            /* killed by a signal */
+	u_int8_t  ac_flag;      /* accounting flags */
 };
 
 /*
  * 1/AHZ is the granularity of the data encoded in the comp_t fields.
  * This is not necessarily equal to hz.
  */
-#define	AHZ	64
+#define AHZ     64
 
 #ifdef KERNEL
 #ifdef __APPLE_API_PRIVATE
-extern struct vnode	*acctp;
+extern struct vnode     *acctp;
 
 __BEGIN_DECLS
-int	acct_process(struct proc *p);
+int     acct_process(struct proc *p);
 __END_DECLS
 
 #endif /* __APPLE_API_PRIVATE */

@@ -12,7 +12,11 @@
 #include <sys/wait.h>
 #include <stdlib.h>
 
-static void do_child(int *pipefd){
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
+static void
+do_child(int *pipefd)
+{
 	int exit = 0;
 
 	close(pipefd[1]);
@@ -22,7 +26,7 @@ static void do_child(int *pipefd){
 }
 
 T_DECL(task_info_28439149, "ensure that task_info has the correct permission",
-                T_META_CHECK_LEAKS(false), T_META_ASROOT(true))
+    T_META_CHECK_LEAKS(false), T_META_ASROOT(true))
 {
 	int pipefd[2];
 
@@ -40,7 +44,7 @@ T_DECL(task_info_28439149, "ensure that task_info has the correct permission",
 
 	int exit;
 	mach_msg_type_number_t count;
-        struct task_basic_info_64 ti;
+	struct task_basic_info_64 ti;
 	task_dyld_info_data_t di;
 
 	task_t self = mach_task_self();
@@ -53,21 +57,21 @@ T_DECL(task_info_28439149, "ensure that task_info has the correct permission",
 
 	count = TASK_BASIC_INFO_64_COUNT;
 	T_EXPECT_MACH_SUCCESS(task_info(self, TASK_BASIC_INFO_64, (task_info_t)&ti,
-				&count), "task_info(self, TASK_BASIC_INFO_64 ...)");
+	    &count), "task_info(self, TASK_BASIC_INFO_64 ...)");
 	count = TASK_BASIC_INFO_64_COUNT;
 	T_EXPECT_MACH_SUCCESS(task_info(other, TASK_BASIC_INFO_64, (task_info_t)&ti,
-				&count), "task_info(other_name, TASK_BASIC_INFO_64 ...)");
+	    &count), "task_info(other_name, TASK_BASIC_INFO_64 ...)");
 	count = TASK_BASIC_INFO_64_COUNT;
 	T_EXPECT_MACH_SUCCESS(task_info(other_name, TASK_BASIC_INFO_64, (task_info_t)&ti,
-				&count), "task_info(other_name, TASK_BASIC_INFO_64 ...)");
+	    &count), "task_info(other_name, TASK_BASIC_INFO_64 ...)");
 
 
 	count = TASK_DYLD_INFO_COUNT;
 	T_EXPECT_MACH_SUCCESS(task_info(self, TASK_DYLD_INFO, (task_info_t)&di,
-				&count), "task_info(self, TASK_DYLD_INFO ...)");
+	    &count), "task_info(self, TASK_DYLD_INFO ...)");
 	count = TASK_DYLD_INFO_COUNT;
 	T_EXPECT_MACH_SUCCESS(task_info(other, TASK_DYLD_INFO, (task_info_t)&di,
-				&count), "task_info(other_name, TASK_DYLD_INFO ...)");
+	    &count), "task_info(other_name, TASK_DYLD_INFO ...)");
 	count = TASK_DYLD_INFO_COUNT;
 	ret = task_info(other_name, TASK_DYLD_INFO, (task_info_t)&di, &count);
 	T_EXPECT_EQ_INT(ret, KERN_INVALID_ARGUMENT, "task info TASK_DYLD_INFO should fail with mach_port_name");
@@ -78,4 +82,3 @@ T_DECL(task_info_28439149, "ensure that task_info has the correct permission",
 
 	wait(NULL);
 }
-

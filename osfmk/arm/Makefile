@@ -20,6 +20,7 @@ ARM_HEADER_FILES =	\
 		machine_cpu.h \
 		machine_cpuid.h \
 		machine_routines.h \
+		memory_types.h \
 		pal_routines.h \
 		pmap_public.h \
 		proc_reg.h \

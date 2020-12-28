@@ -1,3 +1,51 @@
+def enum(*sequential, **named):
+    enums = dict(zip(sequential, range(len(sequential))), **named)
+    reverse = dict((value, key) for key, value in enums.iteritems())
+    enums['reverse_mapping'] = reverse
+    return type('Enum', (), enums)
+
+Mbuf_Type = enum(
+    'MT_FREE',
+    'MT_DATA',
+    'MT_HEADER',
+    'MT_SOCKET',
+    'MT_PCB',
+    'MT_RTABLE',
+    'MT_HTABLE',
+    'MT_ATABLE',
+    'MT_SONAME',
+    'MT_SOOPTS',
+    'MT_FTABLE',
+    'MT_RIGHTS',
+    'MT_IFADDR',
+    'MT_CONTROL',
+    'MT_OOBDATA',
+    'MT_TAG',
+    'MT_LAST')
+
+M_EXT           = 0x0001
+M_PKTHDR        = 0x0002
+M_EOR           = 0x0004
+M_PROTO1        = 0x0008
+M_PROTO2        = 0x0010
+M_PROTO3        = 0x0020
+M_LOOP          = 0x0040
+M_PROTO5        = 0x0080
+
+M_BCAST         = 0x0100
+M_MCAST         = 0x0200
+M_FRAG          = 0x0400
+M_FIRSTFRAG     = 0x0800
+M_LASTFRAG      = 0x1000
+M_PROMISC       = 0x2000
+M_HASFCS        = 0x4000
+M_TAGHDR        = 0x8000
+
+dlil_if_flags_strings = ["DLIF_INUSE",
+                         "DLIF_REUSE",
+                         "DLIF_DEBUG"
+                        ]
+
 if_capenable_strings = ["RXCSUM",
                         "TXCSUM", 
                         "VLAN_MTU", 
@@ -32,6 +80,11 @@ if_flags_strings = ["UP",
                     "LINK2-ALTPHYS",
                     "MULTICAST"
                     ]
+
+if_refflags_strings = ["IFRF_EMBRYONIC",
+                       "IFRF_ATTACHED",
+                       "IFRF_DETACHING"
+                      ]
 
 if_eflags_strings = ["AUTOCONFIGURING",
                      "unused",

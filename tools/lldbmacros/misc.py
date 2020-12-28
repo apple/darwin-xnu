@@ -7,6 +7,37 @@ import xnudefines
 
 from scheduler import *
 
+@lldb_command('showlogstream')
+def showLogStream(cmd_args=None):
+    """
+    Dump the state of the kernel log stream
+    """
+    mbp = kern.globals.oslog_streambufp
+    print "streaming buffer space avail: {0:>#x} of {1:>#x} bytes\n".format(kern.globals.oslog_stream_buf_bytesavail, kern.globals.oslog_stream_buf_size)
+    print " read head: offset {0:>#x}\nwrite head: offset {1:>#x}\n".format(mbp.msg_bufr, mbp.msg_bufx)
+    count = 0
+    print "  id  timestamp   offset size off+size type metadata"
+    for entry in IterateSTAILQ_HEAD(kern.globals.oslog_stream_buf_head, "buf_entries"):
+        next_start = entry.offset + entry.size
+        if (next_start > 0x1000):
+            next_start = next_start - 0x1000
+        print "{0:>4d}: {1:<d}  {2:>5x} {3:>4d} {4:>5x} {5:<d}    {6:<d}".format(count, entry.timestamp, entry.offset, entry.size, next_start, entry.type, entry.metadata)
+        count = count + 1
+    print "found {} entries".format(count)
+
+    count = 0
+    for entry in IterateSTAILQ_HEAD(kern.globals.oslog_stream_free_head, "buf_entries"):
+        count = count + 1
+    print "free list: {} entries".format(count)
+
+    count = 0
+    for outer in IterateSTAILQ_HEAD(kern.globals.oslog_stream_buf_head, "buf_entries"):
+        for inner in IterateSTAILQ_HEAD(kern.globals.oslog_stream_buf_head, "buf_entries"):
+            if ((outer.offset > inner.offset) and
+                (outer.offset < inner.offset + inner.size)):
+                print "error: overlapping entries: {:>3x} <--> {:>3x}".format(outer.offset, inner.offset)
+        count = count + 1
+
 @lldb_command('showmcastate')
 def showMCAstate(cmd_args=None):
     """
@@ -707,6 +738,7 @@ def DumpRawTraceFile(cmd_args=[], cmd_options={}):
 
     if lp64 :
         KDBG_TIMESTAMP_MASK = 0xffffffffffffffff
+        KDBG_CPU_SHIFT      = 0
     else :
         KDBG_TIMESTAMP_MASK = 0x00ffffffffffffff
         KDBG_CPU_SHIFT      = 56
@@ -911,10 +943,24 @@ def DumpRawTraceFile(cmd_args=[], cmd_options={}):
             # XXX condition here is on __LP64__
             if lp64 :
                 tempbuf += struct.pack('QQQQQQIIQ', 
-                        e.timestamp, e.arg1, e.arg2, e.arg3, e.arg4, e.arg5, e.debugid, e.cpuid, e.unused)
+                        unsigned(e.timestamp),
+                        unsigned(e.arg1),
+                        unsigned(e.arg2),
+                        unsigned(e.arg3),
+                        unsigned(e.arg4),
+                        unsigned(e.arg5),
+                        unsigned(e.debugid),
+                        unsigned(e.cpuid),
+                        unsigned(e.unused))
             else :
-                tempbuf += struct.pack('QIIIIII', 
-                        e.timestamp, e.arg1, e.arg2, e.arg3, e.arg4, e.arg5, e.debugid)
+                tempbuf += struct.pack('QIIIIII',
+                        unsigned(e.timestamp),
+                        unsigned(e.arg1),
+                        unsigned(e.arg2),
+                        unsigned(e.arg3),
+                        unsigned(e.arg4),
+                        unsigned(e.arg5),
+                        unsigned(e.debugid))
 
             # Watch for out of order timestamps
             if earliest_time < (htab[min_kdbp].kd_prev_timebase & KDBG_TIMESTAMP_MASK) :
@@ -922,7 +968,8 @@ def DumpRawTraceFile(cmd_args=[], cmd_options={}):
                 htab[min_kdbp].kd_prev_timebase += 1
 
                 e.timestamp = htab[min_kdbp].kd_prev_timebase & KDBG_TIMESTAMP_MASK
-                e.timestamp |= (min_cpu << KDBG_CPU_SHIFT)
+                if not lp64:
+                    e.timestamp |= (min_cpu << KDBG_CPU_SHIFT)
             else :
                 htab[min_kdbp].kd_prev_timebase = earliest_time
 

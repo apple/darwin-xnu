@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -37,6 +37,8 @@
 #include <stdint.h>
 #include <sys/errno.h>
 
+#if APPLE_ARM64_ARCH_FAMILY
+
 #if MONOTONIC
 #include <kern/monotonic.h>
 #endif /* MONOTONIC */
@@ -50,7 +52,7 @@ void kpc_pmi_handler(unsigned int ctr);
 #define PMCR_PMC_8_9_OFFSET     (32)
 #define PMCR_PMC_8_9_SHIFT(PMC) (((PMC) - 8) + PMCR_PMC_8_9_OFFSET)
 #define PMCR_PMC_SHIFT(PMC)     (((PMC) <= 7) ? (PMC) : \
-                                  PMCR_PMC_8_9_SHIFT(PMC))
+	                          PMCR_PMC_8_9_SHIFT(PMC))
 
 /*
  * PMCR0 controls enabling, interrupts, and overflow of performance counters.
@@ -59,21 +61,6 @@ void kpc_pmi_handler(unsigned int ctr);
 /* PMC is enabled */
 #define PMCR0_PMC_ENABLE_MASK(PMC)  (UINT64_C(0x1) << PMCR_PMC_SHIFT(PMC))
 #define PMCR0_PMC_DISABLE_MASK(PMC) (~PMCR0_PMC_ENABLE_MASK(PMC))
-
-/* how interrupts are generated on PMIs */
-#define PMCR0_INTGEN_SHIFT   (8)
-#define PMCR0_INTGEN_MASK    (UINT64_C(0x7) << PMCR0_INTGEN_SHIFT)
-#define PMCR0_INTGEN_OFF     (UINT64_C(0) << PMCR0_INTGEN_SHIFT)
-#define PMCR0_INTGEN_PMI     (UINT64_C(1) << PMCR0_INTGEN_SHIFT)
-#define PMCR0_INTGEN_AIC     (UINT64_C(2) << PMCR0_INTGEN_SHIFT)
-#define PMCR0_INTGEN_DBG_HLT (UINT64_C(3) << PMCR0_INTGEN_SHIFT)
-#define PMCR0_INTGEN_FIQ     (UINT64_C(4) << PMCR0_INTGEN_SHIFT)
-
-/* 10 unused */
-
-/* set by hardware if PMI was generated */
-#define PMCR0_PMAI_SHIFT (11)
-#define PMCR0_PMAI_MASK  (UINT64_C(1) << PMCR0_PMAI_SHIFT)
 
 /* overflow on a PMC generates an interrupt */
 #define PMCR0_PMI_OFFSET            (12)
@@ -133,9 +120,9 @@ void kpc_pmi_handler(unsigned int ctr);
 #endif
 
 #define PMCR1_EL_ALL_ENABLE_MASK(PMC) (PMCR1_EL0_A32_ENABLE_MASK(PMC) | \
-                                       PMCR1_EL0_A64_ENABLE_MASK(PMC) | \
-                                       PMCR1_EL1_A64_ENABLE_MASK(PMC) | \
-                                       PMCR1_EL3_A64_ENABLE_MASK(PMC))
+	                               PMCR1_EL0_A64_ENABLE_MASK(PMC) | \
+	                               PMCR1_EL1_A64_ENABLE_MASK(PMC) | \
+	                               PMCR1_EL3_A64_ENABLE_MASK(PMC))
 #define PMCR1_EL_ALL_DISABLE_MASK(PMC) (~PMCR1_EL_ALL_ENABLE_MASK(PMC))
 
 /* PMESR0 and PMESR1 are event selection registers */
@@ -180,12 +167,10 @@ void kpc_pmi_handler(unsigned int ctr);
 #define SREG_PMC8 "S3_2_c15_c9_0"
 #define SREG_PMC9 "S3_2_c15_c10_0"
 
-#if !defined(APPLECYCLONE)
 #define SREG_PMMMAP   "S3_2_c15_c15_0"
 #define SREG_PMTRHLD2 "S3_2_c15_c14_0"
 #define SREG_PMTRHLD4 "S3_2_c15_c13_0"
 #define SREG_PMTRHLD6 "S3_2_c15_c12_0"
-#endif
 
 /*
  * The low 8 bits of a configuration words select the event to program on
@@ -208,8 +193,8 @@ void kpc_pmi_handler(unsigned int ctr);
  */
 #define SREG_WRITE(SR, V) __asm__ volatile("msr " SR ", %0 ; isb" : : "r"(V))
 #define SREG_READ(SR)     ({ uint64_t VAL; \
-                             __asm__ volatile("mrs %0, " SR : "=r"(VAL)); \
-                             VAL; })
+	                     __asm__ volatile("mrs %0, " SR : "=r"(VAL)); \
+	                     VAL; })
 
 /*
  * Configuration registers that can be controlled by RAWPMU:
@@ -217,11 +202,11 @@ void kpc_pmi_handler(unsigned int ctr);
  * All: PMCR2-4, OPMAT0-1, OPMSK0-1.
  * Typhoon/Twister/Hurricane: PMMMAP, PMTRHLD2/4/6.
  */
-#if defined(APPLECYCLONE)
+#if HAS_EARLY_APPLE_CPMU
 #define RAWPMU_CONFIG_COUNT 7
-#else
+#else /* HAS_EARLY_APPLE_CPMU */
 #define RAWPMU_CONFIG_COUNT 11
-#endif
+#endif /* !HAS_EARLY_APPLE_CPMU */
 
 /* TODO: allocate dynamically */
 static uint64_t saved_PMCR[MAX_CPUS][2];
@@ -243,104 +228,94 @@ static boolean_t whitelist_disabled = TRUE;
 static boolean_t whitelist_disabled = FALSE;
 #endif
 
-/* List of counter events that are allowed externally */
+#define CPMU_CORE_CYCLE 0x02
+
+#if HAS_EARLY_APPLE_CPMU
+
+#define CPMU_BIU_UPSTREAM_CYCLE 0x19
+#define CPMU_BIU_DOWNSTREAM_CYCLE 0x1a
+#define CPMU_L2C_AGENT_LD 0x22
+#define CPMU_L2C_AGENT_LD_MISS 0x23
+#define CPMU_L2C_AGENT_ST 0x24
+#define CPMU_L2C_AGENT_ST_MISS 0x25
+#define CPMU_INST_A32 0x78
+#define CPMU_INST_THUMB 0x79
+#define CPMU_INST_A64 0x7a
+#define CPMU_INST_BRANCH 0x7b
+#define CPMU_SYNC_DC_LOAD_MISS 0xb4
+#define CPMU_SYNC_DC_STORE_MISS 0xb5
+#define CPMU_SYNC_DTLB_MISS 0xb6
+#define CPMU_SYNC_ST_HIT_YNGR_LD 0xb9
+#define CPMU_SYNC_BR_ANY_MISP 0xc0
+#define CPMU_FED_IC_MISS_DEM 0xce
+#define CPMU_FED_ITLB_MISS 0xcf
+
+#else /* HAS_EARLY_APPLE_CPMU */
+
+#if HAS_CPMU_BIU_EVENTS
+#define CPMU_BIU_UPSTREAM_CYCLE 0x13
+#define CPMU_BIU_DOWNSTREAM_CYCLE 0x14
+#endif /* HAS_CPMU_BIU_EVENTS */
+
+#if HAS_CPMU_L2C_EVENTS
+#define CPMU_L2C_AGENT_LD 0x1a
+#define CPMU_L2C_AGENT_LD_MISS 0x1b
+#define CPMU_L2C_AGENT_ST 0x1c
+#define CPMU_L2C_AGENT_ST_MISS 0x1d
+#endif /* HAS_CPMU_L2C_EVENTS */
+
+#define CPMU_INST_A32 0x8a
+#define CPMU_INST_THUMB 0x8b
+#define CPMU_INST_A64 0x8c
+#define CPMU_INST_BRANCH 0x8d
+#define CPMU_SYNC_DC_LOAD_MISS 0xbf
+#define CPMU_SYNC_DC_STORE_MISS 0xc0
+#define CPMU_SYNC_DTLB_MISS 0xc1
+#define CPMU_SYNC_ST_HIT_YNGR_LD 0xc4
+#define CPMU_SYNC_BR_ANY_MISP 0xcb
+#define CPMU_FED_IC_MISS_DEM 0xd3
+#define CPMU_FED_ITLB_MISS 0xd4
+
+#endif /* !HAS_EARLY_APPLE_CPMU */
+
+/* List of counter events that are allowed to be used by 3rd-parties. */
 static kpc_config_t whitelist[] = {
-	0,    /* NO_EVENT */
+	0, /* NO_EVENT */
 
-#if defined(APPLECYCLONE)
-	0x02, /* CORE_CYCLE */
-	0x19, /* BIU_UPSTREAM_CYCLE */
-	0x1a, /* BIU_DOWNSTREAM_CYCLE */
-	0x22, /* L2C_AGENT_LD */
-	0x23, /* L2C_AGENT_LD_MISS */
-	0x24, /* L2C_AGENT_ST */
-	0x25, /* L2C_AGENT_ST_MISS */
-	0x78, /* INST_A32 */
-	0x79, /* INST_THUMB */
-	0x7a, /* INST_A64 */
-	0x7b, /* INST_BRANCH */
-	0xb4, /* SYNC_DC_LOAD_MISS */
-	0xb5, /* SYNC_DC_STORE_MISS */
-	0xb6, /* SYNC_DTLB_MISS */
-	0xb9, /* SYNC_ST_HIT_YNGR_LD */
-	0xc0, /* SYNC_BR_ANY_MISP */
-	0xce, /* FED_IC_MISS_DEM */
-	0xcf, /* FED_ITLB_MISS */
+	CPMU_CORE_CYCLE,
 
-#elif defined(APPLETYPHOON)
-	0x02, /* CORE_CYCLE */
-	0x13, /* BIU_UPSTREAM_CYCLE */
-	0x14, /* BIU_DOWNSTREAM_CYCLE */
-	0x1a, /* L2C_AGENT_LD */
-	0x1b, /* L2C_AGENT_LD_MISS */
-	0x1c, /* L2C_AGENT_ST */
-	0x1d, /* L2C_AGENT_ST_MISS */
-	0x8a, /* INST_A32 */
-	0x8b, /* INST_THUMB */
-	0x8c, /* INST_A64 */
-	0x8d, /* INST_BRANCH */
-	0xbf, /* SYNC_DC_LOAD_MISS */
-	0xc0, /* SYNC_DC_STORE_MISS */
-	0xc1, /* SYNC_DTLB_MISS */
-	0xc4, /* SYNC_ST_HIT_YNGR_LD */
-	0xcb, /* SYNC_BR_ANY_MISP */
-	0xd3, /* FED_IC_MISS_DEM */
-	0xd4, /* FED_ITLB_MISS */
+#if HAS_CPMU_BIU_EVENTS
+	CPMU_BIU_UPSTREAM_CYCLE, CPMU_BIU_DOWNSTREAM_CYCLE,
+#endif /* HAS_CPMU_BIU_EVENTS */
 
-#elif defined(APPLETWISTER) || defined(APPLEHURRICANE)
-	0x02, /* CORE_CYCLE */
-	0x1a, /* L2C_AGENT_LD */
-	0x1b, /* L2C_AGENT_LD_MISS */
-	0x1c, /* L2C_AGENT_ST */
-	0x1d, /* L2C_AGENT_ST_MISS */
-	0x8a, /* INST_A32 */
-	0x8b, /* INST_THUMB */
-	0x8c, /* INST_A64 */
-	0x8d, /* INST_BRANCH */
-	0xbf, /* SYNC_DC_LOAD_MISS */
-	0xc0, /* SYNC_DC_STORE_MISS */
-	0xc1, /* SYNC_DTLB_MISS */
-	0xc4, /* SYNC_ST_HIT_YNGR_LD */
-	0xcb, /* SYNC_BR_ANY_MISP */
-	0xd3, /* FED_IC_MISS_DEM */
-	0xd4, /* FED_ITLB_MISS */
+#if HAS_CPMU_L2C_EVENTS
+	CPMU_L2C_AGENT_LD, CPMU_L2C_AGENT_LD_MISS, CPMU_L2C_AGENT_ST,
+	CPMU_L2C_AGENT_ST_MISS,
+#endif /* HAS_CPMU_L2C_EVENTS */
 
-#elif defined(APPLEMONSOON)
-	0x02, /* CORE_CYCLE */
-	0x8a, /* INST_A32 */
-	0x8b, /* INST_THUMB */
-	0x8c, /* INST_A64 */
-	0x8d, /* INST_BRANCH */
-	0xbf, /* SYNC_DC_LOAD_MISS */
-	0xc0, /* SYNC_DC_STORE_MISS */
-	0xc1, /* SYNC_DTLB_MISS */
-	0xc4, /* SYNC_ST_HIT_YNGR_LD */
-	0xcb, /* SYNC_BR_ANY_MISP */
-	0xd3, /* FED_IC_MISS_DEM */
-	0xd4, /* FED_ITLB_MISS */
-
-#else
-	/* An unknown CPU gets a trivial { NO_EVENT } whitelist. */
-#endif
+	CPMU_INST_A32, CPMU_INST_THUMB, CPMU_INST_A64, CPMU_INST_BRANCH,
+	CPMU_SYNC_DC_LOAD_MISS, CPMU_SYNC_DC_STORE_MISS,
+	CPMU_SYNC_DTLB_MISS, CPMU_SYNC_ST_HIT_YNGR_LD,
+	CPMU_SYNC_BR_ANY_MISP, CPMU_FED_IC_MISS_DEM, CPMU_FED_ITLB_MISS,
 };
-#define WHITELIST_COUNT (sizeof(whitelist)/sizeof(*whitelist))
+#define WHITELIST_COUNT (sizeof(whitelist) / sizeof(whitelist[0]))
+#define EVENT_MASK 0xff
 
-static boolean_t
+static bool
 config_in_whitelist(kpc_config_t cfg)
 {
-	unsigned int i;
-
-	for (i = 0; i < WHITELIST_COUNT; i++) {
-		if (cfg == whitelist[i]) {
-			return TRUE;
+	for (unsigned int i = 0; i < WHITELIST_COUNT; i++) {
+		/* Strip off any EL configuration bits -- just look at the event. */
+		if ((cfg & EVENT_MASK) == whitelist[i]) {
+			return true;
 		}
 	}
-
-	return FALSE;
+	return false;
 }
 
 #ifdef KPC_DEBUG
-static void dump_regs(void)
+static void
+dump_regs(void)
 {
 	uint64_t val;
 	kprintf("PMCR0 = 0x%" PRIx64 "\n", SREG_READ(SREG_PMCR0));
@@ -370,33 +345,22 @@ static void dump_regs(void)
 static boolean_t
 enable_counter(uint32_t counter)
 {
-	int cpuid = cpu_number();
-	uint64_t pmcr0 = 0, intgen_type;
-	boolean_t counter_running, pmi_enabled, intgen_correct, enabled;
+	uint64_t pmcr0 = 0;
+	boolean_t counter_running, pmi_enabled, enabled;
 
 	pmcr0 = SREG_READ(SREG_PMCR0) | 0x3 /* leave the fixed counters enabled for monotonic */;
 
 	counter_running = (pmcr0 & PMCR0_PMC_ENABLE_MASK(counter)) != 0;
 	pmi_enabled = (pmcr0 & PMCR0_PMI_ENABLE_MASK(counter)) != 0;
 
-	/* TODO this should use the PMI path rather than AIC for the interrupt
-	 *      as it is faster
-	 */
-	intgen_type = PMCR0_INTGEN_AIC;
-	intgen_correct = (pmcr0 & PMCR0_INTGEN_MASK) == intgen_type;
-
-	enabled = counter_running && pmi_enabled && intgen_correct;
+	enabled = counter_running && pmi_enabled;
 
 	if (!enabled) {
 		pmcr0 |= PMCR0_PMC_ENABLE_MASK(counter);
 		pmcr0 |= PMCR0_PMI_ENABLE_MASK(counter);
-		pmcr0 &= ~PMCR0_INTGEN_MASK;
-		pmcr0 |= intgen_type;
-
 		SREG_WRITE(SREG_PMCR0, pmcr0);
 	}
 
-	saved_PMCR[cpuid][0] = pmcr0;
 	return enabled;
 }
 
@@ -405,7 +369,6 @@ disable_counter(uint32_t counter)
 {
 	uint64_t pmcr0;
 	boolean_t enabled;
-	int cpuid = cpu_number();
 
 	if (counter < 2) {
 		return true;
@@ -419,7 +382,6 @@ disable_counter(uint32_t counter)
 		SREG_WRITE(SREG_PMCR0, pmcr0);
 	}
 
-	saved_PMCR[cpuid][0] = pmcr0;
 	return enabled;
 }
 
@@ -468,19 +430,19 @@ static uint64_t
 read_counter(uint32_t counter)
 {
 	switch (counter) {
-		// case 0: return SREG_READ(SREG_PMC0);
-		// case 1: return SREG_READ(SREG_PMC1);
-		case 2: return SREG_READ(SREG_PMC2);
-		case 3: return SREG_READ(SREG_PMC3);
-		case 4: return SREG_READ(SREG_PMC4);
-		case 5: return SREG_READ(SREG_PMC5);
-		case 6: return SREG_READ(SREG_PMC6);
-		case 7: return SREG_READ(SREG_PMC7);
+	// case 0: return SREG_READ(SREG_PMC0);
+	// case 1: return SREG_READ(SREG_PMC1);
+	case 2: return SREG_READ(SREG_PMC2);
+	case 3: return SREG_READ(SREG_PMC3);
+	case 4: return SREG_READ(SREG_PMC4);
+	case 5: return SREG_READ(SREG_PMC5);
+	case 6: return SREG_READ(SREG_PMC6);
+	case 7: return SREG_READ(SREG_PMC7);
 #if (KPC_ARM64_CONFIGURABLE_COUNT > 6)
-		case 8: return SREG_READ(SREG_PMC8);
-		case 9: return SREG_READ(SREG_PMC9);
+	case 8: return SREG_READ(SREG_PMC8);
+	case 9: return SREG_READ(SREG_PMC9);
 #endif
-		default: return 0;
+	default: return 0;
 	}
 }
 
@@ -488,19 +450,19 @@ static void
 write_counter(uint32_t counter, uint64_t value)
 {
 	switch (counter) {
-		// case 0: SREG_WRITE(SREG_PMC0, value); break;
-		// case 1: SREG_WRITE(SREG_PMC1, value); break;
-		case 2: SREG_WRITE(SREG_PMC2, value); break;
-		case 3: SREG_WRITE(SREG_PMC3, value); break;
-		case 4: SREG_WRITE(SREG_PMC4, value); break;
-		case 5: SREG_WRITE(SREG_PMC5, value); break;
-		case 6: SREG_WRITE(SREG_PMC6, value); break;
-		case 7: SREG_WRITE(SREG_PMC7, value); break;
+	// case 0: SREG_WRITE(SREG_PMC0, value); break;
+	// case 1: SREG_WRITE(SREG_PMC1, value); break;
+	case 2: SREG_WRITE(SREG_PMC2, value); break;
+	case 3: SREG_WRITE(SREG_PMC3, value); break;
+	case 4: SREG_WRITE(SREG_PMC4, value); break;
+	case 5: SREG_WRITE(SREG_PMC5, value); break;
+	case 6: SREG_WRITE(SREG_PMC6, value); break;
+	case 7: SREG_WRITE(SREG_PMC7, value); break;
 #if (KPC_ARM64_CONFIGURABLE_COUNT > 6)
-		case 8: SREG_WRITE(SREG_PMC8, value); break;
-		case 9: SREG_WRITE(SREG_PMC9, value); break;
+	case 8: SREG_WRITE(SREG_PMC8, value); break;
+	case 9: SREG_WRITE(SREG_PMC9, value); break;
 #endif
-		default: break;
+	default: break;
 	}
 }
 
@@ -553,12 +515,9 @@ save_regs(void)
 {
 	int cpuid = cpu_number();
 
-	__asm__ volatile("dmb ish");
+	__asm__ volatile ("dmb ish");
 
 	assert(ml_get_interrupts_enabled() == FALSE);
-
-	/* Save current PMCR0/1 values. PMCR2-4 are in the RAWPMU set. */
-	saved_PMCR[cpuid][0] = SREG_READ(SREG_PMCR0) | 0x3;
 
 	/* Save event selections. */
 	saved_PMESR[cpuid][0] = SREG_READ(SREG_PMESR0);
@@ -593,7 +552,6 @@ restore_regs(void)
 
 	/* Restore PMCR0/1 values (with PMCR0 last to enable). */
 	SREG_WRITE(SREG_PMCR1, saved_PMCR[cpuid][1] | 0x30303);
-	SREG_WRITE(SREG_PMCR0, saved_PMCR[cpuid][0] | 0x3);
 }
 
 static uint64_t
@@ -602,24 +560,24 @@ get_counter_config(uint32_t counter)
 	uint64_t pmesr;
 
 	switch (counter) {
-		case 2: /* FALLTHROUGH */
-		case 3: /* FALLTHROUGH */
-		case 4: /* FALLTHROUGH */
-		case 5:
-			pmesr = PMESR_EVT_DECODE(SREG_READ(SREG_PMESR0), counter, 2);
-			break;
-		case 6: /* FALLTHROUGH */
-		case 7:
+	case 2:         /* FALLTHROUGH */
+	case 3:         /* FALLTHROUGH */
+	case 4:         /* FALLTHROUGH */
+	case 5:
+		pmesr = PMESR_EVT_DECODE(SREG_READ(SREG_PMESR0), counter, 2);
+		break;
+	case 6:         /* FALLTHROUGH */
+	case 7:
 #if (KPC_ARM64_CONFIGURABLE_COUNT > 6)
-			/* FALLTHROUGH */
-		case 8: /* FALLTHROUGH */
-		case 9:
+	/* FALLTHROUGH */
+	case 8:         /* FALLTHROUGH */
+	case 9:
 #endif
-			pmesr = PMESR_EVT_DECODE(SREG_READ(SREG_PMESR1), counter, 6);
-			break;
-		default:
-			pmesr = 0;
-			break;
+		pmesr = PMESR_EVT_DECODE(SREG_READ(SREG_PMESR1), counter, 6);
+		break;
+	default:
+		pmesr = 0;
+		break;
 	}
 
 	kpc_config_t config = pmesr;
@@ -654,32 +612,32 @@ set_counter_config(uint32_t counter, uint64_t config)
 	uint64_t pmesr = 0;
 
 	switch (counter) {
-		case 2: /* FALLTHROUGH */
-		case 3: /* FALLTHROUGH */
-		case 4: /* FALLTHROUGH */
-		case 5:
-			pmesr = SREG_READ(SREG_PMESR0);
-			pmesr &= PMESR_EVT_CLEAR(counter, 2);
-			pmesr |= PMESR_EVT_ENCODE(config, counter, 2);
-			SREG_WRITE(SREG_PMESR0, pmesr);
-			saved_PMESR[cpuid][0] = pmesr;
-			break;
+	case 2:         /* FALLTHROUGH */
+	case 3:         /* FALLTHROUGH */
+	case 4:         /* FALLTHROUGH */
+	case 5:
+		pmesr = SREG_READ(SREG_PMESR0);
+		pmesr &= PMESR_EVT_CLEAR(counter, 2);
+		pmesr |= PMESR_EVT_ENCODE(config, counter, 2);
+		SREG_WRITE(SREG_PMESR0, pmesr);
+		saved_PMESR[cpuid][0] = pmesr;
+		break;
 
-		case 6: /* FALLTHROUGH */
-		case 7:
+	case 6:         /* FALLTHROUGH */
+	case 7:
 #if KPC_ARM64_CONFIGURABLE_COUNT > 6
-			/* FALLTHROUGH */
-		case 8: /* FALLTHROUGH */
-		case 9:
+	/* FALLTHROUGH */
+	case 8:         /* FALLTHROUGH */
+	case 9:
 #endif
-			pmesr = SREG_READ(SREG_PMESR1);
-			pmesr &= PMESR_EVT_CLEAR(counter, 6);
-			pmesr |= PMESR_EVT_ENCODE(config, counter, 6);
-			SREG_WRITE(SREG_PMESR1, pmesr);
-			saved_PMESR[cpuid][1] = pmesr;
-			break;
-		default:
-			break;
+		pmesr = SREG_READ(SREG_PMESR1);
+		pmesr &= PMESR_EVT_CLEAR(counter, 6);
+		pmesr |= PMESR_EVT_ENCODE(config, counter, 6);
+		SREG_WRITE(SREG_PMESR1, pmesr);
+		saved_PMESR[cpuid][1] = pmesr;
+		break;
+	default:
+		break;
 	}
 
 	set_modes(counter, config);
@@ -758,8 +716,9 @@ set_running_configurable(uint64_t target_mask, uint64_t state_mask)
 	enabled = ml_set_interrupts_enabled(FALSE);
 
 	for (uint32_t i = 0; i < cfg_count; ++i) {
-		if (((1ULL << i) & target_mask) == 0)
+		if (((1ULL << i) & target_mask) == 0) {
 			continue;
+		}
 		assert(kpc_controls_counter(offset + i));
 
 		if ((1ULL << i) & state_mask) {
@@ -780,10 +739,11 @@ kpc_set_running_xcall( void *vstate )
 	assert(mp_config);
 
 	set_running_configurable(mp_config->cfg_target_mask,
-				 mp_config->cfg_state_mask);
+	    mp_config->cfg_state_mask);
 
-	if (hw_atomic_sub(&kpc_xcall_sync, 1) == 0)
+	if (os_atomic_dec(&kpc_xcall_sync, relaxed) == 0) {
 		thread_wakeup((event_t) &kpc_xcall_sync);
+	}
 }
 
 static uint32_t kpc_xread_sync;
@@ -799,9 +759,9 @@ kpc_get_curcpu_counters_xcall(void *args)
 	int r = kpc_get_curcpu_counters(handler->classes, NULL, &handler->buf[offset]);
 
 	/* number of counters added by this CPU, needs to be atomic  */
-	hw_atomic_add(&(handler->nb_counters), r);
+	os_atomic_add(&(handler->nb_counters), r, relaxed);
 
-	if (hw_atomic_sub(&kpc_xread_sync, 1) == 0) {
+	if (os_atomic_dec(&kpc_xread_sync, relaxed) == 0) {
 		thread_wakeup((event_t) &kpc_xread_sync);
 	}
 }
@@ -854,17 +814,18 @@ kpc_get_configurable_counters(uint64_t *counterv, uint64_t pmc_mask)
 	assert(counterv);
 
 	for (uint32_t i = 0; i < cfg_count; ++i) {
-		if (((1ULL << i) & pmc_mask) == 0)
+		if (((1ULL << i) & pmc_mask) == 0) {
 			continue;
+		}
 		ctr = read_counter(i + offset);
 
 		if (ctr & KPC_ARM64_COUNTER_OVF_MASK) {
 			ctr = CONFIGURABLE_SHADOW(i) +
-				(kpc_configurable_max() - CONFIGURABLE_RELOAD(i) + 1 /* Wrap */) +
-				(ctr & KPC_ARM64_COUNTER_MASK);
+			    (kpc_configurable_max() - CONFIGURABLE_RELOAD(i) + 1 /* Wrap */) +
+			    (ctr & KPC_ARM64_COUNTER_MASK);
 		} else {
 			ctr = CONFIGURABLE_SHADOW(i) +
-				(ctr - CONFIGURABLE_RELOAD(i));
+			    (ctr - CONFIGURABLE_RELOAD(i));
 		}
 
 		*counterv++ = ctr;
@@ -880,9 +841,11 @@ kpc_get_configurable_config(kpc_config_t *configv, uint64_t pmc_mask)
 
 	assert(configv);
 
-	for (uint32_t i = 0; i < cfg_count; ++i)
-		if ((1ULL << i) & pmc_mask)
+	for (uint32_t i = 0; i < cfg_count; ++i) {
+		if ((1ULL << i) & pmc_mask) {
 			*configv++ = get_counter_config(i + offset);
+		}
+	}
 	return 0;
 }
 
@@ -897,8 +860,9 @@ kpc_set_configurable_config(kpc_config_t *configv, uint64_t pmc_mask)
 	enabled = ml_set_interrupts_enabled(FALSE);
 
 	for (uint32_t i = 0; i < cfg_count; ++i) {
-		if (((1ULL << i) & pmc_mask) == 0)
+		if (((1ULL << i) & pmc_mask) == 0) {
 			continue;
+		}
 		assert(kpc_controls_counter(i + offset));
 
 		set_counter_config(i + offset, *configv++);
@@ -932,8 +896,9 @@ kpc_set_config_xcall(void *vmp_config)
 		new_config += RAWPMU_CONFIG_COUNT;
 	}
 
-	if (hw_atomic_sub(&kpc_config_sync, 1) == 0)
+	if (os_atomic_dec(&kpc_config_sync, relaxed) == 0) {
 		thread_wakeup((event_t) &kpc_config_sync);
+	}
 }
 
 static uint64_t
@@ -941,13 +906,19 @@ kpc_reload_counter(uint32_t ctr)
 {
 	assert(ctr < (kpc_configurable_count() + kpc_fixed_count()));
 
-	/* don't reload counters reserved for power management */
-	if (!kpc_controls_counter(ctr))
-		return 0ULL;
-
 	uint64_t old = read_counter(ctr);
-	write_counter(ctr, FIXED_RELOAD(ctr));
-	return old & KPC_ARM64_COUNTER_MASK;
+
+	if (kpc_controls_counter(ctr)) {
+		write_counter(ctr, FIXED_RELOAD(ctr));
+		return old & KPC_ARM64_COUNTER_MASK;
+	} else {
+		/*
+		 * Unset the overflow bit to clear the condition that drives
+		 * PMIs.  The power manager is not interested in handling PMIs.
+		 */
+		write_counter(ctr, old & KPC_ARM64_COUNTER_MASK);
+		return 0;
+	}
 }
 
 static uint32_t kpc_reload_sync;
@@ -980,10 +951,12 @@ kpc_set_reload_xcall(void *vmp_config)
 		count = kpc_configurable_count();
 		for (uint32_t i = 0; i < count; ++i) {
 			/* ignore the counter */
-			if (((1ULL << i) & mp_config->pmc_mask) == 0)
+			if (((1ULL << i) & mp_config->pmc_mask) == 0) {
 				continue;
-			if (*new_period == 0)
+			}
+			if (*new_period == 0) {
 				*new_period = kpc_configurable_max();
+			}
 			CONFIGURABLE_RELOAD(i) = max - *new_period;
 			/* reload the counter */
 			kpc_reload_counter(offset + i);
@@ -994,8 +967,9 @@ kpc_set_reload_xcall(void *vmp_config)
 
 	ml_set_interrupts_enabled(enabled);
 
-	if (hw_atomic_sub(&kpc_reload_sync, 1) == 0)
+	if (os_atomic_dec(&kpc_reload_sync, relaxed) == 0) {
 		thread_wakeup((event_t) &kpc_reload_sync);
+	}
 }
 
 void
@@ -1067,7 +1041,7 @@ kpc_set_config_arch(struct kpc_config_remote *mp_config)
 	return 0;
 }
 
-void 
+void
 kpc_idle(void)
 {
 	if (kpc_configured) {
@@ -1075,8 +1049,8 @@ kpc_idle(void)
 	}
 }
 
-void 
-kpc_idle_exit(void) 
+void
+kpc_idle_exit(void)
 {
 	if (kpc_configured) {
 		restore_regs();
@@ -1107,3 +1081,165 @@ kpc_get_pmu_version(void)
 {
 	return KPC_PMU_ARM_APPLE;
 }
+
+#else /* APPLE_ARM64_ARCH_FAMILY */
+
+/* We don't currently support non-Apple arm64 PMU configurations like PMUv3 */
+
+void
+kpc_arch_init(void)
+{
+	/* No-op */
+}
+
+uint32_t
+kpc_get_classes(void)
+{
+	return 0;
+}
+
+uint32_t
+kpc_fixed_count(void)
+{
+	return 0;
+}
+
+uint32_t
+kpc_configurable_count(void)
+{
+	return 0;
+}
+
+uint32_t
+kpc_fixed_config_count(void)
+{
+	return 0;
+}
+
+uint32_t
+kpc_configurable_config_count(uint64_t pmc_mask __unused)
+{
+	return 0;
+}
+
+int
+kpc_get_fixed_config(kpc_config_t *configv __unused)
+{
+	return 0;
+}
+
+uint64_t
+kpc_fixed_max(void)
+{
+	return 0;
+}
+
+uint64_t
+kpc_configurable_max(void)
+{
+	return 0;
+}
+
+int
+kpc_get_configurable_config(kpc_config_t *configv __unused, uint64_t pmc_mask __unused)
+{
+	return ENOTSUP;
+}
+
+int
+kpc_get_configurable_counters(uint64_t *counterv __unused, uint64_t pmc_mask __unused)
+{
+	return ENOTSUP;
+}
+
+int
+kpc_get_fixed_counters(uint64_t *counterv __unused)
+{
+	return 0;
+}
+
+boolean_t
+kpc_is_running_fixed(void)
+{
+	return FALSE;
+}
+
+boolean_t
+kpc_is_running_configurable(uint64_t pmc_mask __unused)
+{
+	return FALSE;
+}
+
+int
+kpc_set_running_arch(struct kpc_running_remote *mp_config __unused)
+{
+	return ENOTSUP;
+}
+
+int
+kpc_set_period_arch(struct kpc_config_remote *mp_config __unused)
+{
+	return ENOTSUP;
+}
+
+int
+kpc_set_config_arch(struct kpc_config_remote *mp_config __unused)
+{
+	return ENOTSUP;
+}
+
+void
+kpc_idle(void)
+{
+	// do nothing
+}
+
+void
+kpc_idle_exit(void)
+{
+	// do nothing
+}
+
+int
+kpc_get_all_cpus_counters(uint32_t classes __unused, int *curcpu __unused, uint64_t *buf __unused)
+{
+	return 0;
+}
+
+int
+kpc_set_sw_inc( uint32_t mask __unused )
+{
+	return ENOTSUP;
+}
+
+int
+kpc_get_pmu_version(void)
+{
+	return KPC_PMU_ERROR;
+}
+
+uint32_t
+kpc_rawpmu_config_count(void)
+{
+	return 0;
+}
+
+int
+kpc_get_rawpmu_config(__unused kpc_config_t *configv)
+{
+	return 0;
+}
+
+int
+kpc_disable_whitelist( int val __unused )
+{
+	return 0;
+}
+
+int
+kpc_get_whitelist_disabled( void )
+{
+	return 0;
+}
+
+#endif /* !APPLE_ARM64_ARCH_FAMILY */

@@ -2,7 +2,7 @@
  * Copyright (c) 2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -97,28 +97,33 @@ int sleepus;
 pthread_t threads[MAX_THREADS];
 uint32_t roles[MAX_THREADS];
 
-void usage(char **a) {
+void
+usage(char **a)
+{
 	exit(1);
 }
 
-void set_enable(int val)
+void
+set_enable(int val)
 {
 	int mib[6];
 	size_t needed;
 
-        mib[0] = CTL_KERN;
-        mib[1] = KERN_KDEBUG;
-        mib[2] = KERN_KDENABLE;
-        mib[3] = val;
-        mib[4] = 0;
-        mib[5] = 0;
+	mib[0] = CTL_KERN;
+	mib[1] = KERN_KDEBUG;
+	mib[2] = KERN_KDENABLE;
+	mib[3] = val;
+	mib[4] = 0;
+	mib[5] = 0;
 
-        if (sysctl(mib, 4, NULL, &needed, NULL, 0) < 0) {
-                printf("trace facility failure, KERN_KDENABLE\n");
+	if (sysctl(mib, 4, NULL, &needed, NULL, 0) < 0) {
+		printf("trace facility failure, KERN_KDENABLE\n");
 	}
 }
 
-void initialize_arena_element(int i) {
+void
+initialize_arena_element(int i)
+{
 	__unused int sysret;
 	void *hint = reuse_addrs ? (void *)0x1000 : NULL;
 	parray[i].taddr = (uintptr_t)mmap(hint, mapping_size, PROT_READ | PROT_WRITE, MAP_ANON | MAP_SHARED, -1, 0);
@@ -128,7 +133,7 @@ void initialize_arena_element(int i) {
 		exit(2);
 	}
 
-#if	!defined(__LP64__)
+#if     !defined(__LP64__)
 	uint32_t pattern = parray[i].taddr;
 	pattern |= cpid & 0xFFF;
 //	memset_pattern4((void *)parray[i].taddr, &pattern, PAGE_SIZE); //
@@ -141,7 +146,7 @@ void initialize_arena_element(int i) {
 //	memset_pattern8(parray[i].taddr, &pattern, PAGE_SIZE);
 #endif
 
-	uint64_t val = 	(*(uintptr_t *)parray[i].taddr);
+	uint64_t val =  (*(uintptr_t *)parray[i].taddr);
 
 	if (val != 0) {
 		CONSISTENCY("Mismatch, actual: 0x%llx, expected: 0x%llx\n", (unsigned long long)val, 0ULL);
@@ -162,25 +167,31 @@ void initialize_arena_element(int i) {
 	}
 }
 
-void initialize_arena(void) {
+void
+initialize_arena(void)
+{
 	for (int i = 0; i < arenasize; i++) {
 		initialize_arena_element(i);
 	}
 }
 
-void *tlbexerciser(void *targs) {
+void *
+tlbexerciser(void *targs)
+{
 	uint32_t role = *(uint32_t *)targs;
 	__unused int sysret;
 	printf("Starting thread %p, role: %u\n", pthread_self(), role);
 
-	for(;;) {
+	for (;;) {
 		for (int i = 0; i < arenasize; i++) {
-			if (all_stop)
+			if (all_stop) {
 				return NULL;
+			}
 
 			if (trymode) {
-				if (OSSpinLockTry(&parray[i].tlock) == false)
+				if (OSSpinLockTry(&parray[i].tlock) == false) {
 					continue;
+				}
 			} else {
 				OSSpinLockLock(&parray[i].tlock);
 			}
@@ -191,8 +202,9 @@ void *tlbexerciser(void *targs) {
 				uintptr_t val = *(uintptr_t *)parray[i].taddr;
 
 				if (val != ad) {
-					if (stop_on_failure)
+					if (stop_on_failure) {
 						all_stop = true;
+					}
 					syscall(180, 0x71BC0000, (ad >> 32), (ad & ~0), 0, 0, 0);
 					CONSISTENCY("Mismatch, actual: 0x%llx, expected: 0x%llx\n", (unsigned long long)val, (unsigned long long)ad);
 					if (stop_on_failure) {
@@ -223,15 +235,18 @@ void *tlbexerciser(void *targs) {
 
 			parray[i].tlock = 0; //unlock
 
-			if (sleepus)
+			if (sleepus) {
 				usleep(sleepus);
+			}
 		}
 	}
 
 	return NULL;
 }
 
-int main(int argc, char **argv) {
+int
+main(int argc, char **argv)
+{
 	extern char *optarg;
 	int arg;
 	unsigned nthreads = NTHREADS;
@@ -248,7 +263,7 @@ int main(int argc, char **argv) {
 			break;
 		case 's':
 			arenasize = atoi(optarg); // we typically want this to
-						  // be sized < 2nd level TLB
+			                          // be sized < 2nd level TLB
 			break;
 		case 'f':
 			stop_on_failure = true;
@@ -270,7 +285,7 @@ int main(int argc, char **argv) {
 		}
 	}
 
-	if(optind != argc) {
+	if (optind != argc) {
 		usage(argv);
 	}
 
@@ -283,25 +298,26 @@ int main(int argc, char **argv) {
 
 	for (int dex = 0; dex < nthreads; dex++) {
 		roles[dex] = LOOPER;
-		if (dex == 0)
+		if (dex == 0) {
 			roles[dex] = OBSERVER;
+		}
 		int result = pthread_create(&threads[dex], NULL, tlbexerciser, &roles[dex]);
-		if(result) {
+		if (result) {
 			printf("pthread_create: %d starting worker thread; aborting.\n", result);
 			return result;
 		}
 	}
 
-	for(int dex = 0; dex < nthreads; dex++) {
+	for (int dex = 0; dex < nthreads; dex++) {
 		void *rtn;
 		int result = pthread_join(threads[dex], &rtn);
 
-		if(result) {
+		if (result) {
 			printf("pthread_join(): %d, aborting\n", result);
 			return result;
 		}
 
-		if(rtn) {
+		if (rtn) {
 			printf("***Aborting on worker error\n");
 			exit(1);
 		}

@@ -152,6 +152,17 @@ typedef uintptr_t ptrauth_generic_signature_t;
 #define ptrauth_blend_discriminator(__pointer, __integer) \
   __builtin_ptrauth_blend_discriminator(__pointer, __integer)
 
+/* Compute the 16-bit integer discriminator of the given type.
+
+   The argument must be a type.
+*/
+#if __has_feature(ptrauth_type_discriminator)
+#define ptrauth_type_discriminator(__type) \
+  __builtin_ptrauth_type_discriminator(__type)
+#else
+#define ptrauth_type_discriminator(__type) ((uintptr_t)0)
+#endif
+
 /* Add a signature to the given pointer value using a specific key,
    using the given extra data as a salt to the signing process.
 
@@ -308,6 +319,7 @@ typedef uintptr_t ptrauth_generic_signature_t;
 
 #define ptrauth_strip(__value, __key) __value
 #define ptrauth_blend_discriminator(__pointer, __integer) ((uintptr_t)0)
+#define ptrauth_type_discriminator(__type) ((uintptr_t)0)
 #define ptrauth_sign_constant(__value, __key, __data) __value
 #define ptrauth_sign_unauthenticated(__value, __key, __data) __value
 #define ptrauth_auth_and_resign(__value, __old_key, __old_data, __new_key, __new_data) __value

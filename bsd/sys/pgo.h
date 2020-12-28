@@ -56,28 +56,28 @@
  * All members are in network byte order.
  */
 struct pgo_metadata_footer {
-    /**
-     * number of pairs.
-     *
-     * This should be htonl(n), where n is the number of key-value pairs in the
-     * metadata buffer
-     */
-    uint32_t number_of_pairs;
+	/**
+	 * number of pairs.
+	 *
+	 * This should be htonl(n), where n is the number of key-value pairs in the
+	 * metadata buffer
+	 */
+	uint32_t number_of_pairs;
 
-    /**
-     * pointer to the metadata buffer
-     *
-     * This should be htonl(offset), where offset is the backwards offset from
-     * the end of the file to the metadata buffer.
-     */
-    uint32_t  offset_to_pairs;
+	/**
+	 * pointer to the metadata buffer
+	 *
+	 * This should be htonl(offset), where offset is the backwards offset from
+	 * the end of the file to the metadata buffer.
+	 */
+	uint32_t  offset_to_pairs;
 
-    /**
-     * magic number
-     *
-     * This should be  htonl(0x6d657461);
-     */
-    uint32_t magic;
+	/**
+	 * magic number
+	 *
+	 * This should be  htonl(0x6d657461);
+	 */
+	uint32_t magic;
 };
 
 #ifndef KERNEL

@@ -49,14 +49,20 @@ MIG_DEFS =	\
 	thread_act.defs \
 	vm_map.defs
 
+MIG_PRIVATE_DEFS = \
+	restartable.defs
+
 MACH_PRIVATE_DEFS = \
 	coalition_notification.defs \
+	fairplayd_notification.defs \
+	arcade_upcall.defs \
 	ktrace_background.defs \
 	mach_notify.defs \
 	memory_object_control.defs \
 	memory_object_default.defs \
 	sysdiagnose_notification.defs \
 	upl.defs \
+	vfs_nspace.defs \
 	vm32_map.defs
 
 #
@@ -68,12 +74,15 @@ MIG_USHDRS = \
 	clock_reply_server.h \
 	coalition_notification_server.h \
 	exc_server.h \
+	fairplayd_notification_server.h \
+	arcade_upcall_server.h \
 	mach_exc_server.h \
 	memory_object_default_server.h \
 	notify_server.h \
 	task_access_server.h \
 	telemetry_notification_server.h \
-	sysdiagnose_notification_server.h
+	sysdiagnose_notification_server.h \
+	vfs_nspace_server.h
 
 MIG_UUHDRS = \
 	clock.h \
@@ -95,7 +104,8 @@ MIG_UUHDRS = \
 	task_access.h \
 	thread_act.h \
 	upl.h \
-	vm_map.h
+	vm_map.h \
+	vfs_nspace.h
 
 MIGINCLUDES = ${MIG_UUHDRS} ${MIG_USHDRS}
 
@@ -170,6 +180,8 @@ PRIVATE_DATAFILES = \
 	bootstrap.h \
 	coalition.h \
 	coalition_notification.defs \
+	fairplayd_notification.defs \
+	arcade_upcall.defs \
 	host_info.h \
 	ktrace_background.defs \
 	mach_host.defs \
@@ -189,7 +201,9 @@ PRIVATE_DATAFILES = \
 	task_policy.h \
 	thread_policy.h \
 	thread_switch.h \
-	vm_prot.h
+	vfs_nspace.defs \
+	vm_prot.h \
+	${MIG_PRIVATE_DEFS}
 
 INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
 
@@ -222,7 +236,7 @@ ${MIGINCLUDES} : ${MIG_TYPES}
 
 ${MIG_UUHDRS} : \
 	%.h : %.defs
-	@echo "$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0)"
+	$(call makelog,$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0))
 	$(_v)$(MIG) $(MIGFLAGS)		\
 		-server /dev/null	\
 		-user /dev/null		\
@@ -231,7 +245,7 @@ ${MIG_UUHDRS} : \
 
 ${MIG_USHDRS} : \
 	%_server.h : %.defs
-	@echo "$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0)"
+	$(call makelog,$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0))
 	$(_v)$(MIG) $(MIGFLAGS)		\
 		-server /dev/null	\
 		-user /dev/null		\
@@ -275,6 +289,8 @@ MIG_KUSRC = \
 	clock_reply_user.c \
 	coalition_notification_user.c \
 	exc_user.c \
+	fairplayd_notification_user.c \
+	arcade_upcall_user.c \
 	host_notify_reply_user.c \
 	ktrace_background_user.c \
 	mach_exc_user.c \
@@ -286,10 +302,12 @@ MIG_KUSRC = \
 	task_access_user.c \
 	telemetry_notification_user.c \
 	upl_user.c \
+	vfs_nspace_user.c \
 	vm_map_user.c \
 	sysdiagnose_notification_user.c
 
 MIG_KSHDRS = \
+	arcade_register_server.h \
 	clock_server.h \
 	clock_priv_server.h \
 	exc_server.h \
@@ -308,6 +326,7 @@ MIG_KSHDRS = \
 	memory_object_default_server.h \
 	processor_server.h \
 	processor_set_server.h \
+	restartable_server.h \
 	task_server.h \
 	thread_act_server.h \
 	upl_server.h \
@@ -315,6 +334,7 @@ MIG_KSHDRS = \
 	vm32_map_server.h
 
 MIG_KSSRC = \
+	arcade_register_server.c \
 	clock_server.c \
 	clock_priv_server.c \
 	exc_server.c \
@@ -333,6 +353,7 @@ MIG_KSSRC = \
 	memory_object_default_server.c \
 	processor_server.c \
 	processor_set_server.c \
+	restartable_server.c \
 	task_server.c \
 	thread_act_server.c \
 	upl_server.c \
@@ -363,7 +384,7 @@ ${COMP_FILES} : ${MIG_TYPES}
 
 ${MIG_KUSRC} : \
 	%_user.c : %.defs
-	@echo "$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0)"
+	$(call makelog,$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0))
 	$(_v)${MIG} ${MIGFLAGS} ${MIGKUFLAGS}        \
 		-user    $*_user.c              \
 		-header  $*.h              \
@@ -373,7 +394,7 @@ ${MIG_KUSRC} : \
 
 ${MIG_KSSRC}: \
 	%_server.c : %.defs
-	@echo "$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0)"
+	$(call makelog,$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0))
 	$(_v)${MIG} ${MIGFLAGS} ${MIGKSFLAGS}        \
 		-user    /dev/null              \
 		-header  /dev/null              \

@@ -89,11 +89,14 @@
 #include <kern/misc_protos.h>
 #include <kern/sched.h>
 #include <kern/processor.h>
-#include <kern/mach_node.h>	// mach_node_port_changed()
+#include <kern/mach_node.h>     // mach_node_port_changed()
 
 #include <vm/vm_map.h>
 #include <vm/vm_purgeable_internal.h>
 #include <vm/vm_pageout.h>
+
+#include <IOKit/IOBSD.h> // IOTaskHasEntitlement
+#include <IOKit/IOKitKeys.h> // DriverKit entitlement strings
 
 
 #if CONFIG_ATM
@@ -117,8 +120,9 @@ host_processors(host_priv_t host_priv, processor_array_t * out_array, mach_msg_t
 	void * addr;
 	unsigned int count, i;
 
-	if (host_priv == HOST_PRIV_NULL)
-		return (KERN_INVALID_ARGUMENT);
+	if (host_priv == HOST_PRIV_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	assert(host_priv == &realhost);
 
@@ -126,17 +130,19 @@ host_processors(host_priv_t host_priv, processor_array_t * out_array, mach_msg_t
 	assert(count != 0);
 
 	addr = kalloc((vm_size_t)(count * sizeof(mach_port_t)));
-	if (addr == 0)
-		return (KERN_RESOURCE_SHORTAGE);
+	if (addr == 0) {
+		return KERN_RESOURCE_SHORTAGE;
+	}
 
 	tp = (processor_t *)addr;
 	*tp++ = processor = processor_list;
 
 	if (count > 1) {
-		simple_lock(&processor_list_lock);
+		simple_lock(&processor_list_lock, LCK_GRP_NULL);
 
-		for (i = 1; i < count; i++)
+		for (i = 1; i < count; i++) {
 			*tp++ = processor = processor->processor_list;
+		}
 
 		simple_unlock(&processor_list_lock);
 	}
@@ -146,17 +152,19 @@ host_processors(host_priv_t host_priv, processor_array_t * out_array, mach_msg_t
 
 	/* do the conversion that Mig should handle */
 	tp = (processor_t *)addr;
-	for (i = 0; i < count; i++)
+	for (i = 0; i < count; i++) {
 		((mach_port_t *)tp)[i] = (mach_port_t)convert_processor_to_port(tp[i]);
+	}
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 kern_return_t
 host_info(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_number_t * count)
 {
-	if (host == HOST_NULL)
-		return (KERN_INVALID_ARGUMENT);
+	if (host == HOST_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	switch (flavor) {
 	case HOST_BASIC_INFO: {
@@ -166,14 +174,19 @@ host_info(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_num
 		/*
 		 *	Basic information about this host.
 		 */
-		if (*count < HOST_BASIC_INFO_OLD_COUNT)
-			return (KERN_FAILURE);
+		if (*count < HOST_BASIC_INFO_OLD_COUNT) {
+			return KERN_FAILURE;
+		}
 
 		basic_info = (host_basic_info_t)info;
 
 		basic_info->memory_size = machine_info.memory_size;
 		basic_info->max_cpus = machine_info.max_cpus;
+#if defined(__x86_64__)
+		basic_info->avail_cpus = processor_avail_count_user;
+#else
 		basic_info->avail_cpus = processor_avail_count;
+#endif
 		master_id = master_processor->cpu_id;
 		basic_info->cpu_type = slot_type(master_id);
 		basic_info->cpu_subtype = slot_subtype(master_id);
@@ -182,7 +195,11 @@ host_info(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_num
 			basic_info->cpu_threadtype = slot_threadtype(master_id);
 			basic_info->physical_cpu = machine_info.physical_cpu;
 			basic_info->physical_cpu_max = machine_info.physical_cpu_max;
+#if defined(__x86_64__)
+			basic_info->logical_cpu = basic_info->avail_cpus;
+#else
 			basic_info->logical_cpu = machine_info.logical_cpu;
+#endif
 			basic_info->logical_cpu_max = machine_info.logical_cpu_max;
 			basic_info->max_mem = machine_info.max_mem;
 
@@ -191,7 +208,7 @@ host_info(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_num
 			*count = HOST_BASIC_INFO_OLD_COUNT;
 		}
 
-		return (KERN_SUCCESS);
+		return KERN_SUCCESS;
 	}
 
 	case HOST_SCHED_INFO: {
@@ -202,8 +219,9 @@ host_info(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_num
 		/*
 		 *	Return scheduler information.
 		 */
-		if (*count < HOST_SCHED_INFO_COUNT)
-			return (KERN_FAILURE);
+		if (*count < HOST_SCHED_INFO_COUNT) {
+			return KERN_FAILURE;
+		}
 
 		sched_info = (host_sched_info_t)info;
 
@@ -214,25 +232,27 @@ host_info(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_num
 
 		*count = HOST_SCHED_INFO_COUNT;
 
-		return (KERN_SUCCESS);
+		return KERN_SUCCESS;
 	}
 
 	case HOST_RESOURCE_SIZES: {
 		/*
 		 * Return sizes of kernel data structures
 		 */
-		if (*count < HOST_RESOURCE_SIZES_COUNT)
-			return (KERN_FAILURE);
+		if (*count < HOST_RESOURCE_SIZES_COUNT) {
+			return KERN_FAILURE;
+		}
 
 		/* XXX Fail until ledgers are implemented */
-		return (KERN_INVALID_ARGUMENT);
+		return KERN_INVALID_ARGUMENT;
 	}
 
 	case HOST_PRIORITY_INFO: {
 		host_priority_info_t priority_info;
 
-		if (*count < HOST_PRIORITY_INFO_COUNT)
-			return (KERN_FAILURE);
+		if (*count < HOST_PRIORITY_INFO_COUNT) {
+			return KERN_FAILURE;
+		}
 
 		priority_info = (host_priority_info_t)info;
 
@@ -247,7 +267,7 @@ host_info(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_num
 
 		*count = HOST_PRIORITY_INFO_COUNT;
 
-		return (KERN_SUCCESS);
+		return KERN_SUCCESS;
 	}
 
 	/*
@@ -256,14 +276,15 @@ host_info(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_num
 	case HOST_MACH_MSG_TRAP:
 	case HOST_SEMAPHORE_TRAPS: {
 		*count = 0;
-		return (KERN_SUCCESS);
+		return KERN_SUCCESS;
 	}
 
 	case HOST_CAN_HAS_DEBUGGER: {
 		host_can_has_debugger_info_t can_has_debugger_info;
 
-		if (*count < HOST_CAN_HAS_DEBUGGER_COUNT)
-			return (KERN_FAILURE);
+		if (*count < HOST_CAN_HAS_DEBUGGER_COUNT) {
+			return KERN_FAILURE;
+		}
 
 		can_has_debugger_info = (host_can_has_debugger_info_t)info;
 		can_has_debugger_info->can_has_debugger = PE_i_can_has_debugger(NULL);
@@ -273,19 +294,21 @@ host_info(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_num
 	}
 
 	case HOST_VM_PURGABLE: {
-		if (*count < HOST_VM_PURGABLE_COUNT)
-			return (KERN_FAILURE);
+		if (*count < HOST_VM_PURGABLE_COUNT) {
+			return KERN_FAILURE;
+		}
 
 		vm_purgeable_stats((vm_purgeable_info_t)info, NULL);
 
 		*count = HOST_VM_PURGABLE_COUNT;
-		return (KERN_SUCCESS);
+		return KERN_SUCCESS;
 	}
 
 	case HOST_DEBUG_INFO_INTERNAL: {
 #if DEVELOPMENT || DEBUG
-		if (*count < HOST_DEBUG_INFO_INTERNAL_COUNT)
-			return (KERN_FAILURE);
+		if (*count < HOST_DEBUG_INFO_INTERNAL_COUNT) {
+			return KERN_FAILURE;
+		}
 
 		host_debug_info_internal_t debug_info = (host_debug_info_internal_t)info;
 		bzero(debug_info, sizeof(host_debug_info_internal_data_t));
@@ -301,9 +324,9 @@ host_info(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_num
 #if CONFIG_CSR
 		debug_info->config_csr = 1;
 #endif
-		return (KERN_SUCCESS);
+		return KERN_SUCCESS;
 #else /* DEVELOPMENT || DEBUG */
-		return (KERN_NOT_SUPPORTED);
+		return KERN_NOT_SUPPORTED;
 #endif
 	}
 
@@ -313,26 +336,35 @@ host_info(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_num
 		/*
 		 *	Basic information about this host.
 		 */
-		if (*count < HOST_PREFERRED_USER_ARCH_COUNT)
-			return (KERN_FAILURE);
+		if (*count < HOST_PREFERRED_USER_ARCH_COUNT) {
+			return KERN_FAILURE;
+		}
 
 		user_arch_info = (host_preferred_user_arch_t)info;
 
 #if defined(PREFERRED_USER_CPU_TYPE) && defined(PREFERRED_USER_CPU_SUBTYPE)
-		user_arch_info->cpu_type = PREFERRED_USER_CPU_TYPE;
-		user_arch_info->cpu_subtype = PREFERRED_USER_CPU_SUBTYPE;
+		cpu_type_t preferred_cpu_type;
+		cpu_subtype_t preferred_cpu_subtype;
+		if (!PE_get_default("kern.preferred_cpu_type", &preferred_cpu_type, sizeof(cpu_type_t))) {
+			preferred_cpu_type = PREFERRED_USER_CPU_TYPE;
+		}
+		if (!PE_get_default("kern.preferred_cpu_subtype", &preferred_cpu_subtype, sizeof(cpu_subtype_t))) {
+			preferred_cpu_subtype = PREFERRED_USER_CPU_SUBTYPE;
+		}
+		user_arch_info->cpu_type    = preferred_cpu_type;
+		user_arch_info->cpu_subtype = preferred_cpu_subtype;
 #else
-		int master_id = master_processor->cpu_id;
-		user_arch_info->cpu_type = slot_type(master_id);
+		int master_id               = master_processor->cpu_id;
+		user_arch_info->cpu_type    = slot_type(master_id);
 		user_arch_info->cpu_subtype = slot_subtype(master_id);
 #endif
 
 		*count = HOST_PREFERRED_USER_ARCH_COUNT;
 
-		return (KERN_SUCCESS);
+		return KERN_SUCCESS;
 	}
 
-	default: return (KERN_INVALID_ARGUMENT);
+	default: return KERN_INVALID_ARGUMENT;
 	}
 }
 
@@ -343,15 +375,17 @@ host_statistics(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_ty
 {
 	uint32_t i;
 
-	if (host == HOST_NULL)
-		return (KERN_INVALID_HOST);
+	if (host == HOST_NULL) {
+		return KERN_INVALID_HOST;
+	}
 
 	switch (flavor) {
 	case HOST_LOAD_INFO: {
 		host_load_info_t load_info;
 
-		if (*count < HOST_LOAD_INFO_COUNT)
-			return (KERN_FAILURE);
+		if (*count < HOST_LOAD_INFO_COUNT) {
+			return KERN_FAILURE;
+		}
 
 		load_info = (host_load_info_t)info;
 
@@ -359,7 +393,7 @@ host_statistics(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_ty
 		bcopy((char *)mach_factor, (char *)load_info->mach_factor, sizeof mach_factor);
 
 		*count = HOST_LOAD_INFO_COUNT;
-		return (KERN_SUCCESS);
+		return KERN_SUCCESS;
 	}
 
 	case HOST_VM_INFO: {
@@ -369,15 +403,16 @@ host_statistics(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_ty
 		vm_statistics_t stat32;
 		mach_msg_type_number_t original_count;
 
-		if (*count < HOST_VM_INFO_REV0_COUNT)
-			return (KERN_FAILURE);
+		if (*count < HOST_VM_INFO_REV0_COUNT) {
+			return KERN_FAILURE;
+		}
 
 		processor = processor_list;
 		stat = &PROCESSOR_DATA(processor, vm_stat);
 		host_vm_stat = *stat;
 
 		if (processor_count > 1) {
-			simple_lock(&processor_list_lock);
+			simple_lock(&processor_list_lock, LCK_GRP_NULL);
 
 			while ((processor = processor->processor_list) != NULL) {
 				stat = &PROCESSOR_DATA(processor, vm_stat);
@@ -446,15 +481,16 @@ host_statistics(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_ty
 
 		/* rev3 changed some of the fields to be 64-bit*/
 
-		return (KERN_SUCCESS);
+		return KERN_SUCCESS;
 	}
 
 	case HOST_CPU_LOAD_INFO: {
 		processor_t processor;
 		host_cpu_load_info_t cpu_load_info;
 
-		if (*count < HOST_CPU_LOAD_INFO_COUNT)
-			return (KERN_FAILURE);
+		if (*count < HOST_CPU_LOAD_INFO_COUNT) {
+			return KERN_FAILURE;
+		}
 
 #define GET_TICKS_VALUE(state, ticks)                                                      \
 	MACRO_BEGIN cpu_load_info->cpu_ticks[(state)] += (uint32_t)(ticks / hz_tick_interval); \
@@ -469,7 +505,7 @@ host_statistics(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_ty
 		cpu_load_info->cpu_ticks[CPU_STATE_IDLE] = 0;
 		cpu_load_info->cpu_ticks[CPU_STATE_NICE] = 0;
 
-		simple_lock(&processor_list_lock);
+		simple_lock(&processor_list_lock, LCK_GRP_NULL);
 
 		for (processor = processor_list; processor != NULL; processor = processor->processor_list) {
 			timer_t idle_state;
@@ -494,7 +530,7 @@ host_statistics(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_ty
 				/* Processor is non-idle, so idle timer should be accurate */
 				GET_TICKS_VALUE_FROM_TIMER(processor, CPU_STATE_IDLE, idle_state);
 			} else if ((idle_time_snapshot1 != (idle_time_snapshot2 = timer_grab(idle_state))) ||
-			           (idle_time_tstamp1 != (idle_time_tstamp2 = idle_state->tstamp))) {
+			    (idle_time_tstamp1 != (idle_time_tstamp2 = idle_state->tstamp))) {
 				/* Idle timer is being updated concurrently, second stamp is good enough */
 				GET_TICKS_VALUE(CPU_STATE_IDLE, idle_time_snapshot2);
 			} else {
@@ -511,12 +547,12 @@ host_statistics(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_ty
 
 		*count = HOST_CPU_LOAD_INFO_COUNT;
 
-		return (KERN_SUCCESS);
+		return KERN_SUCCESS;
 	}
 
 	case HOST_EXPIRED_TASK_INFO: {
 		if (*count < TASK_POWER_INFO_COUNT) {
-			return (KERN_FAILURE);
+			return KERN_FAILURE;
 		}
 
 		task_power_info_t tinfo1 = (task_power_info_t)info;
@@ -533,8 +569,7 @@ host_statistics(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_ty
 		tinfo1->total_system = dead_task_statistics.total_system_time;
 		if (*count < TASK_POWER_INFO_V2_COUNT) {
 			*count = TASK_POWER_INFO_COUNT;
-		}
-		else if (*count >= TASK_POWER_INFO_V2_COUNT) {
+		} else if (*count >= TASK_POWER_INFO_V2_COUNT) {
 			tinfo2->gpu_energy.task_gpu_utilisation = dead_task_statistics.task_gpu_ns;
 #if defined(__arm__) || defined(__arm64__)
 			tinfo2->task_energy = dead_task_statistics.task_energy;
@@ -544,9 +579,9 @@ host_statistics(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_ty
 			*count = TASK_POWER_INFO_V2_COUNT;
 		}
 
-		return (KERN_SUCCESS);
+		return KERN_SUCCESS;
 	}
-	default: return (KERN_INVALID_ARGUMENT);
+	default: return KERN_INVALID_ARGUMENT;
 	}
 }
 
@@ -561,17 +596,17 @@ uint64_t host_statistics_time_window;
 static lck_mtx_t host_statistics_lck;
 static lck_grp_t* host_statistics_lck_grp;
 
-#define HOST_VM_INFO64_REV0		0
-#define HOST_VM_INFO64_REV1		1
-#define HOST_EXTMOD_INFO64_REV0		2
-#define HOST_LOAD_INFO_REV0		3
-#define HOST_VM_INFO_REV0		4
-#define HOST_VM_INFO_REV1        	5
-#define HOST_VM_INFO_REV2        	6
-#define HOST_CPU_LOAD_INFO_REV0		7
-#define HOST_EXPIRED_TASK_INFO_REV0	8
-#define HOST_EXPIRED_TASK_INFO_REV1 	9
-#define NUM_HOST_INFO_DATA_TYPES 	10
+#define HOST_VM_INFO64_REV0             0
+#define HOST_VM_INFO64_REV1             1
+#define HOST_EXTMOD_INFO64_REV0         2
+#define HOST_LOAD_INFO_REV0             3
+#define HOST_VM_INFO_REV0               4
+#define HOST_VM_INFO_REV1               5
+#define HOST_VM_INFO_REV2               6
+#define HOST_CPU_LOAD_INFO_REV0         7
+#define HOST_EXPIRED_TASK_INFO_REV0     8
+#define HOST_EXPIRED_TASK_INFO_REV1     9
+#define NUM_HOST_INFO_DATA_TYPES        10
 
 static vm_statistics64_data_t host_vm_info64_rev0 = {};
 static vm_statistics64_data_t host_vm_info64_rev1 = {};
@@ -617,102 +652,101 @@ host_statistics_init(void)
 static void
 cache_host_statistics(int index, host_info64_t info)
 {
-    if (index < 0 || index >= NUM_HOST_INFO_DATA_TYPES)
-        return;
+	if (index < 0 || index >= NUM_HOST_INFO_DATA_TYPES) {
+		return;
+	}
 
-    task_t task = current_task();
-    if (task->t_flags & TF_PLATFORM)
-        return;
+	task_t task = current_task();
+	if (task->t_flags & TF_PLATFORM) {
+		return;
+	}
 
-    memcpy((void *)g_host_stats_cache[index].data, info, g_host_stats_cache[index].count * sizeof(integer_t));
-    return;
+	memcpy((void *)g_host_stats_cache[index].data, info, g_host_stats_cache[index].count * sizeof(integer_t));
+	return;
 }
 
 static void
 get_cached_info(int index, host_info64_t info, mach_msg_type_number_t* count)
 {
-    if (index < 0 || index >= NUM_HOST_INFO_DATA_TYPES) {
-        *count = 0;
-        return;
-    }
+	if (index < 0 || index >= NUM_HOST_INFO_DATA_TYPES) {
+		*count = 0;
+		return;
+	}
 
-    *count = g_host_stats_cache[index].count;
-    memcpy(info, (void *)g_host_stats_cache[index].data, g_host_stats_cache[index].count * sizeof(integer_t));
+	*count = g_host_stats_cache[index].count;
+	memcpy(info, (void *)g_host_stats_cache[index].data, g_host_stats_cache[index].count * sizeof(integer_t));
 }
 
 static int
 get_host_info_data_index(bool is_stat64, host_flavor_t flavor, mach_msg_type_number_t* count, kern_return_t* ret)
 {
 	switch (flavor) {
-
-        case HOST_VM_INFO64:
-	if (!is_stat64){
-		*ret = KERN_INVALID_ARGUMENT;
-		return -1;
-	}
-	if (*count < HOST_VM_INFO64_REV0_COUNT) {
-		*ret = KERN_FAILURE;
-		return -1;
-	}
-	if (*count >= HOST_VM_INFO64_REV1_COUNT) {
-		return HOST_VM_INFO64_REV1;
-	}
-	return HOST_VM_INFO64_REV0;
+	case HOST_VM_INFO64:
+		if (!is_stat64) {
+			*ret = KERN_INVALID_ARGUMENT;
+			return -1;
+		}
+		if (*count < HOST_VM_INFO64_REV0_COUNT) {
+			*ret = KERN_FAILURE;
+			return -1;
+		}
+		if (*count >= HOST_VM_INFO64_REV1_COUNT) {
+			return HOST_VM_INFO64_REV1;
+		}
+		return HOST_VM_INFO64_REV0;
 
 	case HOST_EXTMOD_INFO64:
-	if (!is_stat64){
+		if (!is_stat64) {
+			*ret = KERN_INVALID_ARGUMENT;
+			return -1;
+		}
+		if (*count < HOST_EXTMOD_INFO64_COUNT) {
+			*ret = KERN_FAILURE;
+			return -1;
+		}
+		return HOST_EXTMOD_INFO64_REV0;
+
+	case HOST_LOAD_INFO:
+		if (*count < HOST_LOAD_INFO_COUNT) {
+			*ret = KERN_FAILURE;
+			return -1;
+		}
+		return HOST_LOAD_INFO_REV0;
+
+	case HOST_VM_INFO:
+		if (*count < HOST_VM_INFO_REV0_COUNT) {
+			*ret = KERN_FAILURE;
+			return -1;
+		}
+		if (*count >= HOST_VM_INFO_REV2_COUNT) {
+			return HOST_VM_INFO_REV2;
+		}
+		if (*count >= HOST_VM_INFO_REV1_COUNT) {
+			return HOST_VM_INFO_REV1;
+		}
+		return HOST_VM_INFO_REV0;
+
+	case HOST_CPU_LOAD_INFO:
+		if (*count < HOST_CPU_LOAD_INFO_COUNT) {
+			*ret = KERN_FAILURE;
+			return -1;
+		}
+		return HOST_CPU_LOAD_INFO_REV0;
+
+	case HOST_EXPIRED_TASK_INFO:
+		if (*count < TASK_POWER_INFO_COUNT) {
+			*ret = KERN_FAILURE;
+			return -1;
+		}
+		if (*count >= TASK_POWER_INFO_V2_COUNT) {
+			return HOST_EXPIRED_TASK_INFO_REV1;
+		}
+		return HOST_EXPIRED_TASK_INFO_REV0;
+
+	default:
 		*ret = KERN_INVALID_ARGUMENT;
 		return -1;
 	}
-	if (*count < HOST_EXTMOD_INFO64_COUNT) {
-		*ret = KERN_FAILURE;
-		return -1;
-	}
-	return HOST_EXTMOD_INFO64_REV0;
-
-	case HOST_LOAD_INFO:
-	if (*count < HOST_LOAD_INFO_COUNT) {
-		*ret = KERN_FAILURE;
-		return -1;
-	}
-	return HOST_LOAD_INFO_REV0;
-
-	case HOST_VM_INFO:
-	if (*count < HOST_VM_INFO_REV0_COUNT) {
-		*ret = KERN_FAILURE;
-		return -1;
-	}
-	if (*count >= HOST_VM_INFO_REV2_COUNT) {
-		return HOST_VM_INFO_REV2;
-	}
-	if (*count >= HOST_VM_INFO_REV1_COUNT) {
-		return HOST_VM_INFO_REV1;
-	}
-	return HOST_VM_INFO_REV0;
-
-	case HOST_CPU_LOAD_INFO:
-	if (*count < HOST_CPU_LOAD_INFO_COUNT) {
-		*ret = KERN_FAILURE;
-		return -1;
-	}
-	return HOST_CPU_LOAD_INFO_REV0;
-
-	case HOST_EXPIRED_TASK_INFO:
-	if (*count < TASK_POWER_INFO_COUNT){
-		*ret = KERN_FAILURE;
-		return -1;
-	}
-	if (*count >= TASK_POWER_INFO_V2_COUNT){
-		return HOST_EXPIRED_TASK_INFO_REV1;
-	}
-	return HOST_EXPIRED_TASK_INFO_REV0;
-
-	default:
-	*ret = KERN_INVALID_ARGUMENT;
-	return -1;
-
-	}
-
 }
 
 static bool
@@ -735,8 +769,9 @@ rate_limit_host_statistics(bool is_stat64, host_flavor_t flavor, host_info64_t i
 
 	/* there is a cache for every flavor */
 	int index = get_host_info_data_index(is_stat64, flavor, count, ret);
-	if (index == -1)
+	if (index == -1) {
 		goto out;
+	}
 
 	*pindex = index;
 	lck_mtx_lock(&host_statistics_lck);
@@ -770,8 +805,9 @@ host_statistics64(host_t host, host_flavor_t flavor, host_info64_t info, mach_ms
 {
 	uint32_t i;
 
-	if (host == HOST_NULL)
-		return (KERN_INVALID_HOST);
+	if (host == HOST_NULL) {
+		return KERN_INVALID_HOST;
+	}
 
 	switch (flavor) {
 	case HOST_VM_INFO64: /* We were asked to get vm_statistics64 */
@@ -783,15 +819,16 @@ host_statistics64(host_t host, host_flavor_t flavor, host_info64_t info, mach_ms
 		unsigned int local_q_internal_count;
 		unsigned int local_q_external_count;
 
-		if (*count < HOST_VM_INFO64_REV0_COUNT)
-			return (KERN_FAILURE);
+		if (*count < HOST_VM_INFO64_REV0_COUNT) {
+			return KERN_FAILURE;
+		}
 
 		processor = processor_list;
 		stat = &PROCESSOR_DATA(processor, vm_stat);
 		host_vm_stat = *stat;
 
 		if (processor_count > 1) {
-			simple_lock(&processor_list_lock);
+			simple_lock(&processor_list_lock, LCK_GRP_NULL);
 
 			while ((processor = processor->processor_list) != NULL) {
 				stat = &PROCESSOR_DATA(processor, vm_stat);
@@ -878,26 +915,27 @@ host_statistics64(host_t host, host_flavor_t flavor, host_info64_t info, mach_ms
 			*count = HOST_VM_INFO64_REV1_COUNT;
 		}
 
-		return (KERN_SUCCESS);
+		return KERN_SUCCESS;
 	}
 
 	case HOST_EXTMOD_INFO64: /* We were asked to get vm_statistics64 */
 	{
 		vm_extmod_statistics_t out_extmod_statistics;
 
-		if (*count < HOST_EXTMOD_INFO64_COUNT)
-			return (KERN_FAILURE);
+		if (*count < HOST_EXTMOD_INFO64_COUNT) {
+			return KERN_FAILURE;
+		}
 
 		out_extmod_statistics = (vm_extmod_statistics_t)info;
 		*out_extmod_statistics = host_extmod_statistics;
 
 		*count = HOST_EXTMOD_INFO64_COUNT;
 
-		return (KERN_SUCCESS);
+		return KERN_SUCCESS;
 	}
 
 	default: /* If we didn't recognize the flavor, send to host_statistics */
-		return (host_statistics(host, flavor, (host_info_t)info, count));
+		return host_statistics(host, flavor, (host_info_t)info, count);
 	}
 }
 
@@ -907,19 +945,23 @@ host_statistics64_from_user(host_t host, host_flavor_t flavor, host_info64_t inf
 	kern_return_t ret = KERN_SUCCESS;
 	int index;
 
-	if (host == HOST_NULL)
-		return (KERN_INVALID_HOST);
+	if (host == HOST_NULL) {
+		return KERN_INVALID_HOST;
+	}
 
-	if (rate_limit_host_statistics(TRUE, flavor, info, count, &ret, &index))
+	if (rate_limit_host_statistics(TRUE, flavor, info, count, &ret, &index)) {
 		return ret;
+	}
 
-	if (ret != KERN_SUCCESS)
+	if (ret != KERN_SUCCESS) {
 		return ret;
+	}
 
 	ret = host_statistics64(host, flavor, info, count);
 
-	if (ret == KERN_SUCCESS)
+	if (ret == KERN_SUCCESS) {
 		cache_host_statistics(index, info);
+	}
 
 	return ret;
 }
@@ -930,19 +972,23 @@ host_statistics_from_user(host_t host, host_flavor_t flavor, host_info64_t info,
 	kern_return_t ret = KERN_SUCCESS;
 	int index;
 
-	if (host == HOST_NULL)
-		return (KERN_INVALID_HOST);
+	if (host == HOST_NULL) {
+		return KERN_INVALID_HOST;
+	}
 
-	if (rate_limit_host_statistics(FALSE, flavor, info, count, &ret, &index))
+	if (rate_limit_host_statistics(FALSE, flavor, info, count, &ret, &index)) {
 		return ret;
+	}
 
-	if (ret != KERN_SUCCESS)
+	if (ret != KERN_SUCCESS) {
 		return ret;
+	}
 
 	ret = host_statistics(host, flavor, info, count);
 
-	if (ret == KERN_SUCCESS)
+	if (ret == KERN_SUCCESS) {
 		cache_host_statistics(index, info);
+	}
 
 	return ret;
 }
@@ -954,14 +1000,14 @@ host_statistics_from_user(host_t host, host_flavor_t flavor, host_info64_t info,
 kern_return_t
 host_priv_statistics(host_priv_t host_priv, host_flavor_t flavor, host_info_t info, mach_msg_type_number_t * count)
 {
-	return (host_statistics((host_t)host_priv, flavor, info, count));
+	return host_statistics((host_t)host_priv, flavor, info, count);
 }
 
 kern_return_t
 set_sched_stats_active(boolean_t active)
 {
 	sched_stats_active = active;
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 
@@ -969,19 +1015,19 @@ uint64_t
 get_pages_grabbed_count(void)
 {
 	processor_t processor;
-        uint64_t pages_grabbed_count = 0;
+	uint64_t pages_grabbed_count = 0;
 
-	simple_lock(&processor_list_lock);
+	simple_lock(&processor_list_lock, LCK_GRP_NULL);
 
 	processor = processor_list;
 
 	while (processor) {
-	        pages_grabbed_count += PROCESSOR_DATA(processor, page_grab_count);
+		pages_grabbed_count += PROCESSOR_DATA(processor, page_grab_count);
 		processor = processor->processor_list;
 	}
 	simple_unlock(&processor_list_lock);
 
-	return(pages_grabbed_count);
+	return pages_grabbed_count;
 }
 
 
@@ -991,14 +1037,14 @@ get_sched_statistics(struct _processor_statistics_np * out, uint32_t * count)
 	processor_t processor;
 
 	if (!sched_stats_active) {
-		return (KERN_FAILURE);
+		return KERN_FAILURE;
 	}
 
-	simple_lock(&processor_list_lock);
+	simple_lock(&processor_list_lock, LCK_GRP_NULL);
 
 	if (*count < (processor_count + 1) * sizeof(struct _processor_statistics_np)) { /* One for RT */
 		simple_unlock(&processor_list_lock);
-		return (KERN_FAILURE);
+		return KERN_FAILURE;
 	}
 
 	processor = processor_list;
@@ -1033,18 +1079,19 @@ get_sched_statistics(struct _processor_statistics_np * out, uint32_t * count)
 	out++;
 	*count += (uint32_t)sizeof(struct _processor_statistics_np);
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 kern_return_t
 host_page_size(host_t host, vm_size_t * out_page_size)
 {
-	if (host == HOST_NULL)
-		return (KERN_INVALID_ARGUMENT);
+	if (host == HOST_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	*out_page_size = PAGE_SIZE;
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -1056,12 +1103,13 @@ extern char version[];
 kern_return_t
 host_kernel_version(host_t host, kernel_version_t out_version)
 {
-	if (host == HOST_NULL)
-		return (KERN_INVALID_ARGUMENT);
+	if (host == HOST_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	(void)strncpy(out_version, version, sizeof(kernel_version_t));
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -1074,8 +1122,9 @@ host_processor_sets(host_priv_t host_priv, processor_set_name_array_t * pset_lis
 {
 	void * addr;
 
-	if (host_priv == HOST_PRIV_NULL)
-		return (KERN_INVALID_ARGUMENT);
+	if (host_priv == HOST_PRIV_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	/*
 	 *	Allocate memory.  Can be pageable because it won't be
@@ -1083,8 +1132,9 @@ host_processor_sets(host_priv_t host_priv, processor_set_name_array_t * pset_lis
 	 */
 
 	addr = kalloc((vm_size_t)sizeof(mach_port_t));
-	if (addr == 0)
-		return (KERN_RESOURCE_SHORTAGE);
+	if (addr == 0) {
+		return KERN_RESOURCE_SHORTAGE;
+	}
 
 	/* do the conversion that Mig should handle */
 	*((ipc_port_t *)addr) = convert_pset_name_to_port(&pset0);
@@ -1092,7 +1142,7 @@ host_processor_sets(host_priv_t host_priv, processor_set_name_array_t * pset_lis
 	*pset_list = (processor_set_array_t)addr;
 	*count = 1;
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -1106,12 +1156,12 @@ host_processor_set_priv(host_priv_t host_priv, processor_set_t pset_name, proces
 	if (host_priv == HOST_PRIV_NULL || pset_name == PROCESSOR_SET_NULL) {
 		*pset = PROCESSOR_SET_NULL;
 
-		return (KERN_INVALID_ARGUMENT);
+		return KERN_INVALID_ARGUMENT;
 	}
 
 	*pset = pset_name;
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -1123,10 +1173,10 @@ host_processor_set_priv(host_priv_t host_priv, processor_set_t pset_name, proces
  */
 kern_return_t
 host_processor_info(host_t host,
-                    processor_flavor_t flavor,
-                    natural_t * out_pcount,
-                    processor_info_array_t * out_array,
-                    mach_msg_type_number_t * out_array_count)
+    processor_flavor_t flavor,
+    natural_t * out_pcount,
+    processor_info_array_t * out_array,
+    mach_msg_type_number_t * out_array_count)
 {
 	kern_return_t result;
 	processor_t processor;
@@ -1138,12 +1188,14 @@ host_processor_info(host_t host,
 	vm_size_t size, needed;
 	vm_map_copy_t copy;
 
-	if (host == HOST_NULL)
-		return (KERN_INVALID_ARGUMENT);
+	if (host == HOST_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	result = processor_info_count(flavor, &icount);
-	if (result != KERN_SUCCESS)
-		return (result);
+	if (result != KERN_SUCCESS) {
+		return result;
+	}
 
 	pcount = processor_count;
 	assert(pcount != 0);
@@ -1151,8 +1203,9 @@ host_processor_info(host_t host,
 	needed = pcount * icount * sizeof(natural_t);
 	size = vm_map_round_page(needed, VM_MAP_PAGE_MASK(ipc_kernel_map));
 	result = kmem_alloc(ipc_kernel_map, &addr, size, VM_KERN_MEMORY_IPC);
-	if (result != KERN_SUCCESS)
-		return (KERN_RESOURCE_SHORTAGE);
+	if (result != KERN_SUCCESS) {
+		return KERN_RESOURCE_SHORTAGE;
+	}
 
 	info = (processor_info_t)addr;
 	processor = processor_list;
@@ -1161,12 +1214,12 @@ host_processor_info(host_t host,
 	result = processor_info(processor, flavor, &thost, info, &tcount);
 	if (result != KERN_SUCCESS) {
 		kmem_free(ipc_kernel_map, addr, size);
-		return (result);
+		return result;
 	}
 
 	if (pcount > 1) {
 		for (i = 1; i < pcount; i++) {
-			simple_lock(&processor_list_lock);
+			simple_lock(&processor_list_lock, LCK_GRP_NULL);
 			processor = processor->processor_list;
 			simple_unlock(&processor_list_lock);
 
@@ -1175,16 +1228,17 @@ host_processor_info(host_t host,
 			result = processor_info(processor, flavor, &thost, info, &tcount);
 			if (result != KERN_SUCCESS) {
 				kmem_free(ipc_kernel_map, addr, size);
-				return (result);
+				return result;
 			}
 		}
 	}
 
-	if (size != needed)
+	if (size != needed) {
 		bzero((char *)addr + needed, size - needed);
+	}
 
 	result = vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(addr, VM_MAP_PAGE_MASK(ipc_kernel_map)),
-	                       vm_map_round_page(addr + size, VM_MAP_PAGE_MASK(ipc_kernel_map)), FALSE);
+	    vm_map_round_page(addr + size, VM_MAP_PAGE_MASK(ipc_kernel_map)), FALSE);
 	assert(result == KERN_SUCCESS);
 	result = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)addr, (vm_map_size_t)needed, TRUE, &copy);
 	assert(result == KERN_SUCCESS);
@@ -1193,7 +1247,7 @@ host_processor_info(host_t host,
 	*out_array = (processor_info_array_t)copy;
 	*out_array_count = pcount * icount;
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 static bool
@@ -1212,27 +1266,35 @@ kernel_set_special_port(host_priv_t host_priv, int id, ipc_port_t port)
 {
 	ipc_port_t old_port;
 
-	if (!is_valid_host_special_port(id))
+	if (!is_valid_host_special_port(id)) {
 		panic("attempted to set invalid special port %d", id);
+	}
 
 #if !MACH_FLIPC
-	if (id == HOST_NODE_PORT)
-		return (KERN_NOT_SUPPORTED);
+	if (id == HOST_NODE_PORT) {
+		return KERN_NOT_SUPPORTED;
+	}
 #endif
 
 	host_lock(host_priv);
 	old_port = host_priv->special[id];
+	if ((id == HOST_AMFID_PORT) && (task_pid(current_task()) != 1)) {
+		host_unlock(host_priv);
+		return KERN_NO_ACCESS;
+	}
 	host_priv->special[id] = port;
 	host_unlock(host_priv);
 
 #if MACH_FLIPC
-	if (id == HOST_NODE_PORT)
+	if (id == HOST_NODE_PORT) {
 		mach_node_port_changed();
+	}
 #endif
 
-	if (IP_VALID(old_port))
+	if (IP_VALID(old_port)) {
 		ipc_port_release_send(old_port);
-	return (KERN_SUCCESS);
+	}
+	return KERN_SUCCESS;
 }
 
 /*
@@ -1241,13 +1303,14 @@ kernel_set_special_port(host_priv_t host_priv, int id, ipc_port_t port)
 kern_return_t
 kernel_get_special_port(host_priv_t host_priv, int id, ipc_port_t * portp)
 {
-	if (!is_valid_host_special_port(id))
+	if (!is_valid_host_special_port(id)) {
 		panic("attempted to get invalid special port %d", id);
+	}
 
 	host_lock(host_priv);
 	*portp = host_priv->special[id];
 	host_unlock(host_priv);
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -1262,15 +1325,21 @@ kernel_get_special_port(host_priv_t host_priv, int id, ipc_port_t * portp)
 kern_return_t
 host_set_special_port(host_priv_t host_priv, int id, ipc_port_t port)
 {
-	if (host_priv == HOST_PRIV_NULL || id <= HOST_MAX_SPECIAL_KERNEL_PORT || id > HOST_MAX_SPECIAL_PORT)
-		return (KERN_INVALID_ARGUMENT);
+	if (host_priv == HOST_PRIV_NULL || id <= HOST_MAX_SPECIAL_KERNEL_PORT || id > HOST_MAX_SPECIAL_PORT) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	if (task_is_driver(current_task())) {
+		return KERN_NO_ACCESS;
+	}
 
 #if CONFIG_MACF
-	if (mac_task_check_set_host_special_port(current_task(), id, port) != 0)
-		return (KERN_NO_ACCESS);
+	if (mac_task_check_set_host_special_port(current_task(), id, port) != 0) {
+		return KERN_NO_ACCESS;
+	}
 #endif
 
-	return (kernel_set_special_port(host_priv, id, port));
+	return kernel_set_special_port(host_priv, id, port);
 }
 
 /*
@@ -1287,15 +1356,27 @@ host_get_special_port(host_priv_t host_priv, __unused int node, int id, ipc_port
 {
 	ipc_port_t port;
 
-	if (host_priv == HOST_PRIV_NULL || id == HOST_SECURITY_PORT || id > HOST_MAX_SPECIAL_PORT || id < HOST_MIN_SPECIAL_PORT)
-		return (KERN_INVALID_ARGUMENT);
+	if (host_priv == HOST_PRIV_NULL || id == HOST_SECURITY_PORT || id > HOST_MAX_SPECIAL_PORT || id < HOST_MIN_SPECIAL_PORT) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
+	task_t task = current_task();
+	if (task && task_is_driver(task) && id > HOST_MAX_SPECIAL_KERNEL_PORT) {
+		/* allow HID drivers to get the sysdiagnose port for keychord handling */
+		if (IOTaskHasEntitlement(task, kIODriverKitHIDFamilyEventServiceEntitlementKey) &&
+		    id == HOST_SYSDIAGNOSE_PORT) {
+			goto get_special_port;
+		}
+		return KERN_NO_ACCESS;
+	}
+
+get_special_port:
 	host_lock(host_priv);
 	port = realhost.special[id];
 	*portp = ipc_port_copy_send(port);
 	host_unlock(host_priv);
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -1306,43 +1387,47 @@ host_get_special_port(host_priv_t host_priv, __unused int node, int id, ipc_port
 kern_return_t
 host_get_io_master(host_t host, io_master_t * io_masterp)
 {
-	if (host == HOST_NULL)
-		return (KERN_INVALID_ARGUMENT);
+	if (host == HOST_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
-	return (host_get_io_master_port(host_priv_self(), io_masterp));
+	return host_get_io_master_port(host_priv_self(), io_masterp);
 }
 
 host_t
 host_self(void)
 {
-	return (&realhost);
+	return &realhost;
 }
 
 host_priv_t
 host_priv_self(void)
 {
-	return (&realhost);
+	return &realhost;
 }
 
 host_security_t
 host_security_self(void)
 {
-	return (&realhost);
+	return &realhost;
 }
 
 kern_return_t
-host_set_atm_diagnostic_flag(host_priv_t host_priv, uint32_t diagnostic_flag)
+host_set_atm_diagnostic_flag(host_t host, uint32_t diagnostic_flag)
 {
-	if (host_priv == HOST_PRIV_NULL)
-		return (KERN_INVALID_ARGUMENT);
+	if (host == HOST_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
-	assert(host_priv == &realhost);
+	if (!IOTaskHasEntitlement(current_task(), "com.apple.private.set-atm-diagnostic-flag")) {
+		return KERN_NO_ACCESS;
+	}
 
 #if CONFIG_ATM
-	return (atm_set_diagnostic_config(diagnostic_flag));
+	return atm_set_diagnostic_config(diagnostic_flag);
 #else
 	(void)diagnostic_flag;
-	return (KERN_NOT_SUPPORTED);
+	return KERN_NOT_SUPPORTED;
 #endif
 }
 
@@ -1350,8 +1435,9 @@ kern_return_t
 host_set_multiuser_config_flags(host_priv_t host_priv, uint32_t multiuser_config)
 {
 #if CONFIG_EMBEDDED
-	if (host_priv == HOST_PRIV_NULL)
-		return (KERN_INVALID_ARGUMENT);
+	if (host_priv == HOST_PRIV_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	assert(host_priv == &realhost);
 
@@ -1360,10 +1446,10 @@ host_set_multiuser_config_flags(host_priv_t host_priv, uint32_t multiuser_config
 	 * if a value is written to the commpage word.
 	 */
 	commpage_update_multiuser_config(multiuser_config | kIsMultiUserDevice);
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 #else
 	(void)host_priv;
 	(void)multiuser_config;
-	return (KERN_NOT_SUPPORTED);
+	return KERN_NOT_SUPPORTED;
 #endif
 }

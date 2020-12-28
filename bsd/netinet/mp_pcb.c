@@ -45,19 +45,28 @@
 #include <netinet/mptcp_var.h>
 #include <netinet6/in6_pcb.h>
 
-static lck_grp_t	*mp_lock_grp;
-static lck_attr_t	*mp_lock_attr;
-static lck_grp_attr_t	*mp_lock_grp_attr;
-decl_lck_mtx_data(static, mp_lock);		/* global MULTIPATH lock */
+static lck_grp_t        *mp_lock_grp;
+static lck_attr_t       *mp_lock_attr;
+static lck_grp_attr_t   *mp_lock_grp_attr;
+decl_lck_mtx_data(static, mp_lock);             /* global MULTIPATH lock */
 decl_lck_mtx_data(static, mp_timeout_lock);
 
 static TAILQ_HEAD(, mppcbinfo) mppi_head = TAILQ_HEAD_INITIALIZER(mppi_head);
 
-static boolean_t mp_timeout_run;	/* MP timer is scheduled to run */
+static boolean_t mp_timeout_run;        /* MP timer is scheduled to run */
 static boolean_t mp_garbage_collecting;
 static boolean_t mp_ticking;
 static void mp_sched_timeout(void);
 static void mp_timeout(void *);
+
+static void
+mpp_lock_assert_held(struct mppcb *mp)
+{
+#if !MACH_ASSERT
+#pragma unused(mp)
+#endif
+	LCK_MTX_ASSERT(&mp->mpp_lock, LCK_MTX_ASSERT_OWNED);
+}
 
 void
 mp_pcbinit(void)
@@ -105,10 +114,12 @@ mp_timeout(void *arg)
 			if ((gc && mppi->mppi_gc != NULL) ||
 			    (t && mppi->mppi_timer != NULL)) {
 				lck_mtx_lock(&mppi->mppi_lock);
-				if (gc && mppi->mppi_gc != NULL)
+				if (gc && mppi->mppi_gc != NULL) {
 					gc_act += mppi->mppi_gc(mppi);
-				if (t && mppi->mppi_timer != NULL)
+				}
+				if (t && mppi->mppi_timer != NULL) {
 					t_act += mppi->mppi_timer(mppi);
+				}
 				lck_mtx_unlock(&mppi->mppi_lock);
 			}
 		}
@@ -118,10 +129,12 @@ mp_timeout(void *arg)
 	}
 
 	/* lock was dropped above, so check first before overriding */
-	if (!mp_garbage_collecting)
+	if (!mp_garbage_collecting) {
 		mp_garbage_collecting = (gc_act != 0);
-	if (!mp_ticking)
+	}
+	if (!mp_ticking) {
 		mp_ticking = (t_act != 0);
+	}
 
 	/* re-arm the timer if there's work to do */
 	mp_timeout_run = FALSE;
@@ -184,16 +197,18 @@ mp_pcbinfo_detach(struct mppcbinfo *mppi)
 
 	lck_mtx_lock(&mp_lock);
 	TAILQ_FOREACH(mppi0, &mppi_head, mppi_entry) {
-		if (mppi0 == mppi)
+		if (mppi0 == mppi) {
 			break;
+		}
 	}
-	if (mppi0 != NULL)
+	if (mppi0 != NULL) {
 		TAILQ_REMOVE(&mppi_head, mppi0, mppi_entry);
-	else
+	} else {
 		error = ENXIO;
+	}
 	lck_mtx_unlock(&mp_lock);
 
-	return (error);
+	return error;
 }
 
 int
@@ -206,7 +221,7 @@ mp_pcballoc(struct socket *so, struct mppcbinfo *mppi)
 
 	mpp = zalloc(mppi->mppi_zone);
 	if (mpp == NULL) {
-		return (ENOBUFS);
+		return ENOBUFS;
 	}
 
 	bzero(mpp, mppi->mppi_size);
@@ -216,20 +231,21 @@ mp_pcballoc(struct socket *so, struct mppcbinfo *mppi)
 	mpp->mpp_socket = so;
 	so->so_pcb = mpp;
 
-	error = mptcp_sescreate(mpp);
+	error = mptcp_session_create(mpp);
 	if (error) {
 		lck_mtx_destroy(&mpp->mpp_lock, mppi->mppi_lock_grp);
 		zfree(mppi->mppi_zone, mpp);
-		return (error);
+		return error;
 	}
 
 	lck_mtx_lock(&mppi->mppi_lock);
 	mpp->mpp_flags |= MPP_ATTACHED;
 	TAILQ_INSERT_TAIL(&mppi->mppi_pcbs, mpp, mpp_entry);
 	mppi->mppi_count++;
+
 	lck_mtx_unlock(&mppi->mppi_lock);
 
-	return (0);
+	return 0;
 }
 
 void
@@ -238,8 +254,6 @@ mp_pcbdetach(struct socket *mp_so)
 	struct mppcb *mpp = mpsotomppcb(mp_so);
 
 	mpp->mpp_state = MPPCB_STATE_DEAD;
-	if (!(mp_so->so_flags & SOF_PCBCLEARING))
-		mp_so->so_flags |= SOF_PCBCLEARING;
 
 	mp_gc_sched();
 }
@@ -262,6 +276,16 @@ mp_pcbdispose(struct mppcb *mpp)
 	VERIFY(mppi->mppi_count != 0);
 	mppi->mppi_count--;
 
+	if (mppi->mppi_count == 0) {
+		if (mptcp_cellicon_refcount) {
+			os_log_error(mptcp_log_handle, "%s: No more MPTCP-flows, but cell icon counter is %u\n",
+			    __func__, mptcp_cellicon_refcount);
+			mptcp_clear_cellicon();
+			mptcp_cellicon_refcount = 0;
+		}
+	}
+
+	VERIFY(mpp->mpp_inside == 0);
 	mpp_unlock(mpp);
 
 #if NECP
@@ -287,12 +311,13 @@ mp_getaddr_v4(struct socket *mp_so, struct sockaddr **nam, boolean_t peer)
 	/*
 	 * Do the malloc first in case it blocks.
 	 */
-	MALLOC(sin, struct sockaddr_in *, sizeof (*sin), M_SONAME, M_WAITOK);
-	if (sin == NULL)
-		return (ENOBUFS);
-	bzero(sin, sizeof (*sin));
+	MALLOC(sin, struct sockaddr_in *, sizeof(*sin), M_SONAME, M_WAITOK);
+	if (sin == NULL) {
+		return ENOBUFS;
+	}
+	bzero(sin, sizeof(*sin));
 	sin->sin_family = AF_INET;
-	sin->sin_len = sizeof (*sin);
+	sin->sin_len = sizeof(*sin);
 
 	if (!peer) {
 		sin->sin_port = mpte->__mpte_src_v4.sin_port;
@@ -303,7 +328,7 @@ mp_getaddr_v4(struct socket *mp_so, struct sockaddr **nam, boolean_t peer)
 	}
 
 	*nam = (struct sockaddr *)sin;
-	return (0);
+	return 0;
 }
 
 static int
@@ -322,10 +347,11 @@ mp_getaddr_v6(struct socket *mp_so, struct sockaddr **nam, boolean_t peer)
 	}
 
 	*nam = in6_sockaddr(port, &addr);
-	if (*nam == NULL)
-		return (ENOBUFS);
+	if (*nam == NULL) {
+		return ENOBUFS;
+	}
 
-	return (0);
+	return 0;
 }
 
 int
@@ -333,12 +359,13 @@ mp_getsockaddr(struct socket *mp_so, struct sockaddr **nam)
 {
 	struct mptses *mpte = mpsotompte(mp_so);
 
-	if (mpte->mpte_src.sa_family == AF_INET || mpte->mpte_src.sa_family == 0)
+	if (mpte->mpte_src.sa_family == AF_INET || mpte->mpte_src.sa_family == 0) {
 		return mp_getaddr_v4(mp_so, nam, false);
-	else if (mpte->mpte_src.sa_family == AF_INET6)
+	} else if (mpte->mpte_src.sa_family == AF_INET6) {
 		return mp_getaddr_v6(mp_so, nam, false);
-	else
-		return (EINVAL);
+	} else {
+		return EINVAL;
+	}
 }
 
 int
@@ -346,10 +373,11 @@ mp_getpeeraddr(struct socket *mp_so, struct sockaddr **nam)
 {
 	struct mptses *mpte = mpsotompte(mp_so);
 
-	if (mpte->mpte_src.sa_family == AF_INET || mpte->mpte_src.sa_family == 0)
+	if (mpte->mpte_src.sa_family == AF_INET || mpte->mpte_src.sa_family == 0) {
 		return mp_getaddr_v4(mp_so, nam, true);
-	else if (mpte->mpte_src.sa_family == AF_INET6)
+	} else if (mpte->mpte_src.sa_family == AF_INET6) {
 		return mp_getaddr_v6(mp_so, nam, true);
-	else
-		return (EINVAL);
+	} else {
+		return EINVAL;
+	}
 }

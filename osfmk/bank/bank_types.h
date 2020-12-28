@@ -2,7 +2,7 @@
  * Copyright (c) 2012-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -32,14 +32,16 @@
 #include <stdint.h>
 #include <mach/mach_types.h>
 
-#define MACH_VOUCHER_ATTR_BANK_NULL 		((mach_voucher_attr_recipe_command_t)601)
-#define MACH_VOUCHER_ATTR_BANK_CREATE 		((mach_voucher_attr_recipe_command_t)610)
+#define MACH_VOUCHER_ATTR_BANK_NULL             ((mach_voucher_attr_recipe_command_t)601)
+#define MACH_VOUCHER_ATTR_BANK_CREATE           ((mach_voucher_attr_recipe_command_t)610)
+#define MACH_VOUCHER_ATTR_BANK_MODIFY_PERSONA   ((mach_voucher_attr_recipe_command_t)611)
 
 #define MACH_VOUCHER_BANK_CONTENT_SIZE (500)
 
 typedef uint32_t bank_action_t;
 #define BANK_ORIGINATOR_PID     0x1
 #define BANK_PERSONA_TOKEN      0x2
+#define BANK_PERSONA_ID         0x3
 
 struct proc_persona_info {
 	uint64_t unique_pid;
@@ -57,8 +59,15 @@ struct persona_token {
 	struct proc_persona_info proximate;
 };
 
+struct persona_modify_info {
+	uint32_t persona_id;
+	uint64_t unique_pid;
+};
+
 #ifdef PRIVATE
-#define ENTITLEMENT_PERSONA_PROPAGATE "com.apple.private.personas.propagate"
+/* Redeem bank voucher on behalf of another process while changing the persona */
+#define ENTITLEMENT_PERSONA_MODIFY    "com.apple.private.persona.modify"
+#define ENTITLEMENT_PERSONA_NO_PROPAGATE "com.apple.private.personas.no.propagate"
 #endif /* PRIVATE */
 
 #endif /* _BANK_BANK_TYPES_H_ */

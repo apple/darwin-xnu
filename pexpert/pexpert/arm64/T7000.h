@@ -8,9 +8,9 @@
 #include <pexpert/arm64/AIC.h>
 #include <pexpert/arm64/typhoon.h>
 
-#define WITH_CLASSIC_S2R	1
+#define WITH_CLASSIC_S2R        1
 
-#ifndef	ASSEMBLER
+#ifndef ASSEMBLER
 
 #include <pexpert/arm/S3cUART.h>
 

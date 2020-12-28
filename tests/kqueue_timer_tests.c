@@ -18,8 +18,16 @@
 
 static mach_timebase_info_data_t timebase_info;
 
-static uint64_t nanos_to_abs(uint64_t nanos) { return nanos * timebase_info.denom / timebase_info.numer; }
-static uint64_t abs_to_nanos(uint64_t abs)   { return abs * timebase_info.numer / timebase_info.denom; }
+static uint64_t
+nanos_to_abs(uint64_t nanos)
+{
+	return nanos * timebase_info.denom / timebase_info.numer;
+}
+static uint64_t
+abs_to_nanos(uint64_t abs)
+{
+	return abs * timebase_info.numer / timebase_info.denom;
+}
 
 static int kq, passed, failed;
 
@@ -50,7 +58,7 @@ do_simple_kevent(struct kevent64_s *kev, uint64_t expected)
 
 	if (ret < 1 || (kev->flags & EV_ERROR)) {
 		T_LOG("%s() failure: kevent returned %d, error %d\n", __func__, ret,
-				(ret == -1 ? errno : (int) kev->data));
+		    (ret == -1 ? errno : (int) kev->data));
 		return 0;
 	}
 
@@ -58,13 +66,13 @@ do_simple_kevent(struct kevent64_s *kev, uint64_t expected)
 
 	/* did it work? */
 	elapsed_usecs = (after.tv_sec - before.tv_sec) * (int64_t)USEC_PER_SEC +
-		(after.tv_usec - before.tv_usec);
+	    (after.tv_usec - before.tv_usec);
 	delta_usecs = (uint64_t)llabs(elapsed_usecs - ((int64_t)expected));
 
 	/* failure if we're 30% off, or 50 mics late */
 	if (delta_usecs > (30 * expected / 100.0) && delta_usecs > 50) {
 		T_LOG("\tfailure: expected %lld usec, measured %lld usec.\n",
-				expected, elapsed_usecs);
+		    expected, elapsed_usecs);
 		return 0;
 	} else {
 		T_LOG("\tsuccess, measured %lld usec.\n", elapsed_usecs);
@@ -118,11 +126,12 @@ test_absolute_kevent(int time, int scale)
 	}
 
 	/* deadlines in the past should fire immediately */
-	if (time < 0)
+	if (time < 0) {
 		expected = 0;
+	}
 
 	EV_SET64(&kev, 1, EVFILT_TIMER, EV_ADD,
-			NOTE_ABSOLUTE | scale, deadline, 0,0,0);
+	    NOTE_ABSOLUTE | scale, deadline, 0, 0, 0);
 	ret = do_simple_kevent(&kev, expected);
 
 	if (ret) {
@@ -172,11 +181,12 @@ test_oneshot_kevent(int time, int scale)
 	T_SETUPEND;
 
 	/* deadlines in the past should fire immediately */
-	if (time < 0)
+	if (time < 0) {
 		expected = 0;
+	}
 
 	EV_SET64(&kev, 2, EVFILT_TIMER, EV_ADD | EV_ONESHOT, scale, time,
-			0, 0, 0);
+	    0, 0, 0);
 	ret = do_simple_kevent(&kev, expected);
 
 	if (ret) {
@@ -200,13 +210,14 @@ test_interval_kevent(int usec)
 	uint64_t test_duration_us = USEC_PER_SEC; /* 1 second */
 	uint64_t expected_pops;
 
-	if (usec < 0)
+	if (usec < 0) {
 		expected_pops = 1; /* TODO: test 'and only once' */
-	else
+	} else {
 		expected_pops = test_duration_us / (uint64_t)usec;
+	}
 
 	T_LOG("Testing interval kevent at %d usec intervals (%lld pops/second)...\n",
-		usec, expected_pops);
+	    usec, expected_pops);
 
 	EV_SET64(&kev, 3, EVFILT_TIMER, EV_ADD, NOTE_USECONDS, usec, 0, 0, 0);
 	ret = kevent64(kq, &kev, 1, NULL, 0, 0, NULL);
@@ -238,15 +249,16 @@ test_interval_kevent(int usec)
 		pops += (uint64_t)kev.data;
 		gettimeofday(&after, NULL);
 		elapsed_usecs = (uint64_t)((after.tv_sec - before.tv_sec) * (int64_t)USEC_PER_SEC +
-			(after.tv_usec - before.tv_usec));
+		    (after.tv_usec - before.tv_usec));
 
-		if (elapsed_usecs > test_duration_us)
+		if (elapsed_usecs > test_duration_us) {
 			break;
+		}
 	}
 
 	/* check how many times the timer fired: within 5%? */
 	if (pops > expected_pops + (expected_pops / 20) ||
-		pops < expected_pops - (expected_pops / 20)) {
+	    pops < expected_pops - (expected_pops / 20)) {
 		T_FAIL("%s() usec:%d (saw %lld of %lld expected pops)", __func__, usec, pops, expected_pops);
 		failed++;
 	} else {
@@ -274,7 +286,7 @@ test_repeating_kevent(int usec)
 
 	uint64_t expected_pops = test_duration_us / (uint64_t)usec;
 	T_LOG("Testing repeating kevent at %d usec intervals (%lld pops/second)...\n",
-		usec, expected_pops);
+	    usec, expected_pops);
 
 	EV_SET64(&kev, 4, EVFILT_TIMER, EV_ADD, NOTE_USECONDS, usec, 0, 0, 0);
 	ret = kevent64(kq, &kev, 1, NULL, 0, 0, NULL);
@@ -299,7 +311,7 @@ test_repeating_kevent(int usec)
 
 	/* check how many times the timer fired: within 5%? */
 	if (pops > expected_pops + (expected_pops / 20) ||
-		pops < expected_pops - (expected_pops / 20)) {
+	    pops < expected_pops - (expected_pops / 20)) {
 		T_FAIL("%s() usec:%d (saw %lld of %lld expected pops)", __func__, usec, pops, expected_pops);
 		failed++;
 	} else {
@@ -325,7 +337,7 @@ test_updated_kevent(int first, int second)
 
 	T_SETUPBEGIN;
 
-	EV_SET64(&kev, 4, EVFILT_TIMER, EV_ADD|EV_ONESHOT, 0, first, 0, 0, 0);
+	EV_SET64(&kev, 4, EVFILT_TIMER, EV_ADD | EV_ONESHOT, 0, first, 0, 0, 0);
 	ret = kevent64(kq, &kev, 1, NULL, 0, 0, NULL);
 	if (ret != 0) {
 		T_FAIL("%s() failure: initial kevent returned %d\n", __func__, ret);
@@ -339,8 +351,9 @@ test_updated_kevent(int first, int second)
 
 	uint64_t expected_us = (uint64_t)second * 1000;
 
-	if (second < 0)
+	if (second < 0) {
 		expected_us = 0;
+	}
 
 	ret = do_simple_kevent(&kev, expected_us);
 
@@ -356,8 +369,8 @@ test_updated_kevent(int first, int second)
 static void
 disable_timer_coalescing(void)
 {
-    struct task_qos_policy	qosinfo;
-    kern_return_t			kr;
+	struct task_qos_policy      qosinfo;
+	kern_return_t                       kr;
 
 	T_SETUPBEGIN;
 
@@ -365,7 +378,7 @@ disable_timer_coalescing(void)
 	qosinfo.task_throughput_qos_tier = THROUGHPUT_QOS_TIER_0;
 
 	kr = task_policy_set(mach_task_self(), TASK_OVERRIDE_QOS_POLICY, (task_policy_t)&qosinfo,
-	                     TASK_QOS_POLICY_COUNT);
+	    TASK_QOS_POLICY_COUNT);
 	if (kr != KERN_SUCCESS) {
 		T_FAIL("task_policy_set(... TASK_OVERRIDE_QOS_POLICY ...) failed: %d (%s)", kr, mach_error_string(kr));
 	}
@@ -374,7 +387,7 @@ disable_timer_coalescing(void)
 }
 
 T_DECL(kqueue_timer_tests,
-	"Tests assorted kqueue operations for timer-related events")
+    "Tests assorted kqueue operations for timer-related events")
 {
 	/*
 	 * Since we're trying to test timers here, disable timer coalescing
@@ -433,5 +446,4 @@ T_DECL(kqueue_timer_tests,
 	test_updated_kevent(1000, 2000);
 	test_updated_kevent(2000, 1000);
 	test_updated_kevent(1000, -1);
-
 }

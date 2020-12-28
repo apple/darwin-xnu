@@ -2,7 +2,7 @@
  * Copyright (c) 2004-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -47,12 +47,12 @@
 /* option for f/getxattr() and f/listxattr() to expose the HFS Compression extended attributes */
 #define XATTR_SHOWCOMPRESSION 0x0020
 
-#define	XATTR_MAXNAMELEN   127
+#define XATTR_MAXNAMELEN   127
 
 /* See the ATTR_CMN_FNDRINFO section of getattrlist(2) for details on FinderInfo */
-#define	XATTR_FINDERINFO_NAME	  "com.apple.FinderInfo"
+#define XATTR_FINDERINFO_NAME     "com.apple.FinderInfo"
 
-#define	XATTR_RESOURCEFORK_NAME	  "com.apple.ResourceFork"
+#define XATTR_RESOURCEFORK_NAME   "com.apple.ResourceFork"
 
 
 #ifdef KERNEL
@@ -67,16 +67,16 @@ int  xattr_protected(const char *);
 int  xattr_validatename(const char *);
 
 /* Maximum extended attribute size supported by VFS */
-#define XATTR_MAXSIZE		INT32_MAX 
+#define XATTR_MAXSIZE           INT32_MAX
 
 #ifdef PRIVATE
-/* Maximum extended attribute size in an Apple Double file */	
-#define AD_XATTR_MAXSIZE 	XATTR_MAXSIZE
+/* Maximum extended attribute size in an Apple Double file */
+#define AD_XATTR_MAXSIZE        XATTR_MAXSIZE
 
-/* Number of bits used to represent the maximum size of 
+/* Number of bits used to represent the maximum size of
  * extended attribute stored in an Apple Double file.
  */
-#define AD_XATTR_SIZE_BITS	31
+#define AD_XATTR_SIZE_BITS      31
 #endif /* PRIVATE */
 
 __END_DECLS
@@ -98,7 +98,7 @@ int removexattr(const char *path, const char *name, int options);
 int fremovexattr(int fd, const char *name, int options);
 
 ssize_t listxattr(const char *path, char *namebuff, size_t size, int options);
- 
+
 ssize_t flistxattr(int fd, char *namebuff, size_t size, int options);
 
 __END_DECLS

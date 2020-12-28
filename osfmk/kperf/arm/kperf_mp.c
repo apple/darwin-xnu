@@ -44,12 +44,12 @@ kperf_signal_handler(unsigned int cpu_number)
 	uint64_t cpu_mask = UINT64_C(1) << cpu_number;
 
 	/* find all the timers that caused a signal */
-	for(int i = 0; i < (int)kperf_timerc; i++) {
+	for (int i = 0; i < (int)kperf_timerc; i++) {
 		uint64_t pending_cpus;
 		struct kperf_timer *timer = &kperf_timerv[i];
 
 		pending_cpus = atomic_fetch_and_explicit(&timer->pending_cpus,
-				~cpu_mask, memory_order_relaxed);
+		    ~cpu_mask, memory_order_relaxed);
 		if (pending_cpus & cpu_mask) {
 			kperf_ipi_handler(timer);
 		}
@@ -70,9 +70,8 @@ kperf_mp_broadcast_other_running(struct kperf_timer *timer)
 
 		/* do not IPI processors that are not scheduling threads */
 		if (processor == PROCESSOR_NULL ||
-				processor->state != PROCESSOR_RUNNING ||
-				processor->active_thread == THREAD_NULL)
-		{
+		    processor->state != PROCESSOR_RUNNING ||
+		    processor->active_thread == THREAD_NULL) {
 			continue;
 		}
 
@@ -83,12 +82,11 @@ kperf_mp_broadcast_other_running(struct kperf_timer *timer)
 
 		/* nor processors that have not responded to the last broadcast */
 		uint64_t already_pending = atomic_fetch_or_explicit(
-				&timer->pending_cpus, i_bit, memory_order_relaxed);
-		if (already_pending & i_bit)
-		{
+			&timer->pending_cpus, i_bit, memory_order_relaxed);
+		if (already_pending & i_bit) {
 #if DEVELOPMENT || DEBUG
 			atomic_fetch_add_explicit(&kperf_pending_ipis, 1,
-					memory_order_relaxed);
+			    memory_order_relaxed);
 #endif /* DEVELOPMENT || DEBUG */
 			continue;
 		}

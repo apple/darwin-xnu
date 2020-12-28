@@ -71,10 +71,11 @@ crc16(uint16_t crc, const void *buf, size_t size)
 
 	p = buf;
 
-	while (size--)
+	while (size--) {
 		crc = crc16_tab[(crc ^ (*p++)) & 0xFF] ^ (crc >> 8);
+	}
 
-    return crc;
+	return crc;
 }
 
 #if KASAN

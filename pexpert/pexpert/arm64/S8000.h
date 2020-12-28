@@ -8,7 +8,7 @@
 #include <pexpert/arm64/AIC.h>
 #include <pexpert/arm64/twister.h>
 
-#ifndef	ASSEMBLER
+#ifndef ASSEMBLER
 
 #include <pexpert/arm/S3cUART.h>
 

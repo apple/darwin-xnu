@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,34 +22,34 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_FREE_COPYRIGHT@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1991,1990,1989 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
  * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
@@ -68,7 +68,7 @@
  * is included in support of clause 2.2 (b) of the Apple Public License,
  * Version 2.0.
  */
-    
+
 
 #include <mach/port.h>
 #include <mach/message.h>
@@ -78,12 +78,13 @@
 #include <kern/counters.h>
 #include <kern/sched_prim.h>
 #include <kern/ipc_kobject.h>
-#include <kern/ipc_mig.h>	/* XXX - for mach_msg_receive_continue */
+#include <kern/ipc_mig.h>       /* XXX - for mach_msg_receive_continue */
 #include <kern/misc_protos.h>
 #include <kern/task.h>
 #include <kern/thread.h>
 #include <kern/waitq.h>
 
+#include <ipc/port.h>
 #include <ipc/ipc_mqueue.h>
 #include <ipc/ipc_kmsg.h>
 #include <ipc/ipc_port.h>
@@ -100,13 +101,13 @@
 
 #include <sys/event.h>
 
-extern char	*proc_name_address(void *p);
+extern char     *proc_name_address(void *p);
 
-int ipc_mqueue_full;		/* address is event for queue space */
-int ipc_mqueue_rcv;		/* address is event for message arrival */
+int ipc_mqueue_full;            /* address is event for queue space */
+int ipc_mqueue_rcv;             /* address is event for message arrival */
 
 /* forward declarations */
-void ipc_mqueue_receive_results(wait_result_t result);
+static void ipc_mqueue_receive_results(wait_result_t result);
 static void ipc_mqueue_peek_on_thread(
 	ipc_mqueue_t        port_mq,
 	mach_msg_option_t   option,
@@ -119,36 +120,44 @@ static void ipc_mqueue_peek_on_thread(
  */
 void
 ipc_mqueue_init(
-	ipc_mqueue_t	mqueue,
-	boolean_t	is_set)
+	ipc_mqueue_t            mqueue,
+	ipc_mqueue_kind_t       kind)
 {
-	if (is_set) {
+	switch (kind) {
+	case IPC_MQUEUE_KIND_SET:
 		waitq_set_init(&mqueue->imq_set_queue,
-			       SYNC_POLICY_FIFO|SYNC_POLICY_PREPOST,
-			       NULL, NULL);
-	} else {
-		waitq_init(&mqueue->imq_wait_queue, SYNC_POLICY_FIFO | SYNC_POLICY_PORT);
+		    SYNC_POLICY_FIFO | SYNC_POLICY_PREPOST,
+		    NULL, NULL);
+		break;
+	case IPC_MQUEUE_KIND_NONE: /* cheat: we really should have "no" mqueue */
+	case IPC_MQUEUE_KIND_PORT:
+		waitq_init(&mqueue->imq_wait_queue,
+		    SYNC_POLICY_FIFO | SYNC_POLICY_TURNSTILE_PROXY);
 		ipc_kmsg_queue_init(&mqueue->imq_messages);
 		mqueue->imq_seqno = 0;
 		mqueue->imq_msgcount = 0;
 		mqueue->imq_qlimit = MACH_PORT_QLIMIT_DEFAULT;
+		mqueue->imq_context = 0;
 		mqueue->imq_fullwaiters = FALSE;
 #if MACH_FLIPC
 		mqueue->imq_fport = FPORT_NULL;
 #endif
+		break;
 	}
 	klist_init(&mqueue->imq_klist);
 }
 
-void ipc_mqueue_deinit(
-	ipc_mqueue_t		mqueue)
+void
+ipc_mqueue_deinit(
+	ipc_mqueue_t            mqueue)
 {
 	boolean_t is_set = imq_is_set(mqueue);
 
-	if (is_set)
+	if (is_set) {
 		waitq_set_deinit(&mqueue->imq_set_queue);
-	else
+	} else {
 		waitq_deinit(&mqueue->imq_wait_queue);
+	}
 }
 
 /*
@@ -164,8 +173,7 @@ void
 imq_reserve_and_lock(ipc_mqueue_t mq, uint64_t *reserved_prepost)
 {
 	*reserved_prepost = waitq_prepost_reserve(&mq->imq_wait_queue, 0,
-						  WAITQ_KEEP_LOCKED);
-
+	    WAITQ_KEEP_LOCKED);
 }
 
 
@@ -200,14 +208,13 @@ imq_release_and_unlock(ipc_mqueue_t mq, uint64_t reserved_prepost)
 
 boolean_t
 ipc_mqueue_member(
-	ipc_mqueue_t		port_mqueue,
-	ipc_mqueue_t		set_mqueue)
+	ipc_mqueue_t            port_mqueue,
+	ipc_mqueue_t            set_mqueue)
 {
 	struct waitq *port_waitq = &port_mqueue->imq_wait_queue;
 	struct waitq_set *set_waitq = &set_mqueue->imq_set_queue;
 
 	return waitq_member(port_waitq, set_waitq);
-
 }
 
 /*
@@ -219,8 +226,8 @@ ipc_mqueue_member(
 
 kern_return_t
 ipc_mqueue_remove(
-	ipc_mqueue_t	  mqueue,
-	ipc_mqueue_t	  set_mqueue)
+	ipc_mqueue_t      mqueue,
+	ipc_mqueue_t      set_mqueue)
 {
 	struct waitq *mq_waitq = &mqueue->imq_wait_queue;
 	struct waitq_set *set_waitq = &set_mqueue->imq_set_queue;
@@ -238,7 +245,7 @@ ipc_mqueue_remove(
  *		mqueue unlocked and set links deallocated
  */
 void
-ipc_mqueue_remove_from_all(ipc_mqueue_t	mqueue)
+ipc_mqueue_remove_from_all(ipc_mqueue_t mqueue)
 {
 	struct waitq *mq_waitq = &mqueue->imq_wait_queue;
 	kern_return_t kr;
@@ -261,7 +268,7 @@ ipc_mqueue_remove_from_all(ipc_mqueue_t	mqueue)
  *		mqueue unlocked all set links deallocated
  */
 void
-ipc_mqueue_remove_all(ipc_mqueue_t	mqueue)
+ipc_mqueue_remove_all(ipc_mqueue_t      mqueue)
 {
 	struct waitq_set *mq_setq = &mqueue->imq_set_queue;
 
@@ -285,16 +292,16 @@ ipc_mqueue_remove_all(ipc_mqueue_t	mqueue)
  */
 kern_return_t
 ipc_mqueue_add(
-	ipc_mqueue_t	port_mqueue,
-	ipc_mqueue_t	set_mqueue,
-	uint64_t	*reserved_link,
-	uint64_t	*reserved_prepost)
+	ipc_mqueue_t    port_mqueue,
+	ipc_mqueue_t    set_mqueue,
+	uint64_t        *reserved_link,
+	uint64_t        *reserved_prepost)
 {
 	struct waitq     *port_waitq = &port_mqueue->imq_wait_queue;
 	struct waitq_set *set_waitq = &set_mqueue->imq_set_queue;
 	ipc_kmsg_queue_t kmsgq;
 	ipc_kmsg_t       kmsg, next;
-	kern_return_t	 kr;
+	kern_return_t    kr;
 
 	assert(reserved_link && *reserved_link != 0);
 	assert(waitqs_is_linked(set_waitq));
@@ -318,8 +325,8 @@ ipc_mqueue_add(
 	 */
 	kmsgq = &port_mqueue->imq_messages;
 	for (kmsg = ipc_kmsg_queue_first(kmsgq);
-	     kmsg != IKM_NULL;
-	     kmsg = next) {
+	    kmsg != IKM_NULL;
+	    kmsg = next) {
 		next = ipc_kmsg_queue_next(kmsgq, kmsg);
 
 		for (;;) {
@@ -328,15 +335,16 @@ ipc_mqueue_add(
 			spl_t th_spl;
 
 			th = waitq_wakeup64_identify_locked(
-						port_waitq,
-						IPC_MQUEUE_RECEIVE,
-						THREAD_AWAKENED, &th_spl,
-						reserved_prepost, WAITQ_ALL_PRIORITIES,
-						WAITQ_KEEP_LOCKED);
+				port_waitq,
+				IPC_MQUEUE_RECEIVE,
+				THREAD_AWAKENED, &th_spl,
+				reserved_prepost, WAITQ_ALL_PRIORITIES,
+				WAITQ_KEEP_LOCKED);
 			/* waitq/mqueue still locked, thread locked */
 
-			if (th == THREAD_NULL)
+			if (th == THREAD_NULL) {
 				goto leave;
+			}
 
 			/*
 			 * If the receiver waited with a facility not directly
@@ -353,8 +361,8 @@ ipc_mqueue_add(
 					 * if there are any actual receivers
 					 */
 					ipc_mqueue_peek_on_thread(port_mqueue,
-								  th->ith_option,
-								  th);
+					    th->ith_option,
+					    th);
 				}
 				thread_unlock(th);
 				splx(th_spl);
@@ -371,7 +379,7 @@ ipc_mqueue_add(
 			 */
 			msize = ipc_kmsg_copyout_size(kmsg, th->map);
 			if (th->ith_rsize <
-					(msize + REQUESTED_TRAILER_SIZE(thread_is_64bit_addr(th), th->ith_option))) {
+			    (msize + REQUESTED_TRAILER_SIZE(thread_is_64bit_addr(th), th->ith_option))) {
 				th->ith_state = MACH_RCV_TOO_LARGE;
 				th->ith_msize = msize;
 				if (th->ith_option & MACH_RCV_LARGE) {
@@ -404,15 +412,36 @@ ipc_mqueue_add(
 			thread_unlock(th);
 			splx(th_spl);
 #if MACH_FLIPC
-            if (MACH_NODE_VALID(node) && FPORT_VALID(port_mqueue->imq_fport))
-                flipc_msg_ack(node, port_mqueue, TRUE);
+			if (MACH_NODE_VALID(node) && FPORT_VALID(port_mqueue->imq_fport)) {
+				flipc_msg_ack(node, port_mqueue, TRUE);
+			}
 #endif
 			break;  /* go to next message */
 		}
 	}
- leave:
+leave:
 	imq_unlock(port_mqueue);
 	return KERN_SUCCESS;
+}
+
+
+/*
+ *	Routine:	ipc_mqueue_has_klist
+ *	Purpose:
+ *		Returns whether the given mqueue imq_klist field can be used as a klist.
+ */
+static inline bool
+ipc_mqueue_has_klist(ipc_mqueue_t mqueue)
+{
+	ipc_object_t object = imq_to_object(mqueue);
+	if (io_otype(object) != IOT_PORT) {
+		return true;
+	}
+	ipc_port_t port = ip_from_mq(mqueue);
+	if (port->ip_specialreply) {
+		return false;
+	}
+	return port->ip_sync_link_state == PORT_SYNC_LINK_ANY;
 }
 
 /*
@@ -422,12 +451,12 @@ ipc_mqueue_add(
  *	Conditions:
  *		The message queue is locked.
  */
-
 void
 ipc_mqueue_changed(
-	ipc_mqueue_t		mqueue)
+	ipc_space_t     space,
+	ipc_mqueue_t    mqueue)
 {
-	if (IMQ_KLIST_VALID(mqueue)) {
+	if (ipc_mqueue_has_klist(mqueue) && SLIST_FIRST(&mqueue->imq_klist)) {
 		/*
 		 * Indicate that this message queue is vanishing
 		 *
@@ -438,21 +467,38 @@ ipc_mqueue_changed(
 		 * The new process may want to register the port it gets back with an
 		 * EVFILT_MACHPORT filter again, and may have pending sync IPC on this
 		 * port pending already, in which case we want the imq_klist field to be
-		 * reusable for nefarious purposes (see IMQ_SET_INHERITOR).
+		 * reusable for nefarious purposes.
 		 *
 		 * Fortunately, we really don't need this linkage anymore after this
 		 * point as EV_VANISHED / EV_EOF will be the last thing delivered ever.
+		 *
+		 * Note: we don't have the space lock here, however, this covers the
+		 *       case of when a task is terminating the space, triggering
+		 *       several knote_vanish() calls.
+		 *
+		 *       We don't need the lock to observe that the space is inactive as
+		 *       we just deactivated it on the same thread.
+		 *
+		 *       We still need to call knote_vanish() so that the knote is
+		 *       marked with EV_VANISHED or EV_EOF so that the detach step
+		 *       in filt_machportdetach is skipped correctly.
 		 */
-		knote_vanish(&mqueue->imq_klist);
+		assert(space);
+		knote_vanish(&mqueue->imq_klist, is_active(space));
+	}
+
+	if (io_otype(imq_to_object(mqueue)) == IOT_PORT) {
+		ipc_port_adjust_sync_link_state_locked(ip_from_mq(mqueue), PORT_SYNC_LINK_ANY, NULL);
+	} else {
 		klist_init(&mqueue->imq_klist);
 	}
 
 	waitq_wakeup64_all_locked(&mqueue->imq_wait_queue,
-				  IPC_MQUEUE_RECEIVE,
-				  THREAD_RESTART,
-				  NULL,
-				  WAITQ_ALL_PRIORITIES,
-				  WAITQ_KEEP_LOCKED);
+	    IPC_MQUEUE_RECEIVE,
+	    THREAD_RESTART,
+	    NULL,
+	    WAITQ_ALL_PRIORITIES,
+	    WAITQ_KEEP_LOCKED);
 }
 
 
@@ -477,9 +523,9 @@ ipc_mqueue_changed(
  */
 mach_msg_return_t
 ipc_mqueue_send(
-	ipc_mqueue_t		mqueue,
-	ipc_kmsg_t		kmsg,
-	mach_msg_option_t	option,
+	ipc_mqueue_t            mqueue,
+	ipc_kmsg_t              kmsg,
+	mach_msg_option_t       option,
 	mach_msg_timeout_t  send_timeout)
 {
 	int wresult;
@@ -492,9 +538,9 @@ ipc_mqueue_send(
 	 */
 	if (!imq_full(mqueue) ||
 	    (!imq_full_kernel(mqueue) &&
-	     ((option & MACH_SEND_ALWAYS) ||
-	      (MACH_MSGH_BITS_REMOTE(kmsg->ikm_header->msgh_bits) ==
-	       MACH_MSG_TYPE_PORT_SEND_ONCE)))) {
+	    ((option & MACH_SEND_ALWAYS) ||
+	    (MACH_MSGH_BITS_REMOTE(kmsg->ikm_header->msgh_bits) ==
+	    MACH_MSG_TYPE_PORT_SEND_ONCE)))) {
 		mqueue->imq_msgcount++;
 		assert(mqueue->imq_msgcount > 0);
 		imq_unlock(mqueue);
@@ -502,7 +548,6 @@ ipc_mqueue_send(
 		thread_t cur_thread = current_thread();
 		ipc_port_t port = ip_from_mq(mqueue);
 		struct turnstile *send_turnstile = TURNSTILE_NULL;
-		turnstile_inheritor_t inheritor = TURNSTILE_INHERITOR_NULL;
 		uint64_t deadline;
 
 		/*
@@ -518,40 +563,32 @@ ipc_mqueue_send(
 		}
 		mqueue->imq_fullwaiters = TRUE;
 
-		if (option & MACH_SEND_TIMEOUT)
-			clock_interval_to_deadline(send_timeout, 1000*NSEC_PER_USEC, &deadline);
-		else
+		if (option & MACH_SEND_TIMEOUT) {
+			clock_interval_to_deadline(send_timeout, 1000 * NSEC_PER_USEC, &deadline);
+		} else {
 			deadline = 0;
+		}
 
 		thread_set_pending_block_hint(cur_thread, kThreadWaitPortSend);
 
 		send_turnstile = turnstile_prepare((uintptr_t)port,
-			port_send_turnstile_address(port),
-			TURNSTILE_NULL, TURNSTILE_SYNC_IPC);
+		    port_send_turnstile_address(port),
+		    TURNSTILE_NULL, TURNSTILE_SYNC_IPC);
 
-		/* Check if the port in is in transit, get the destination port's turnstile */
-		if (ip_active(port) &&
-		    port->ip_receiver_name == MACH_PORT_NULL &&
-		    port->ip_destination != NULL) {
-			inheritor = port_send_turnstile(port->ip_destination);
-		} else {
-			inheritor = ipc_port_get_inheritor(port);
-		}
-
-		turnstile_update_inheritor(send_turnstile, inheritor,
-				TURNSTILE_DELAYED_UPDATE | TURNSTILE_INHERITOR_TURNSTILE);
+		ipc_port_send_update_inheritor(port, send_turnstile,
+		    TURNSTILE_DELAYED_UPDATE);
 
 		wresult = waitq_assert_wait64_leeway(
-					&send_turnstile->ts_waitq,
-					IPC_MQUEUE_FULL,
-					THREAD_ABORTSAFE,
-					TIMEOUT_URGENCY_USER_NORMAL,
-					deadline,
-					TIMEOUT_NO_LEEWAY);
+			&send_turnstile->ts_waitq,
+			IPC_MQUEUE_FULL,
+			THREAD_ABORTSAFE,
+			TIMEOUT_URGENCY_USER_NORMAL,
+			deadline,
+			TIMEOUT_NO_LEEWAY);
 
 		imq_unlock(mqueue);
 		turnstile_update_inheritor_complete(send_turnstile,
-				TURNSTILE_INTERLOCK_NOT_HELD);
+		    TURNSTILE_INTERLOCK_NOT_HELD);
 
 		if (wresult == THREAD_WAITING) {
 			wresult = thread_block(THREAD_CONTINUE_NULL);
@@ -560,14 +597,13 @@ ipc_mqueue_send(
 
 		/* Call turnstile complete with interlock held */
 		imq_lock(mqueue);
-		turnstile_complete((uintptr_t)port, port_send_turnstile_address(port), NULL);
+		turnstile_complete((uintptr_t)port, port_send_turnstile_address(port), NULL, TURNSTILE_SYNC_IPC);
 		imq_unlock(mqueue);
 
 		/* Call cleanup after dropping the interlock */
 		turnstile_cleanup();
 
 		switch (wresult) {
-
 		case THREAD_AWAKENED:
 			/*
 			 * we can proceed - inherited msgcount from waker
@@ -607,7 +643,8 @@ ipc_mqueue_send(
  *		The message queue is not locked.
  *		The caller holds a reference on the message queue.
  */
-extern void ipc_mqueue_override_send(
+extern void
+ipc_mqueue_override_send(
 	ipc_mqueue_t        mqueue,
 	mach_msg_priority_t override)
 {
@@ -621,11 +658,19 @@ extern void ipc_mqueue_override_send(
 		ipc_kmsg_t first = ipc_kmsg_queue_first(&mqueue->imq_messages);
 
 		if (first && ipc_kmsg_override_qos(&mqueue->imq_messages, first, override)) {
-			if (IMQ_KLIST_VALID(mqueue))
+			ipc_object_t object = imq_to_object(mqueue);
+			assert(io_otype(object) == IOT_PORT);
+			ipc_port_t port = ip_object_to_port(object);
+			if (ip_active(port) &&
+			    port->ip_receiver_name != MACH_PORT_NULL &&
+			    is_active(port->ip_receiver) &&
+			    ipc_mqueue_has_klist(mqueue)) {
 				KNOTE(&mqueue->imq_klist, 0);
+			}
 		}
-		if (!first)
+		if (!first) {
 			full_queue_empty = TRUE;
+		}
 	}
 	imq_unlock(mqueue);
 
@@ -665,7 +710,7 @@ ipc_mqueue_release_msgcount(ipc_mqueue_t port_mq, ipc_mqueue_t set_mq)
 	port_mq->imq_msgcount--;
 
 	if (!imq_full(port_mq) && port_mq->imq_fullwaiters &&
-		send_turnstile != TURNSTILE_NULL) {
+	    send_turnstile != TURNSTILE_NULL) {
 		/*
 		 * boost the priority of the awoken thread
 		 * (WAITQ_PROMOTE_PRIORITY) to ensure it uses
@@ -680,9 +725,9 @@ ipc_mqueue_release_msgcount(ipc_mqueue_t port_mq, ipc_mqueue_t set_mq)
 		 * high priority threads trying to send to this port.
 		 */
 		if (waitq_wakeup64_one(&send_turnstile->ts_waitq,
-					      IPC_MQUEUE_FULL,
-					      THREAD_AWAKENED,
-					      WAITQ_PROMOTE_PRIORITY) != KERN_SUCCESS) {
+		    IPC_MQUEUE_FULL,
+		    THREAD_AWAKENED,
+		    WAITQ_PROMOTE_PRIORITY) != KERN_SUCCESS) {
 			port_mq->imq_fullwaiters = FALSE;
 		} else {
 			/* gave away our slot - add reference back */
@@ -739,16 +784,15 @@ ipc_mqueue_post(
 		mach_msg_size_t msize;
 
 		receiver = waitq_wakeup64_identify_locked(waitq,
-		                                          IPC_MQUEUE_RECEIVE,
-		                                          THREAD_AWAKENED,
-		                                          &th_spl,
-		                                          &reserved_prepost,
-		                                          WAITQ_ALL_PRIORITIES,
-		                                          WAITQ_KEEP_LOCKED);
+		    IPC_MQUEUE_RECEIVE,
+		    THREAD_AWAKENED,
+		    &th_spl,
+		    &reserved_prepost,
+		    WAITQ_ALL_PRIORITIES,
+		    WAITQ_KEEP_LOCKED);
 		/* waitq still locked, thread locked */
 
 		if (receiver == THREAD_NULL) {
-
 			/*
 			 * no receivers; queue kmsg if space still reserved
 			 * Reservations are cancelled when the port goes inactive.
@@ -766,8 +810,16 @@ ipc_mqueue_post(
 			 */
 			if (mqueue->imq_msgcount > 0) {
 				if (ipc_kmsg_enqueue_qos(&mqueue->imq_messages, kmsg)) {
-					if (IMQ_KLIST_VALID(mqueue))
+					/* if the space is dead there is no point calling KNOTE */
+					ipc_object_t object = imq_to_object(mqueue);
+					assert(io_otype(object) == IOT_PORT);
+					ipc_port_t port = ip_object_to_port(object);
+					if (ip_active(port) &&
+					    port->ip_receiver_name != MACH_PORT_NULL &&
+					    is_active(port->ip_receiver) &&
+					    ipc_mqueue_has_klist(mqueue)) {
 						KNOTE(&mqueue->imq_klist, 0);
+					}
 				}
 				break;
 			}
@@ -816,9 +868,9 @@ ipc_mqueue_post(
 		 * If the message is too large or the scatter list is too small
 		 * the thread we wake up will get that as its status.
 		 */
-		msize =	ipc_kmsg_copyout_size(kmsg, receiver->map);
+		msize = ipc_kmsg_copyout_size(kmsg, receiver->map);
 		if (receiver->ith_rsize <
-				(msize + REQUESTED_TRAILER_SIZE(thread_is_64bit_addr(receiver), receiver->ith_option))) {
+		    (msize + REQUESTED_TRAILER_SIZE(thread_is_64bit_addr(receiver), receiver->ith_option))) {
 			receiver->ith_msize = msize;
 			receiver->ith_state = MACH_RCV_TOO_LARGE;
 		} else {
@@ -844,8 +896,9 @@ ipc_mqueue_post(
 			ipc_mqueue_release_msgcount(mqueue, IMQ_NULL);
 
 #if MACH_FLIPC
-            if (MACH_NODE_VALID(node) && FPORT_VALID(mqueue->imq_fport))
-                flipc_msg_ack(node, mqueue, TRUE);
+			if (MACH_NODE_VALID(node) && FPORT_VALID(mqueue->imq_fport)) {
+				flipc_msg_ack(node, mqueue, TRUE);
+			}
 #endif
 			break;
 		}
@@ -866,19 +919,20 @@ out_unlock:
 	/* clear the waitq boost we may have been given */
 	waitq_clear_promotion_locked(&mqueue->imq_wait_queue, current_thread());
 	imq_release_and_unlock(mqueue, reserved_prepost);
-	if (destroy_msg)
+	if (destroy_msg) {
 		ipc_kmsg_destroy(kmsg);
+	}
 
 	current_task()->messages_sent++;
 	return;
 }
 
 
-/* static */ void
+static void
 ipc_mqueue_receive_results(wait_result_t saved_wait_result)
 {
-	thread_t     		self = current_thread();
-	mach_msg_option_t	option = self->ith_option;
+	thread_t                self = current_thread();
+	mach_msg_option_t       option = self->ith_option;
 
 	/*
 	 * why did we wake up?
@@ -974,28 +1028,31 @@ ipc_mqueue_receive(
 
 	imq_lock(mqueue);
 	wresult = ipc_mqueue_receive_on_thread(mqueue, option, max_size,
-	                                       rcv_timeout, interruptible,
-	                                       self);
+	    rcv_timeout, interruptible,
+	    self);
 	/* mqueue unlocked */
-	if (wresult == THREAD_NOT_WAITING)
+	if (wresult == THREAD_NOT_WAITING) {
 		return;
+	}
 
 	if (wresult == THREAD_WAITING) {
 		counter((interruptible == THREAD_ABORTSAFE) ?
-			c_ipc_mqueue_receive_block_user++ :
-			c_ipc_mqueue_receive_block_kernel++);
+		    c_ipc_mqueue_receive_block_user++ :
+		    c_ipc_mqueue_receive_block_kernel++);
 
-		if (self->ith_continuation)
+		if (self->ith_continuation) {
 			thread_block(ipc_mqueue_receive_continue);
-			/* NOTREACHED */
+		}
+		/* NOTREACHED */
 
 		wresult = thread_block(THREAD_CONTINUE_NULL);
 	}
 	ipc_mqueue_receive_results(wresult);
 }
 
-static int mqueue_process_prepost_receive(void *ctx, struct waitq *waitq,
-					  struct waitq_set *wqset)
+static int
+mqueue_process_prepost_receive(void *ctx, struct waitq *waitq,
+    struct waitq_set *wqset)
 {
 	ipc_mqueue_t     port_mq, *pmq_ptr;
 
@@ -1006,8 +1063,9 @@ static int mqueue_process_prepost_receive(void *ctx, struct waitq *waitq,
 	 * If there are no messages on this queue, skip it and remove
 	 * it from the prepost list
 	 */
-	if (ipc_kmsg_queue_empty(&port_mq->imq_messages))
+	if (ipc_kmsg_queue_empty(&port_mq->imq_messages)) {
 		return WQ_ITERATE_INVALIDATE_CONTINUE;
+	}
 
 	/*
 	 * There are messages waiting on this port.
@@ -1015,8 +1073,9 @@ static int mqueue_process_prepost_receive(void *ctx, struct waitq *waitq,
 	 * waitq locked.
 	 */
 	pmq_ptr = (ipc_mqueue_t *)ctx;
-	if (pmq_ptr)
+	if (pmq_ptr) {
 		*pmq_ptr = port_mq;
+	}
 	return WQ_ITERATE_BREAK_KEEP_LOCKED;
 }
 
@@ -1042,9 +1101,8 @@ ipc_mqueue_receive_on_thread(
 	thread_t                thread)
 {
 	wait_result_t           wresult;
-	uint64_t		deadline;
+	uint64_t                deadline;
 	struct turnstile        *rcv_turnstile = TURNSTILE_NULL;
-	turnstile_inheritor_t   inheritor = NULL;
 
 	/* called with mqueue locked */
 
@@ -1065,8 +1123,8 @@ ipc_mqueue_receive_on_thread(
 		ipc_mqueue_t port_mq = IMQ_NULL;
 
 		(void)waitq_set_iterate_preposts(&mqueue->imq_set_queue,
-						 &port_mq,
-		                 mqueue_process_prepost_receive);
+		    &port_mq,
+		    mqueue_process_prepost_receive);
 
 		if (port_mq != IMQ_NULL) {
 			/*
@@ -1084,16 +1142,17 @@ ipc_mqueue_receive_on_thread(
 			 * Continue on to handling the message with just
 			 * the port mqueue locked.
 			 */
-			if (option & MACH_PEEK_MSG)
+			if (option & MACH_PEEK_MSG) {
 				ipc_mqueue_peek_on_thread(port_mq, option, thread);
-			else
+			} else {
 				ipc_mqueue_select_on_thread(port_mq, mqueue, option,
-							    max_size, thread);
+				    max_size, thread);
+			}
 
 			imq_unlock(port_mq);
 			return THREAD_NOT_WAITING;
 		}
-	} else if (imq_is_queue(mqueue)) {
+	} else if (imq_is_queue(mqueue) || imq_is_turnstile_proxy(mqueue)) {
 		ipc_kmsg_queue_t kmsgs;
 
 		/*
@@ -1101,17 +1160,18 @@ ipc_mqueue_receive_on_thread(
 		 */
 		kmsgs = &mqueue->imq_messages;
 		if (ipc_kmsg_queue_first(kmsgs) != IKM_NULL) {
-			if (option & MACH_PEEK_MSG)
+			if (option & MACH_PEEK_MSG) {
 				ipc_mqueue_peek_on_thread(mqueue, option, thread);
-			else
+			} else {
 				ipc_mqueue_select_on_thread(mqueue, IMQ_NULL, option,
-							    max_size, thread);
+				    max_size, thread);
+			}
 			imq_unlock(mqueue);
 			return THREAD_NOT_WAITING;
 		}
 	} else {
 		panic("Unknown mqueue type 0x%x: likely memory corruption!\n",
-		      mqueue->imq_wait_queue.waitq_type);
+		    mqueue->imq_wait_queue.waitq_type);
 	}
 
 	/*
@@ -1131,19 +1191,22 @@ ipc_mqueue_receive_on_thread(
 	thread->ith_rsize = max_size;
 	thread->ith_msize = 0;
 
-	if (option & MACH_PEEK_MSG)
+	if (option & MACH_PEEK_MSG) {
 		thread->ith_state = MACH_PEEK_IN_PROGRESS;
-	else
+	} else {
 		thread->ith_state = MACH_RCV_IN_PROGRESS;
+	}
 
-	if (option & MACH_RCV_TIMEOUT)
-		clock_interval_to_deadline(rcv_timeout, 1000*NSEC_PER_USEC, &deadline);
-	else
+	if (option & MACH_RCV_TIMEOUT) {
+		clock_interval_to_deadline(rcv_timeout, 1000 * NSEC_PER_USEC, &deadline);
+	} else {
 		deadline = 0;
+	}
 
 	/*
-	 * Threads waiting on a port (not portset)
-	 * will wait on port's receive turnstile.
+	 * Threads waiting on a reply port (not portset)
+	 * will wait on its receive turnstile.
+	 *
 	 * Donate waiting thread's turnstile and
 	 * setup inheritor for special reply port.
 	 * Based on the state of the special reply
@@ -1158,31 +1221,28 @@ ipc_mqueue_receive_on_thread(
 	 * will be converted to to turnstile waitq
 	 * in waitq_assert_wait instead of global waitqs.
 	 */
-	if (imq_is_queue(mqueue)) {
+	if (imq_is_turnstile_proxy(mqueue)) {
 		ipc_port_t port = ip_from_mq(mqueue);
 		rcv_turnstile = turnstile_prepare((uintptr_t)port,
-			port_rcv_turnstile_address(port),
-			TURNSTILE_NULL, TURNSTILE_SYNC_IPC);
+		    port_rcv_turnstile_address(port),
+		    TURNSTILE_NULL, TURNSTILE_SYNC_IPC);
 
-		if (port->ip_specialreply) {
-			inheritor = ipc_port_get_special_reply_port_inheritor(port);
-		}
-
-		turnstile_update_inheritor(rcv_turnstile, inheritor,
-			(TURNSTILE_INHERITOR_TURNSTILE | TURNSTILE_DELAYED_UPDATE));
+		ipc_port_recv_update_inheritor(port, rcv_turnstile,
+		    TURNSTILE_DELAYED_UPDATE);
 	}
 
 	thread_set_pending_block_hint(thread, kThreadWaitPortReceive);
 	wresult = waitq_assert_wait64_locked(&mqueue->imq_wait_queue,
-					     IPC_MQUEUE_RECEIVE,
-					     interruptible,
-					     TIMEOUT_URGENCY_USER_NORMAL,
-					     deadline,
-					     TIMEOUT_NO_LEEWAY,
-					     thread);
+	    IPC_MQUEUE_RECEIVE,
+	    interruptible,
+	    TIMEOUT_URGENCY_USER_NORMAL,
+	    deadline,
+	    TIMEOUT_NO_LEEWAY,
+	    thread);
 	/* preposts should be detected above, not here */
-	if (wresult == THREAD_AWAKENED)
+	if (wresult == THREAD_AWAKENED) {
 		panic("ipc_mqueue_receive_on_thread: sleep walking");
+	}
 
 	imq_unlock(mqueue);
 
@@ -1247,10 +1307,10 @@ ipc_mqueue_peek_on_thread(
  */
 void
 ipc_mqueue_select_on_thread(
-	ipc_mqueue_t		port_mq,
-	ipc_mqueue_t		set_mq,
-	mach_msg_option_t	option,
-	mach_msg_size_t		max_size,
+	ipc_mqueue_t            port_mq,
+	ipc_mqueue_t            set_mq,
+	mach_msg_option_t       option,
+	mach_msg_size_t         max_size,
 	thread_t                thread)
 {
 	ipc_kmsg_t kmsg;
@@ -1285,8 +1345,9 @@ ipc_mqueue_select_on_thread(
 
 	ipc_kmsg_rmqueue(&port_mq->imq_messages, kmsg);
 #if MACH_FLIPC
-    if (MACH_NODE_VALID(kmsg->ikm_node) && FPORT_VALID(port_mq->imq_fport))
-        flipc_msg_ack(kmsg->ikm_node, port_mq, TRUE);
+	if (MACH_NODE_VALID(kmsg->ikm_node) && FPORT_VALID(port_mq->imq_fport)) {
+		flipc_msg_ack(kmsg->ikm_node, port_mq, TRUE);
+	}
 #endif
 	ipc_mqueue_release_msgcount(port_mq, set_mq);
 	thread->ith_seqno = port_mq->imq_seqno++;
@@ -1312,11 +1373,11 @@ ipc_mqueue_select_on_thread(
  */
 unsigned
 ipc_mqueue_peek_locked(ipc_mqueue_t mq,
-		       mach_port_seqno_t * seqnop,
-		       mach_msg_size_t * msg_sizep,
-		       mach_msg_id_t * msg_idp,
-		       mach_msg_max_trailer_t * msg_trailerp,
-		       ipc_kmsg_t *kmsgp)
+    mach_port_seqno_t * seqnop,
+    mach_msg_size_t * msg_sizep,
+    mach_msg_id_t * msg_idp,
+    mach_msg_max_trailer_t * msg_trailerp,
+    ipc_kmsg_t *kmsgp)
 {
 	ipc_kmsg_queue_t kmsgq;
 	ipc_kmsg_t kmsg;
@@ -1326,17 +1387,19 @@ ipc_mqueue_peek_locked(ipc_mqueue_t mq,
 	assert(!imq_is_set(mq));
 
 	seqno = 0;
-	if (seqnop != NULL)
+	if (seqnop != NULL) {
 		seqno = *seqnop;
+	}
 
 	if (seqno == 0) {
 		seqno = mq->imq_seqno;
 		msgoff = 0;
 	} else if (seqno >= mq->imq_seqno &&
-		   seqno < mq->imq_seqno + mq->imq_msgcount) {
+	    seqno < mq->imq_seqno + mq->imq_msgcount) {
 		msgoff = seqno - mq->imq_seqno;
-	} else
+	} else {
 		goto out;
+	}
 
 	/* look for the message that would match that seqno */
 	kmsgq = &mq->imq_messages;
@@ -1344,23 +1407,29 @@ ipc_mqueue_peek_locked(ipc_mqueue_t mq,
 	while (msgoff-- && kmsg != IKM_NULL) {
 		kmsg = ipc_kmsg_queue_next(kmsgq, kmsg);
 	}
-	if (kmsg == IKM_NULL)
+	if (kmsg == IKM_NULL) {
 		goto out;
+	}
 
 	/* found one - return the requested info */
-	if (seqnop != NULL)
+	if (seqnop != NULL) {
 		*seqnop = seqno;
-	if (msg_sizep != NULL)
+	}
+	if (msg_sizep != NULL) {
 		*msg_sizep = kmsg->ikm_header->msgh_size;
-	if (msg_idp != NULL)
+	}
+	if (msg_idp != NULL) {
 		*msg_idp = kmsg->ikm_header->msgh_id;
-	if (msg_trailerp != NULL)
+	}
+	if (msg_trailerp != NULL) {
 		memcpy(msg_trailerp,
-		       (mach_msg_max_trailer_t *)((vm_offset_t)kmsg->ikm_header +
-						  round_msg(kmsg->ikm_header->msgh_size)),
-		       sizeof(mach_msg_max_trailer_t));
-	if (kmsgp != NULL)
+		    (mach_msg_max_trailer_t *)((vm_offset_t)kmsg->ikm_header +
+		    mach_round_msg(kmsg->ikm_header->msgh_size)),
+		    sizeof(mach_msg_max_trailer_t));
+	}
+	if (kmsgp != NULL) {
 		*kmsgp = kmsg;
+	}
 
 	res = 1;
 
@@ -1384,18 +1453,18 @@ out:
  */
 unsigned
 ipc_mqueue_peek(ipc_mqueue_t mq,
-		mach_port_seqno_t * seqnop,
-		mach_msg_size_t * msg_sizep,
-		mach_msg_id_t * msg_idp,
-		mach_msg_max_trailer_t * msg_trailerp,
-		ipc_kmsg_t *kmsgp)
+    mach_port_seqno_t * seqnop,
+    mach_msg_size_t * msg_sizep,
+    mach_msg_id_t * msg_idp,
+    mach_msg_max_trailer_t * msg_trailerp,
+    ipc_kmsg_t *kmsgp)
 {
 	unsigned res;
 
 	imq_lock(mq);
 
 	res = ipc_mqueue_peek_locked(mq, seqnop, msg_sizep, msg_idp,
-				     msg_trailerp, kmsgp);
+	    msg_trailerp, kmsgp);
 
 	imq_unlock(mq);
 	return res;
@@ -1414,7 +1483,8 @@ ipc_mqueue_peek(ipc_mqueue_t mq,
  *			(and potentially invalid!)
  *
  */
-void ipc_mqueue_release_peek_ref(ipc_mqueue_t mq)
+void
+ipc_mqueue_release_peek_ref(ipc_mqueue_t mq)
 {
 	assert(!imq_is_set(mq));
 	assert(imq_held(mq));
@@ -1441,8 +1511,9 @@ void ipc_mqueue_release_peek_ref(ipc_mqueue_t mq)
  * queue is checked. If a message wasn't there before we entered here, no need
  * to find it (if we do, great).
  */
-static int mqueue_peek_iterator(void *ctx, struct waitq *waitq,
-				struct waitq_set *wqset)
+static int
+mqueue_peek_iterator(void *ctx, struct waitq *waitq,
+    struct waitq_set *wqset)
 {
 	ipc_mqueue_t port_mq = (ipc_mqueue_t)waitq;
 	ipc_kmsg_queue_t kmsgs = &port_mq->imq_messages;
@@ -1450,9 +1521,9 @@ static int mqueue_peek_iterator(void *ctx, struct waitq *waitq,
 	(void)ctx;
 	(void)wqset;
 
-	if (ipc_kmsg_queue_first(kmsgs) != IKM_NULL)
+	if (ipc_kmsg_queue_first(kmsgs) != IKM_NULL) {
 		return WQ_ITERATE_BREAK; /* break out of the prepost iteration */
-
+	}
 	return WQ_ITERATE_CONTINUE;
 }
 
@@ -1478,15 +1549,16 @@ ipc_mqueue_set_peek(ipc_mqueue_t mq)
 	 * as invalid. In that case, even though we don't have messages, we
 	 * have an end-of-life event to deliver.
 	 */
-	if (!imq_is_valid(mq))
+	if (!imq_is_valid(mq)) {
 		return 1;
+	}
 
 	ret = waitq_set_iterate_preposts(&mq->imq_set_queue, NULL,
-					 mqueue_peek_iterator);
+	    mqueue_peek_iterator);
 
 	imq_unlock(mq);
 
-	return (ret == WQ_ITERATE_BREAK);
+	return ret == WQ_ITERATE_BREAK;
 }
 
 /*
@@ -1542,14 +1614,15 @@ ipc_mqueue_set_gather_member_names(
 
 		/* only receive rights can be members of port sets */
 		if ((entry->ie_bits & MACH_PORT_TYPE_RECEIVE) != MACH_PORT_TYPE_NONE) {
-			__IGNORE_WCASTALIGN(ipc_port_t port = (ipc_port_t)entry->ie_object);
+			ipc_port_t port = ip_object_to_port(entry->ie_object);
 			ipc_mqueue_t mq = &port->ip_messages;
 
 			assert(IP_VALID(port));
 			if (ip_active(port) &&
 			    waitq_member(&mq->imq_wait_queue, wqset)) {
-				if (actual < maxnames)
+				if (actual < maxnames) {
 					names[actual] = mq->imq_receiver_name;
+				}
 				actual++;
 			}
 		}
@@ -1567,7 +1640,7 @@ out:
  *	Purpose:
  *		Destroy a (non-set) message queue.
  *		Set any blocked senders running.
- *	   	Destroy the kmsgs in the queue.
+ *	        Destroy the kmsgs in the queue.
  *	Conditions:
  *		mqueue locked
  *		Receivers were removed when the receive right was "changed"
@@ -1591,9 +1664,9 @@ ipc_mqueue_destroy_locked(ipc_mqueue_t mqueue)
 
 	if (send_turnstile != TURNSTILE_NULL) {
 		waitq_wakeup64_all(&send_turnstile->ts_waitq,
-				   IPC_MQUEUE_FULL,
-				   THREAD_RESTART,
-				   WAITQ_ALL_PRIORITIES);
+		    IPC_MQUEUE_FULL,
+		    THREAD_RESTART,
+		    WAITQ_ALL_PRIORITIES);
 	}
 
 	/*
@@ -1603,13 +1676,15 @@ ipc_mqueue_destroy_locked(ipc_mqueue_t mqueue)
 	kmqueue = &mqueue->imq_messages;
 	while ((kmsg = ipc_kmsg_dequeue(kmqueue)) != IKM_NULL) {
 #if MACH_FLIPC
-    if (MACH_NODE_VALID(kmsg->ikm_node) && FPORT_VALID(mqueue->imq_fport))
-        flipc_msg_ack(kmsg->ikm_node, mqueue, TRUE);
+		if (MACH_NODE_VALID(kmsg->ikm_node) && FPORT_VALID(mqueue->imq_fport)) {
+			flipc_msg_ack(kmsg->ikm_node, mqueue, TRUE);
+		}
 #endif
 		boolean_t first;
 		first = ipc_kmsg_delayed_destroy(kmsg);
-		if (first)
+		if (first) {
 			reap = first;
+		}
 	}
 
 	/*
@@ -1647,22 +1722,21 @@ ipc_mqueue_destroy_locked(ipc_mqueue_t mqueue)
 
 void
 ipc_mqueue_set_qlimit(
-	 ipc_mqueue_t			mqueue,
-	 mach_port_msgcount_t	qlimit)
+	ipc_mqueue_t                   mqueue,
+	mach_port_msgcount_t   qlimit)
 {
+	assert(qlimit <= MACH_PORT_QLIMIT_MAX);
 
-	 assert(qlimit <= MACH_PORT_QLIMIT_MAX);
+	/* wake up senders allowed by the new qlimit */
+	imq_lock(mqueue);
+	if (qlimit > mqueue->imq_qlimit) {
+		mach_port_msgcount_t i, wakeup;
+		struct turnstile *send_turnstile = port_send_turnstile(ip_from_mq(mqueue));
 
-	 /* wake up senders allowed by the new qlimit */
-	 imq_lock(mqueue);
-	 if (qlimit > mqueue->imq_qlimit) {
-		 mach_port_msgcount_t i, wakeup;
-		 struct turnstile *send_turnstile = port_send_turnstile(ip_from_mq(mqueue));
+		/* caution: wakeup, qlimit are unsigned */
+		wakeup = qlimit - mqueue->imq_qlimit;
 
-		 /* caution: wakeup, qlimit are unsigned */
-		 wakeup = qlimit - mqueue->imq_qlimit;
-
-		 for (i = 0; i < wakeup; i++) {
+		for (i = 0; i < wakeup; i++) {
 			/*
 			 * boost the priority of the awoken thread
 			 * (WAITQ_PROMOTE_PRIORITY) to ensure it uses
@@ -1672,14 +1746,14 @@ ipc_mqueue_set_qlimit(
 			 */
 			if (send_turnstile == TURNSTILE_NULL ||
 			    waitq_wakeup64_one(&send_turnstile->ts_waitq,
-					       IPC_MQUEUE_FULL,
-					       THREAD_AWAKENED,
-					       WAITQ_PROMOTE_PRIORITY) == KERN_NOT_WAITING) {
+			    IPC_MQUEUE_FULL,
+			    THREAD_AWAKENED,
+			    WAITQ_PROMOTE_PRIORITY) == KERN_NOT_WAITING) {
 				mqueue->imq_fullwaiters = FALSE;
 				break;
 			}
 			mqueue->imq_msgcount++;  /* give it to the awakened thread */
-		 }
+		}
 	}
 	mqueue->imq_qlimit = qlimit;
 	imq_unlock(mqueue);
@@ -1694,8 +1768,8 @@ ipc_mqueue_set_qlimit(
  */
 void
 ipc_mqueue_set_seqno(
-	ipc_mqueue_t		mqueue,
-	mach_port_seqno_t	seqno)
+	ipc_mqueue_t            mqueue,
+	mach_port_seqno_t       seqno)
 {
 	imq_lock(mqueue);
 	mqueue->imq_seqno = seqno;
@@ -1722,12 +1796,13 @@ ipc_mqueue_set_seqno(
 
 mach_msg_return_t
 ipc_mqueue_copyin(
-	ipc_space_t		space,
-	mach_port_name_t	name,
-	ipc_mqueue_t		*mqueuep,
-	ipc_object_t		*objectp)
+	ipc_space_t             space,
+	mach_port_name_t        name,
+	ipc_mqueue_t            *mqueuep,
+	ipc_object_t            *objectp)
 {
 	ipc_entry_t entry;
+	ipc_entry_bits_t bits;
 	ipc_object_t object;
 	ipc_mqueue_t mqueue;
 
@@ -1743,25 +1818,23 @@ ipc_mqueue_copyin(
 		return MACH_RCV_INVALID_NAME;
 	}
 
+	bits = entry->ie_bits;
 	object = entry->ie_object;
 
-	if (entry->ie_bits & MACH_PORT_TYPE_RECEIVE) {
-		ipc_port_t port;
+	if (bits & MACH_PORT_TYPE_RECEIVE) {
+		ipc_port_t port = ip_object_to_port(object);
 
-		__IGNORE_WCASTALIGN(port = (ipc_port_t) object);
 		assert(port != IP_NULL);
 
 		ip_lock(port);
-		assert(ip_active(port));
+		require_ip_active(port);
 		assert(port->ip_receiver_name == name);
 		assert(port->ip_receiver == space);
 		is_read_unlock(space);
 		mqueue = &port->ip_messages;
+	} else if (bits & MACH_PORT_TYPE_PORT_SET) {
+		ipc_pset_t pset = ips_object_to_pset(object);
 
-	} else if (entry->ie_bits & MACH_PORT_TYPE_PORT_SET) {
-		ipc_pset_t pset;
-
-		__IGNORE_WCASTALIGN(pset = (ipc_pset_t) object);
 		assert(pset != IPS_NULL);
 
 		ips_lock(pset);
@@ -1771,6 +1844,10 @@ ipc_mqueue_copyin(
 		mqueue = &pset->ips_messages;
 	} else {
 		is_read_unlock(space);
+		/* guard exception if we never held the receive right in this entry */
+		if ((bits & MACH_PORT_TYPE_EX_RECEIVE) == 0) {
+			mach_port_guard_exception(name, 0, 0, kGUARD_EXC_RCV_INVALID_NAME);
+		}
 		return MACH_RCV_INVALID_NAME;
 	}
 
@@ -1785,4 +1862,20 @@ ipc_mqueue_copyin(
 	*objectp = object;
 	*mqueuep = mqueue;
 	return MACH_MSG_SUCCESS;
+}
+
+void
+imq_lock(ipc_mqueue_t mq)
+{
+	ipc_object_t object = imq_to_object(mq);
+	ipc_object_validate(object);
+	waitq_lock(&(mq)->imq_wait_queue);
+}
+
+unsigned int
+imq_lock_try(ipc_mqueue_t mq)
+{
+	ipc_object_t object = imq_to_object(mq);
+	ipc_object_validate(object);
+	return waitq_lock_try(&(mq)->imq_wait_queue);
 }

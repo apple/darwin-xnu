@@ -20,29 +20,29 @@ OSDefineMetaClassAndStructors(testvmx, super);
 bool
 testvmx::start( IOService * provider )
 {
-    int ret;
-    
-    IOLog("%s\n", __PRETTY_FUNCTION__);
-    
-    if (!super::start(provider)) {
-        return false;
-    }
-    
-    IOLog("Attempting host_vmxon\n");
-    ret = host_vmxon(FALSE);
-    IOLog("host_vmxon: %d\n", ret);
-    
-    return true;
+	int ret;
+
+	IOLog("%s\n", __PRETTY_FUNCTION__);
+
+	if (!super::start(provider)) {
+		return false;
+	}
+
+	IOLog("Attempting host_vmxon\n");
+	ret = host_vmxon(FALSE);
+	IOLog("host_vmxon: %d\n", ret);
+
+	return true;
 }
 
 void
 testvmx::stop( IOService * provider )
 {
-    IOLog("%s\n", __PRETTY_FUNCTION__); 
-    
-    super::stop(provider);
-    
-    IOLog("Attempting host_vmxoff\n");
-    host_vmxoff();
-    IOLog("host_vmxoff called\n");
+	IOLog("%s\n", __PRETTY_FUNCTION__);
+
+	super::stop(provider);
+
+	IOLog("Attempting host_vmxoff\n");
+	host_vmxoff();
+	IOLog("host_vmxoff called\n");
 }

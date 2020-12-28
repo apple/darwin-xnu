@@ -26,12 +26,12 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#ifndef	_ARM_SMP_H_
-#define	_ARM_SMP_H_
+#ifndef _ARM_SMP_H_
+#define _ARM_SMP_H_
 
 #include <arm/proc_reg.h>
 
 #define __SMP__ __ARM_SMP__
 #define __AMP__ __ARM_AMP__
 
-#endif	/* _ARM_SMP_H_ */
+#endif  /* _ARM_SMP_H_ */

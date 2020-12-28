@@ -152,8 +152,7 @@
 #define PERF_MI_SYS_DATA_2 PERF_MI_CODE(3)
 
 /* error sub-codes for trace data */
-enum
-{
+enum{
 	ERR_TASK,
 	ERR_THREAD,
 	ERR_PID,
@@ -217,4 +216,3 @@ extern int kperf_debug_level;
 #define BUF_VERB2(EVENTID, A1, A2, A3, A4)              BUF_VERB_INT(EVENTID, A1, A2, 0, 0)
 #define BUF_VERB3(EVENTID, A1, A2, A3, A4)              BUF_VERB_INT(EVENTID, A1, A2, A3, 0)
 #define BUF_VERB4(EVENTID, A1, A2, A3, A4)              BUF_VERB_INT(EVENTID, A1, A2, A3, A4)
-

@@ -30,8 +30,6 @@
 #ifndef _SYS_DTRACE_IMPL_H
 #define	_SYS_DTRACE_IMPL_H
 
-/* #pragma ident	"@(#)dtrace_impl.h	1.23	07/02/16 SMI" */
-
 #ifdef	__cplusplus
 extern "C" {
 #endif
@@ -1187,6 +1185,13 @@ typedef struct dtrace_cred {
 	uint16_t		dcr_action;
 } dtrace_cred_t;
 
+typedef struct dtrace_format {
+	uint64_t dtf_refcount;
+	char dtf_str[];
+} dtrace_format_t;
+
+#define DTRACE_FORMAT_SIZE(fmt) (strlen(fmt->dtf_str) + 1 + sizeof(dtrace_format_t))
+
 /*
  * DTrace Consumer State
  *
@@ -1226,12 +1231,13 @@ struct dtrace_state {
 	char dts_speculates;			/* boolean: has speculations */
 	char dts_destructive;			/* boolean: has dest. actions */
 	int dts_nformats;			/* number of formats */
-	char **dts_formats;			/* format string array */
+	dtrace_format_t **dts_formats;		/* format string array */
 	dtrace_optval_t dts_options[DTRACEOPT_MAX]; /* options */
 	dtrace_cred_t dts_cred;			/* credentials */
 	size_t dts_nretained;			/* number of retained enabs */
 	uint64_t dts_arg_error_illval;
 	uint32_t dts_buf_over_limit;		/* number of bufs over dtb_limit */
+	uint64_t **dts_rstate;			/* per-CPU random state */
 };
 
 struct dtrace_provider {
@@ -1315,7 +1321,6 @@ typedef struct dtrace_errhash {
 
 #endif	/* DTRACE_ERRDEBUG */
 
-
 typedef struct dtrace_string dtrace_string_t;
 
 typedef struct dtrace_string {
@@ -1393,6 +1398,9 @@ extern void dtrace_flush_caches(void);
 
 extern void dtrace_copy(uintptr_t, uintptr_t, size_t);
 extern void dtrace_copystr(uintptr_t, uintptr_t, size_t, volatile uint16_t *);
+
+extern void* dtrace_ptrauth_strip(void*, uint64_t);
+extern int dtrace_is_valid_ptrauth_key(uint64_t);
 
 /*
  * DTrace state handling

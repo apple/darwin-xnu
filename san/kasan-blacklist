@@ -25,6 +25,9 @@ src:./san/kasan-x86_64.c
 src:./san/kasan-memintrinsics.c
 src:./san/kasan_dynamic_blacklist.c
 
+# Exclude other sanitizers
+src:./san/ksancov.c
+
 # Exclude dtrace function that does weird stack manipulations
 fun:fbt_perfCallback
 

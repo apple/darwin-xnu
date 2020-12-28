@@ -69,6 +69,7 @@
 		08B4808C1BF9474A00B4AAE0 /* corpse-sample.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 08B4808A1BF9473800B4AAE0 /* corpse-sample.plist.gz */; };
 		08B9297E1C1CCE8D003B1703 /* stackshot-sample-ths-thread-t in Resources */ = {isa = PBXBuildFile; fileRef = 08B9297C1C1CCE7E003B1703 /* stackshot-sample-ths-thread-t */; };
 		08B9297F1C1CCE8D003B1703 /* stackshot-sample-ths-thread-t.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 08B9297D1C1CCE7E003B1703 /* stackshot-sample-ths-thread-t.plist.gz */; };
+		08C3972F204E0A7C00BDDB3F /* xnu.libkdd.plist in CopyFiles */ = {isa = PBXBuildFile; fileRef = 08C3972E204E0A7500BDDB3F /* xnu.libkdd.plist */; };
 		08C9D83D1BFFF8E100DF6C05 /* exitreason-sample in Resources */ = {isa = PBXBuildFile; fileRef = 08C9D83B1BFFF8D500DF6C05 /* exitreason-sample */; };
 		08C9D83E1BFFF8E100DF6C05 /* exitreason-sample.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = 08C9D83C1BFFF8D500DF6C05 /* exitreason-sample.plist.gz */; };
 		08CF18FF1BF9B7B100D05813 /* stackshot-sample-tailspin in Resources */ = {isa = PBXBuildFile; fileRef = 08CF18FD1BF9B79E00D05813 /* stackshot-sample-tailspin */; };
@@ -112,6 +113,12 @@
 		C9DCEF011F01C3810000BD02 /* stackshot-sample-instrs-cycles in Resources */ = {isa = PBXBuildFile; fileRef = C9DCEF001F01C3790000BD02 /* stackshot-sample-instrs-cycles */; };
 		C9DCEF021F01C3810000BD02 /* stackshot-sample-instrs-cycles.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = C9DCEEFF1F01C3790000BD02 /* stackshot-sample-instrs-cycles.plist.gz */; };
 		C9DE39141ACB5A540020F4A3 /* kcdata_core.m in Sources */ = {isa = PBXBuildFile; fileRef = C9DE39131ACB5A540020F4A3 /* kcdata_core.m */; };
+		F702EC6422AE50DD00FDCF74 /* stackshot-sample-dispatch-queue-label in Resources */ = {isa = PBXBuildFile; fileRef = F702EC6322AE500E00FDCF74 /* stackshot-sample-dispatch-queue-label */; };
+		F702EC6522AE50DD00FDCF74 /* stackshot-sample-dispatch-queue-label.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = F702EC6222AE500E00FDCF74 /* stackshot-sample-dispatch-queue-label.plist.gz */; };
+		F7C20D3322A168620002AD06 /* stackshot-sample-asid-pagetable in Resources */ = {isa = PBXBuildFile; fileRef = F7C20D3122A168610002AD06 /* stackshot-sample-asid-pagetable */; };
+		F7C20D3422A168620002AD06 /* stackshot-sample-asid-pagetable.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = F7C20D3222A168610002AD06 /* stackshot-sample-asid-pagetable.plist.gz */; };
+		F7F2F28422A159F700542597 /* stackshot-sample-turnstileinfo in Resources */ = {isa = PBXBuildFile; fileRef = F7F2F28222A159F700542597 /* stackshot-sample-turnstileinfo */; };
+		F7F2F28522A159F700542597 /* stackshot-sample-turnstileinfo.plist.gz in Resources */ = {isa = PBXBuildFile; fileRef = F7F2F28322A159F700542597 /* stackshot-sample-turnstileinfo.plist.gz */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -145,6 +152,16 @@
 			dstPath = /usr/share/man/man1/;
 			dstSubfolderSpec = 0;
 			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+		08C3972D204E0A5300BDDB3F /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 8;
+			dstPath = /AppleInternal/CoreOS/BATS/unit_tests;
+			dstSubfolderSpec = 0;
+			files = (
+				08C3972F204E0A7C00BDDB3F /* xnu.libkdd.plist in CopyFiles */,
 			);
 			runOnlyForDeploymentPostprocessing = 1;
 		};
@@ -197,6 +214,7 @@
 		08B4808A1BF9473800B4AAE0 /* corpse-sample.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "corpse-sample.plist.gz"; path = "tests/corpse-sample.plist.gz"; sourceTree = SOURCE_ROOT; };
 		08B9297C1C1CCE7E003B1703 /* stackshot-sample-ths-thread-t */ = {isa = PBXFileReference; lastKnownFileType = file; name = "stackshot-sample-ths-thread-t"; path = "tests/stackshot-sample-ths-thread-t"; sourceTree = SOURCE_ROOT; };
 		08B9297D1C1CCE7E003B1703 /* stackshot-sample-ths-thread-t.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "stackshot-sample-ths-thread-t.plist.gz"; path = "tests/stackshot-sample-ths-thread-t.plist.gz"; sourceTree = SOURCE_ROOT; };
+		08C3972E204E0A7500BDDB3F /* xnu.libkdd.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = xnu.libkdd.plist; sourceTree = "<group>"; };
 		08C9D83B1BFFF8D500DF6C05 /* exitreason-sample */ = {isa = PBXFileReference; lastKnownFileType = file; name = "exitreason-sample"; path = "tests/exitreason-sample"; sourceTree = SOURCE_ROOT; };
 		08C9D83C1BFFF8D500DF6C05 /* exitreason-sample.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; name = "exitreason-sample.plist.gz"; path = "tests/exitreason-sample.plist.gz"; sourceTree = SOURCE_ROOT; };
 		08CF18FD1BF9B79E00D05813 /* stackshot-sample-tailspin */ = {isa = PBXFileReference; lastKnownFileType = file; name = "stackshot-sample-tailspin"; path = "tests/stackshot-sample-tailspin"; sourceTree = SOURCE_ROOT; };
@@ -241,6 +259,12 @@
 		C9DCEEFF1F01C3790000BD02 /* stackshot-sample-instrs-cycles.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; path = "stackshot-sample-instrs-cycles.plist.gz"; sourceTree = "<group>"; };
 		C9DCEF001F01C3790000BD02 /* stackshot-sample-instrs-cycles */ = {isa = PBXFileReference; lastKnownFileType = file; path = "stackshot-sample-instrs-cycles"; sourceTree = "<group>"; };
 		C9DE39131ACB5A540020F4A3 /* kcdata_core.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = kcdata_core.m; sourceTree = "<group>"; };
+		F702EC6222AE500E00FDCF74 /* stackshot-sample-dispatch-queue-label.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; path = "stackshot-sample-dispatch-queue-label.plist.gz"; sourceTree = "<group>"; };
+		F702EC6322AE500E00FDCF74 /* stackshot-sample-dispatch-queue-label */ = {isa = PBXFileReference; lastKnownFileType = file; path = "stackshot-sample-dispatch-queue-label"; sourceTree = "<group>"; };
+		F7C20D3122A168610002AD06 /* stackshot-sample-asid-pagetable */ = {isa = PBXFileReference; lastKnownFileType = file; path = "stackshot-sample-asid-pagetable"; sourceTree = "<group>"; };
+		F7C20D3222A168610002AD06 /* stackshot-sample-asid-pagetable.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; path = "stackshot-sample-asid-pagetable.plist.gz"; sourceTree = "<group>"; };
+		F7F2F28222A159F700542597 /* stackshot-sample-turnstileinfo */ = {isa = PBXFileReference; lastKnownFileType = file; path = "stackshot-sample-turnstileinfo"; sourceTree = "<group>"; };
+		F7F2F28322A159F700542597 /* stackshot-sample-turnstileinfo.plist.gz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; path = "stackshot-sample-turnstileinfo.plist.gz"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -283,6 +307,10 @@
 		08603F351BF69EDE007D3784 /* tests */ = {
 			isa = PBXGroup;
 			children = (
+				F7F2F28222A159F700542597 /* stackshot-sample-turnstileinfo */,
+				F7F2F28322A159F700542597 /* stackshot-sample-turnstileinfo.plist.gz */,
+				F702EC6322AE500E00FDCF74 /* stackshot-sample-dispatch-queue-label */,
+				F702EC6222AE500E00FDCF74 /* stackshot-sample-dispatch-queue-label.plist.gz */,
 				13739E8420DB18B600D8D9B9 /* stackshot-with-shared-cache-layout */,
 				13739E8320DB18B500D8D9B9 /* stackshot-with-shared-cache-layout.plist.gz */,
 				C95E4D19204F42C500FD2229 /* stackshot-sample-cpu-times */,
@@ -324,6 +352,8 @@
 				08603F3F1BF69F44007D3784 /* kdd_bridge.h */,
 				0843EE911BF6AFB700CD4150 /* stackshot-sample */,
 				08603F361BF69EDE007D3784 /* Tests.swift */,
+				F7C20D3122A168610002AD06 /* stackshot-sample-asid-pagetable */,
+				F7C20D3222A168610002AD06 /* stackshot-sample-asid-pagetable.plist.gz */,
 				0843EE931BF6BAB400CD4150 /* stackshot-sample.plist.gz */,
 				08B480741BF8294E00B4AAE0 /* stackshot-sample-new-arrays */,
 				08B480751BF8294E00B4AAE0 /* stackshot-sample-new-arrays.plist.gz */,
@@ -408,6 +438,7 @@
 		C91C93BE1ACB58B700119B60 = {
 			isa = PBXGroup;
 			children = (
+				08C3972E204E0A7500BDDB3F /* xnu.libkdd.plist */,
 				08DE68361BFFB71D00BC682F /* kdd */,
 				08DE68351BFFB70900BC682F /* libkdd */,
 				08F1501D1BFEA7AC00F2C89C /* libz.dylib */,
@@ -465,6 +496,7 @@
 				08603F301BF69EDE007D3784 /* Sources */,
 				08603F311BF69EDE007D3784 /* Frameworks */,
 				08603F321BF69EDE007D3784 /* Resources */,
+				08C3972D204E0A5300BDDB3F /* CopyFiles */,
 			);
 			buildRules = (
 			);
@@ -535,6 +567,7 @@
 		C91C93BF1ACB58B700119B60 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
+				DefaultBuildSystemTypeForWorkspace = Latest;
 				LastSwiftUpdateCheck = 0730;
 				LastUpgradeCheck = 0830;
 				ORGANIZATIONNAME = "Vishal Patel";
@@ -564,6 +597,7 @@
 			developmentRegion = English;
 			hasScannedForEncodings = 0;
 			knownRegions = (
+				English,
 				en,
 			);
 			mainGroup = C91C93BE1ACB58B700119B60;
@@ -585,6 +619,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F7F2F28422A159F700542597 /* stackshot-sample-turnstileinfo in Resources */,
 				13739E8620DB18B600D8D9B9 /* stackshot-with-shared-cache-layout in Resources */,
 				084422F82048BABB008A085B /* stackshot-sample-asid in Resources */,
 				084422F92048BABB008A085B /* stackshot-sample-asid.plist.gz in Resources */,
@@ -593,6 +628,7 @@
 				18C577C31F96DB5200C67EB3 /* stackshot-sample-thread-groups-flags in Resources */,
 				C9DCEF011F01C3810000BD02 /* stackshot-sample-instrs-cycles in Resources */,
 				C9DCEF021F01C3810000BD02 /* stackshot-sample-instrs-cycles.plist.gz in Resources */,
+				F7F2F28522A159F700542597 /* stackshot-sample-turnstileinfo.plist.gz in Resources */,
 				088C36E01EF323C300ABB2E0 /* stackshot-sample-thread-policy in Resources */,
 				088C36E11EF323C300ABB2E0 /* stackshot-sample-thread-policy.plist.gz in Resources */,
 				045F7F131D2ADE8000B4808B /* stackshot-with-waitinfo.plist.gz in Resources */,
@@ -605,6 +641,7 @@
 				13D6C5D01C4DDDB6005E617C /* corpse-twr-sample in Resources */,
 				C95E4D1B204F42C500FD2229 /* stackshot-sample-cpu-times in Resources */,
 				C9D7B5401D1B41D700F1019D /* xnupost_testconfig-sample in Resources */,
+				F7C20D3322A168620002AD06 /* stackshot-sample-asid-pagetable in Resources */,
 				081725D51C3F476500371A54 /* stackshot-sample-duration in Resources */,
 				08F2AC0B1FA136EB00271A11 /* stackshot-sample-delta-thread-policy.plist.gz in Resources */,
 				081725D61C3F476500371A54 /* stackshot-sample-duration.plist.gz in Resources */,
@@ -625,8 +662,10 @@
 				13DBA2681CAB1AD600227EB2 /* stackshot-sample-sharedcachev2.plist.gz in Resources */,
 				08CF19001BF9B7B100D05813 /* stackshot-sample-tailspin.plist.gz in Resources */,
 				13CC08441CB97F8D00EA6069 /* stackshot-fault-stats in Resources */,
+				F702EC6522AE50DD00FDCF74 /* stackshot-sample-dispatch-queue-label.plist.gz in Resources */,
 				13F3DA9C1C7C1BEE00ACFFCC /* corpse-twr-sample-v2 in Resources */,
 				13D6C5D31C4DDE0D005E617C /* test-twr-sample.plist.gz in Resources */,
+				F7C20D3422A168620002AD06 /* stackshot-sample-asid-pagetable.plist.gz in Resources */,
 				1862B0351E7A083F0005ADF4 /* stackshot-sample-thread-groups.plist.gz in Resources */,
 				1368F0851C87E06A00940FC6 /* exitreason-codesigning.plist.gz in Resources */,
 				08C9D83D1BFFF8E100DF6C05 /* exitreason-sample in Resources */,
@@ -647,6 +686,7 @@
 				08B4807A1BF8297500B4AAE0 /* stackshot-sample-old-arrays in Resources */,
 				08B4807B1BF8297500B4AAE0 /* stackshot-sample-old-arrays.plist.gz in Resources */,
 				0843EE941BF6BAC100CD4150 /* stackshot-sample.plist.gz in Resources */,
+				F702EC6422AE50DD00FDCF74 /* stackshot-sample-dispatch-queue-label in Resources */,
 				0843EE921BF6AFC600CD4150 /* stackshot-sample in Resources */,
 				08AD0BF11FBE370000CB41B2 /* stackshot-sample-stacktop.plist.gz in Resources */,
 				18E592991E9451A20018612A /* stackshot-sample-coalitions.plist.gz in Resources */,

@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -81,7 +81,7 @@
  *	Routine:	macx_backing_store_recovery
  *	Function:
  *		Syscall interface to set a tasks privilege
- *		level so that it is not subject to 
+ *		level so that it is not subject to
  *		macx_backing_store_suspend
  */
 int
@@ -94,7 +94,7 @@ macx_backing_store_recovery(
 /*
  *	Routine:	macx_backing_store_suspend
  *	Function:
- *		Syscall interface to stop new demand for 
+ *		Syscall interface to stop new demand for
  *		backing store when backing store is low
  */
 
@@ -112,11 +112,11 @@ extern boolean_t compressor_store_stop_compaction;
  *	Routine:	macx_backing_store_compaction
  *	Function:
  *		Turn compaction of swap space on or off.  This is
- *		used during shutdown/restart so	that the kernel 
- *		doesn't waste time compacting swap files that are 
- *		about to be deleted anyway.  Compaction	is always 
- *		on by default when the system comes up and is turned 
- *		off when a shutdown/restart is requested.  It is 
+ *		used during shutdown/restart so	that the kernel
+ *		doesn't waste time compacting swap files that are
+ *		about to be deleted anyway.  Compaction	is always
+ *		on by default when the system comes up and is turned
+ *		off when a shutdown/restart is requested.  It is
  *		re-enabled if the shutdown/restart is aborted for any reason.
  *
  *  This routine assumes macx_lock has been locked by macx_triggers ->
@@ -128,14 +128,14 @@ macx_backing_store_compaction(int flags)
 {
 	int error;
 
-	if ((error = suser(kauth_cred_get(), 0)))
+	if ((error = suser(kauth_cred_get(), 0))) {
 		return error;
+	}
 
 	if (flags & SWAP_COMPACT_DISABLE) {
 		compressor_store_stop_compaction = TRUE;
 
 		kprintf("compressor_store_stop_compaction = TRUE\n");
-
 	} else if (flags & SWAP_COMPACT_ENABLE) {
 		compressor_store_stop_compaction = FALSE;
 
@@ -155,10 +155,11 @@ int
 macx_triggers(
 	struct macx_triggers_args *args)
 {
-	int	flags = args->flags;
+	int     flags = args->flags;
 
-	if (flags & (SWAP_COMPACT_DISABLE | SWAP_COMPACT_ENABLE))
-		return (macx_backing_store_compaction(flags));
+	if (flags & (SWAP_COMPACT_DISABLE | SWAP_COMPACT_ENABLE)) {
+		return macx_backing_store_compaction(flags);
+	}
 
 	return ENOTSUP;
 }
@@ -195,20 +196,17 @@ extern boolean_t vm_swap_up;
 
 int
 macx_swapinfo(
-	memory_object_size_t	*total_p,
-	memory_object_size_t	*avail_p,
-	vm_size_t		*pagesize_p,
-	boolean_t		*encrypted_p)
+	memory_object_size_t    *total_p,
+	memory_object_size_t    *avail_p,
+	vm_size_t               *pagesize_p,
+	boolean_t               *encrypted_p)
 {
 	if (VM_CONFIG_SWAP_IS_PRESENT) {
-
 		*total_p = vm_swap_get_total_space();
 		*avail_p = vm_swap_get_free_space();
 		*pagesize_p = (vm_size_t)PAGE_SIZE_64;
 		*encrypted_p = TRUE;
-
 	} else {
-		
 		*total_p = 0;
 		*avail_p = 0;
 		*pagesize_p = 0;

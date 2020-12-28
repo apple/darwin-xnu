@@ -17,21 +17,21 @@ WARNFLAGS = -Wall
 LDFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION)
 
 config: $(OBJS)
-	@echo "$(ColorH)HOST_LD$(Color0)       $(ColorF)$@$(Color0)"
+	$(call makelog,$(ColorH)HOST_LD$(Color0)       $(ColorF)$@$(Color0))
 	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
-	@echo "$(ColorH)HOST_CODESIGN$(Color0) $(ColorF)$@$(Color0)"
+	$(call makelog,$(ColorH)HOST_CODESIGN$(Color0) $(ColorF)$@$(Color0))
 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
 
 %.o: %.c
-	@echo "$(ColorH)HOST_CC$(Color0)       $(ColorF)$@$(Color0)"
+	$(call makelog,$(ColorH)HOST_CC$(Color0)       $(ColorF)$@$(Color0))
 	$(_v)$(HOST_CC) $(WARNFLAGS) $(CFLAGS) -c -o $@ $<
 
 parser.c: parser.y
-	@echo "$(ColorH)HOST_BISON$(Color0)    $(ColorF)$@$(Color0)"
+	$(call makelog,$(ColorH)HOST_BISON$(Color0)    $(ColorF)$@$(Color0))
 	$(_v)$(HOST_BISON) -y -d -d -o $@ $<
 
 lexer.yy.c: lexer.l
-	@echo "$(ColorH)HOST_FLEX$(Color0)     $(ColorF)$@$(Color0)"
+	$(call makelog,$(ColorH)HOST_FLEX$(Color0)     $(ColorF)$@$(Color0))
 	$(_v)env M4=$(HOST_GM4) $(HOST_FLEX) --header-file=lexer.yy.h -o $@ $<
 
 main.o mkheaders.o mkioconf.o mkmakefile.o lexer.yy.c: parser.c

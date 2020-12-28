@@ -94,11 +94,11 @@
 #include <os/log.h>
 
 #ifndef ROUNDUP64
-#define	ROUNDUP64(x) P2ROUNDUP((x), sizeof (u_int64_t))
+#define ROUNDUP64(x) P2ROUNDUP((x), sizeof (u_int64_t))
 #endif
 
 #ifndef ADVANCE64
-#define	ADVANCE64(p, n) (void*)((char *)(p) + ROUNDUP64(n))
+#define ADVANCE64(p, n) (void*)((char *)(p) + ROUNDUP64(n))
 #endif
 
 static void inpcb_to_xinpcb_n(struct inpcb *, struct xinpcb_n *);
@@ -109,52 +109,57 @@ void shutdown_sockets_on_interface(struct ifnet *ifp);
 __private_extern__ void
 sotoxsocket_n(struct socket *so, struct xsocket_n *xso)
 {
-	xso->xso_len = sizeof (struct xsocket_n);
+	xso->xso_len = sizeof(struct xsocket_n);
 	xso->xso_kind = XSO_SOCKET;
 
-	if (so != NULL) {
-		xso->xso_so = (uint64_t)VM_KERNEL_ADDRPERM(so);
-		xso->so_type = so->so_type;
-		xso->so_options = so->so_options;
-		xso->so_linger = so->so_linger;
-		xso->so_state = so->so_state;
-		xso->so_pcb = (uint64_t)VM_KERNEL_ADDRPERM(so->so_pcb);
-		if (so->so_proto) {
-			xso->xso_protocol = SOCK_PROTO(so);
-			xso->xso_family = SOCK_DOM(so);
-		} else {
-			xso->xso_protocol = xso->xso_family = 0;
-		}
-		xso->so_qlen = so->so_qlen;
-		xso->so_incqlen = so->so_incqlen;
-		xso->so_qlimit = so->so_qlimit;
-		xso->so_timeo = so->so_timeo;
-		xso->so_error = so->so_error;
-		xso->so_pgid = so->so_pgid;
-		xso->so_oobmark = so->so_oobmark;
-		xso->so_uid = kauth_cred_getuid(so->so_cred);
-		xso->so_last_pid = so->last_pid;
-		xso->so_e_pid = so->e_pid;
+	if (so == NULL) {
+		return;
 	}
+
+	xso->xso_so = (uint64_t)VM_KERNEL_ADDRPERM(so);
+	xso->so_type = so->so_type;
+	xso->so_options = so->so_options;
+	xso->so_linger = so->so_linger;
+	xso->so_state = so->so_state;
+	xso->so_pcb = (uint64_t)VM_KERNEL_ADDRPERM(so->so_pcb);
+	if (so->so_proto) {
+		xso->xso_protocol = SOCK_PROTO(so);
+		xso->xso_family = SOCK_DOM(so);
+	} else {
+		xso->xso_protocol = xso->xso_family = 0;
+	}
+	xso->so_qlen = so->so_qlen;
+	xso->so_incqlen = so->so_incqlen;
+	xso->so_qlimit = so->so_qlimit;
+	xso->so_timeo = so->so_timeo;
+	xso->so_error = so->so_error;
+	xso->so_pgid = so->so_pgid;
+	xso->so_oobmark = so->so_oobmark;
+	xso->so_uid = kauth_cred_getuid(so->so_cred);
+	xso->so_last_pid = so->last_pid;
+	xso->so_e_pid = so->e_pid;
 }
 
 __private_extern__ void
 sbtoxsockbuf_n(struct sockbuf *sb, struct xsockbuf_n *xsb)
 {
-	xsb->xsb_len = sizeof (struct xsockbuf_n);
-	xsb->xsb_kind = (sb->sb_flags & SB_RECV) ? XSO_RCVBUF : XSO_SNDBUF;
+	xsb->xsb_len = sizeof(struct xsockbuf_n);
 
-	if (sb != NULL) {
-		xsb->sb_cc = sb->sb_cc;
-		xsb->sb_hiwat = sb->sb_hiwat;
-		xsb->sb_mbcnt = sb->sb_mbcnt;
-		xsb->sb_mbmax = sb->sb_mbmax;
-		xsb->sb_lowat = sb->sb_lowat;
-		xsb->sb_flags = sb->sb_flags;
-		xsb->sb_timeo = (short)(sb->sb_timeo.tv_sec * hz) +
-		    sb->sb_timeo.tv_usec / tick;
-		if (xsb->sb_timeo == 0 && sb->sb_timeo.tv_usec != 0)
-			xsb->sb_timeo = 1;
+	if (sb == NULL) {
+		return;
+	}
+
+	xsb->xsb_kind = (sb->sb_flags & SB_RECV) ? XSO_RCVBUF : XSO_SNDBUF;
+	xsb->sb_cc = sb->sb_cc;
+	xsb->sb_hiwat = sb->sb_hiwat;
+	xsb->sb_mbcnt = sb->sb_mbcnt;
+	xsb->sb_mbmax = sb->sb_mbmax;
+	xsb->sb_lowat = sb->sb_lowat;
+	xsb->sb_flags = sb->sb_flags;
+	xsb->sb_timeo = (short)(sb->sb_timeo.tv_sec * hz) +
+	    sb->sb_timeo.tv_usec / tick;
+	if (xsb->sb_timeo == 0 && sb->sb_timeo.tv_usec != 0) {
+		xsb->sb_timeo = 1;
 	}
 }
 
@@ -163,8 +168,12 @@ sbtoxsockstat_n(struct socket *so, struct xsockstat_n *xst)
 {
 	int i;
 
-	xst->xst_len = sizeof (struct xsockstat_n);
+	xst->xst_len = sizeof(struct xsockstat_n);
 	xst->xst_kind = XSO_STATS;
+
+	if (so == NULL) {
+		return;
+	}
 
 	for (i = 0; i < SO_TC_STATS_MAX; i++) {
 		xst->xst_tc_stats[i].rxpackets = so->so_tc_stats[i].rxpackets;
@@ -177,7 +186,7 @@ sbtoxsockstat_n(struct socket *so, struct xsockstat_n *xst)
 static void
 inpcb_to_xinpcb_n(struct inpcb *inp, struct xinpcb_n *xinp)
 {
-	xinp->xi_len = sizeof (struct xinpcb_n);
+	xinp->xi_len = sizeof(struct xinpcb_n);
 	xinp->xi_kind = XSO_INPCB;
 	xinp->xi_inpp = (uint64_t)VM_KERNEL_ADDRPERM(inp);
 	xinp->inp_fport = inp->inp_fport;
@@ -203,7 +212,7 @@ inpcb_to_xinpcb_n(struct inpcb *inp, struct xinpcb_n *xinp)
 __private_extern__ void
 tcpcb_to_xtcpcb_n(struct tcpcb *tp, struct xtcpcb_n *xt)
 {
-	xt->xt_len = sizeof (struct xtcpcb_n);
+	xt->xt_len = sizeof(struct xtcpcb_n);
 	xt->xt_kind = XSO_TCPCB;
 
 	xt->t_segq = (uint32_t)VM_KERNEL_ADDRPERM(tp->t_segq.lh_first);
@@ -269,17 +278,18 @@ get_pcblist_n(short proto, struct sysctl_req *req, struct inpcbinfo *pcbinfo)
 	inp_gen_t gencnt;
 	struct xinpgen xig;
 	void *buf = NULL;
-	size_t item_size = ROUNDUP64(sizeof (struct xinpcb_n)) +
-	    ROUNDUP64(sizeof (struct xsocket_n)) +
-	    2 * ROUNDUP64(sizeof (struct xsockbuf_n)) +
-	    ROUNDUP64(sizeof (struct xsockstat_n));
+	size_t item_size = ROUNDUP64(sizeof(struct xinpcb_n)) +
+	    ROUNDUP64(sizeof(struct xsocket_n)) +
+	    2 * ROUNDUP64(sizeof(struct xsockbuf_n)) +
+	    ROUNDUP64(sizeof(struct xsockstat_n));
 
-	if (proto == IPPROTO_TCP)
-		item_size += ROUNDUP64(sizeof (struct xtcpcb_n));
+	if (proto == IPPROTO_TCP) {
+		item_size += ROUNDUP64(sizeof(struct xtcpcb_n));
+	}
 
 	if (req->oldptr == USER_ADDR_NULL) {
 		n = pcbinfo->ipi_count;
-		req->oldidx = 2 * (sizeof (xig)) + (n + n/8 + 1) * item_size;
+		req->oldidx = 2 * (sizeof(xig)) + (n + n / 8 + 1) * item_size;
 		return 0;
 	}
 
@@ -299,12 +309,12 @@ get_pcblist_n(short proto, struct sysctl_req *req, struct inpcbinfo *pcbinfo)
 	gencnt = pcbinfo->ipi_gencnt;
 	n = pcbinfo->ipi_count;
 
-	bzero(&xig, sizeof (xig));
-	xig.xig_len = sizeof (xig);
+	bzero(&xig, sizeof(xig));
+	xig.xig_len = sizeof(xig);
 	xig.xig_count = n;
 	xig.xig_gen = gencnt;
 	xig.xig_sogen = so_gencnt;
-	error = SYSCTL_OUT(req, &xig, sizeof (xig));
+	error = SYSCTL_OUT(req, &xig, sizeof(xig));
 	if (error) {
 		goto done;
 	}
@@ -321,7 +331,7 @@ get_pcblist_n(short proto, struct sysctl_req *req, struct inpcbinfo *pcbinfo)
 		goto done;
 	}
 
-	inp_list = _MALLOC(n * sizeof (*inp_list), M_TEMP, M_WAITOK);
+	inp_list = _MALLOC(n * sizeof(*inp_list), M_TEMP, M_WAITOK);
 	if (inp_list == NULL) {
 		error = ENOMEM;
 		goto done;
@@ -334,10 +344,11 @@ get_pcblist_n(short proto, struct sysctl_req *req, struct inpcbinfo *pcbinfo)
 		n = get_tcp_inp_list(inp_list, n, gencnt);
 	} else {
 		for (inp = pcbinfo->ipi_listhead->lh_first, i = 0; inp && i < n;
-		     inp = inp->inp_list.le_next) {
+		    inp = inp->inp_list.le_next) {
 			if (inp->inp_gencnt <= gencnt &&
-			    inp->inp_state != INPCB_STATE_DEAD)
+			    inp->inp_state != INPCB_STATE_DEAD) {
 				inp_list[i++] = inp;
+			}
 		}
 		n = i;
 	}
@@ -350,13 +361,13 @@ get_pcblist_n(short proto, struct sysctl_req *req, struct inpcbinfo *pcbinfo)
 		    inp->inp_state != INPCB_STATE_DEAD) {
 			struct xinpcb_n *xi = (struct xinpcb_n *)buf;
 			struct xsocket_n *xso = (struct xsocket_n *)
-			    ADVANCE64(xi, sizeof (*xi));
+			    ADVANCE64(xi, sizeof(*xi));
 			struct xsockbuf_n *xsbrcv = (struct xsockbuf_n *)
-			    ADVANCE64(xso, sizeof (*xso));
+			    ADVANCE64(xso, sizeof(*xso));
 			struct xsockbuf_n *xsbsnd = (struct xsockbuf_n *)
-			    ADVANCE64(xsbrcv, sizeof (*xsbrcv));
+			    ADVANCE64(xsbrcv, sizeof(*xsbrcv));
 			struct xsockstat_n *xsostats = (struct xsockstat_n *)
-			    ADVANCE64(xsbsnd, sizeof (*xsbsnd));
+			    ADVANCE64(xsbsnd, sizeof(*xsbsnd));
 
 			bzero(buf, item_size);
 
@@ -369,15 +380,16 @@ get_pcblist_n(short proto, struct sysctl_req *req, struct inpcbinfo *pcbinfo)
 			sbtoxsockstat_n(inp->inp_socket, xsostats);
 			if (proto == IPPROTO_TCP) {
 				struct  xtcpcb_n *xt = (struct xtcpcb_n *)
-				    ADVANCE64(xsostats, sizeof (*xsostats));
+				    ADVANCE64(xsostats, sizeof(*xsostats));
 
 				/*
 				 * inp->inp_ppcb, can only be NULL on
 				 * an initialization race window.
 				 * No need to lock.
 				 */
-				if (inp->inp_ppcb == NULL)
+				if (inp->inp_ppcb == NULL) {
 					continue;
+				}
 
 				tcpcb_to_xtcpcb_n((struct tcpcb *)
 				    inp->inp_ppcb, xt);
@@ -397,21 +409,23 @@ get_pcblist_n(short proto, struct sysctl_req *req, struct inpcbinfo *pcbinfo)
 		 * while we were processing this request, and it
 		 * might be necessary to retry.
 		 */
-		bzero(&xig, sizeof (xig));
-		xig.xig_len = sizeof (xig);
+		bzero(&xig, sizeof(xig));
+		xig.xig_len = sizeof(xig);
 		xig.xig_gen = pcbinfo->ipi_gencnt;
 		xig.xig_sogen = so_gencnt;
 		xig.xig_count = pcbinfo->ipi_count;
-		error = SYSCTL_OUT(req, &xig, sizeof (xig));
+		error = SYSCTL_OUT(req, &xig, sizeof(xig));
 	}
 done:
 	lck_rw_done(pcbinfo->ipi_lock);
 
-	if (inp_list != NULL)
+	if (inp_list != NULL) {
 		FREE(inp_list, M_TEMP);
-	if (buf != NULL)
+	}
+	if (buf != NULL) {
 		FREE(buf, M_TEMP);
-	return (error);
+	}
+	return error;
 }
 
 __private_extern__ void
@@ -424,29 +438,39 @@ inpcb_get_ports_used(uint32_t ifindex, int protocol, uint32_t flags,
 	bool iswildcard, wildcardok, nowakeok;
 	bool recvanyifonly, extbgidleok;
 	bool activeonly;
+	bool anytcpstateok;
 
-	wildcardok = ((flags & INPCB_GET_PORTS_USED_WILDCARDOK) != 0);
-	nowakeok = ((flags & INPCB_GET_PORTS_USED_NOWAKEUPOK) != 0);
-	recvanyifonly = ((flags & INPCB_GET_PORTS_USED_RECVANYIFONLY) != 0);
-	extbgidleok = ((flags & INPCB_GET_PORTS_USED_EXTBGIDLEONLY) != 0);
-	activeonly = ((flags & INPCB_GET_PORTS_USED_ACTIVEONLY) != 0);
+	wildcardok = ((flags & IFNET_GET_LOCAL_PORTS_WILDCARDOK) != 0);
+	nowakeok = ((flags & IFNET_GET_LOCAL_PORTS_NOWAKEUPOK) != 0);
+	recvanyifonly = ((flags & IFNET_GET_LOCAL_PORTS_RECVANYIFONLY) != 0);
+	extbgidleok = ((flags & IFNET_GET_LOCAL_PORTS_EXTBGIDLEONLY) != 0);
+	activeonly = ((flags & IFNET_GET_LOCAL_PORTS_ACTIVEONLY) != 0);
+	anytcpstateok = ((flags & IFNET_GET_LOCAL_PORTS_ANYTCPSTATEOK) != 0);
 
 	lck_rw_lock_shared(pcbinfo->ipi_lock);
 	gencnt = pcbinfo->ipi_gencnt;
 
 	for (inp = LIST_FIRST(pcbinfo->ipi_listhead); inp;
 	    inp = LIST_NEXT(inp, inp_list)) {
-		uint16_t port;
-
 		if (inp->inp_gencnt > gencnt ||
 		    inp->inp_state == INPCB_STATE_DEAD ||
-		    inp->inp_wantcnt == WNT_STOPUSING)
+		    inp->inp_wantcnt == WNT_STOPUSING) {
 			continue;
+		}
 
-		if ((so = inp->inp_socket) == NULL ||
-		    (so->so_state & SS_DEFUNCT) ||
-		    (so->so_state & SS_ISDISCONNECTED))
+		if ((so = inp->inp_socket) == NULL || inp->inp_lport == 0) {
 			continue;
+		}
+
+		/*
+		 * ANYTCPSTATEOK means incoming packets cannot be filtered
+		 * reception so cast a wide net of possibilities
+		 */
+		if (!anytcpstateok &&
+		    ((so->so_state & SS_DEFUNCT) ||
+		    (so->so_state & SS_ISDISCONNECTED))) {
+			continue;
+		}
 
 		/*
 		 * If protocol is specified, filter out inpcbs that
@@ -483,37 +507,44 @@ inpcb_get_ports_used(uint32_t ifindex, int protocol, uint32_t flags,
 		}
 
 		if (SOCK_PROTO(inp->inp_socket) != IPPROTO_UDP &&
-		    SOCK_PROTO(inp->inp_socket) != IPPROTO_TCP)
+		    SOCK_PROTO(inp->inp_socket) != IPPROTO_TCP) {
 			continue;
+		}
 
 		iswildcard = (((inp->inp_vflag & INP_IPV4) &&
 		    inp->inp_laddr.s_addr == INADDR_ANY) ||
 		    ((inp->inp_vflag & INP_IPV6) &&
 		    IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_laddr)));
 
-		if (!wildcardok && iswildcard)
+		if (!wildcardok && iswildcard) {
 			continue;
+		}
 
 		if ((so->so_options & SO_NOWAKEFROMSLEEP) &&
-			!nowakeok)
+		    !nowakeok) {
 			continue;
+		}
 
 		if (!(inp->inp_flags & INP_RECV_ANYIF) &&
-			recvanyifonly)
+		    recvanyifonly) {
 			continue;
+		}
 
 		if (!(so->so_flags1 & SOF1_EXTEND_BK_IDLE_WANTED) &&
-			extbgidleok)
+		    extbgidleok) {
 			continue;
+		}
 
 		if (!iswildcard &&
 		    !(ifindex == 0 || inp->inp_last_outifp == NULL ||
-		    ifindex == inp->inp_last_outifp->if_index))
+		    ifindex == inp->inp_last_outifp->if_index)) {
 			continue;
+		}
 
 		if (SOCK_PROTO(inp->inp_socket) == IPPROTO_UDP &&
-		    so->so_state & SS_CANTRCVMORE)
+		    so->so_state & SS_CANTRCVMORE) {
 			continue;
+		}
 
 		if (SOCK_PROTO(inp->inp_socket) == IPPROTO_TCP) {
 			struct  tcpcb *tp = sototcpcb(inp->inp_socket);
@@ -522,48 +553,62 @@ inpcb_get_ports_used(uint32_t ifindex, int protocol, uint32_t flags,
 			 * Workaround race where inp_ppcb is NULL during
 			 * socket initialization
 			 */
-			if (tp == NULL)
+			if (tp == NULL) {
 				continue;
+			}
 
 			switch (tp->t_state) {
-				case TCPS_CLOSED:
-					continue;
-					/* NOT REACHED */
-				case TCPS_LISTEN:
-				case TCPS_SYN_SENT:
-				case TCPS_SYN_RECEIVED:
-				case TCPS_ESTABLISHED:
-				case TCPS_FIN_WAIT_1:
+			case TCPS_CLOSED:
+				if (anytcpstateok && inp->inp_fport != 0) {
 					/*
-					 * Note: FIN_WAIT_1 is an active state
-					 * because we need our FIN to be
-					 * acknowledged
+					 * A foreign port means we had a 4 tuple at
+					 * least a connection attempt so packets
+					 * may be received for the 4 tuple after the
+					 * connection is gone
 					 */
 					break;
-				case TCPS_CLOSE_WAIT:
-				case TCPS_CLOSING:
-				case TCPS_LAST_ACK:
-				case TCPS_FIN_WAIT_2:
-					/*
-					 * In the closing states, the connection
-					 * is not idle when there is outgoing
-					 * data having to be acknowledged
-					 */
-					if (activeonly && so->so_snd.sb_cc == 0)
-						continue;
-					break;
-				case TCPS_TIME_WAIT:
+				}
+				continue;
+			/* NOT REACHED */
+			case TCPS_LISTEN:
+			case TCPS_SYN_SENT:
+			case TCPS_SYN_RECEIVED:
+			case TCPS_ESTABLISHED:
+			case TCPS_FIN_WAIT_1:
+				/*
+				 * Note: FIN_WAIT_1 is an active state
+				 * because we need our FIN to be
+				 * acknowledged
+				 */
+				break;
+			case TCPS_CLOSE_WAIT:
+			case TCPS_CLOSING:
+			case TCPS_LAST_ACK:
+			case TCPS_FIN_WAIT_2:
+				/*
+				 * In the closing states, the connection
+				 * is active when there is outgoing
+				 * data having to be acknowledged
+				 */
+				if (!anytcpstateok &&
+				    (activeonly && so->so_snd.sb_cc == 0)) {
 					continue;
-					/* NOT REACHED */
+				}
+				break;
+			case TCPS_TIME_WAIT:
+				if (anytcpstateok) {
+					/*
+					 * Packets may still be received for the 4 tuple
+					 * after the connection is gone
+					 */
+					break;
+				}
+				continue;
+				/* NOT REACHED */
 			}
 		}
-		/*
-		 * Final safeguard to exclude unspecified local port
-		 */
-		port = ntohs(inp->inp_lport);
-		if (port == 0)
-			continue;
-		bitstr_set(bitfield, port);
+
+		bitstr_set(bitfield, ntohs(inp->inp_lport));
 
 		if_ports_used_add_inpcb(ifindex, inp);
 	}
@@ -617,7 +662,7 @@ inpcb_count_opportunistic(unsigned int ifindex, struct inpcbinfo *pcbinfo,
 
 	lck_rw_done(pcbinfo->ipi_lock);
 
-	return (opportunistic);
+	return opportunistic;
 }
 
 __private_extern__ uint32_t
@@ -630,41 +675,42 @@ inpcb_find_anypcb_byaddr(struct ifaddr *ifa, struct inpcbinfo *pcbinfo)
 
 	if ((ifa->ifa_addr->sa_family != AF_INET) &&
 	    (ifa->ifa_addr->sa_family != AF_INET6)) {
-		return (0);
+		return 0;
 	}
 
 	lck_rw_lock_shared(pcbinfo->ipi_lock);
 	for (inp = LIST_FIRST(pcbinfo->ipi_listhead);
 	    inp != NULL; inp = LIST_NEXT(inp, inp_list)) {
-
 		if (inp->inp_gencnt <= gencnt &&
 		    inp->inp_state != INPCB_STATE_DEAD &&
 		    inp->inp_socket != NULL) {
 			so = inp->inp_socket;
 			af = SOCK_DOM(so);
-			if (af != ifa->ifa_addr->sa_family)
+			if (af != ifa->ifa_addr->sa_family) {
 				continue;
-			if (inp->inp_last_outifp != ifa->ifa_ifp)
+			}
+			if (inp->inp_last_outifp != ifa->ifa_ifp) {
 				continue;
+			}
 
 			if (af == AF_INET) {
 				if (inp->inp_laddr.s_addr ==
 				    (satosin(ifa->ifa_addr))->sin_addr.s_addr) {
 					lck_rw_done(pcbinfo->ipi_lock);
-					return (1);
+					return 1;
 				}
 			}
 			if (af == AF_INET6) {
 				if (IN6_ARE_ADDR_EQUAL(IFA_IN6(ifa),
 				    &inp->in6p_laddr)) {
 					lck_rw_done(pcbinfo->ipi_lock);
-					return (1);
+					return 1;
 				}
 			}
 		}
 	}
 	lck_rw_done(pcbinfo->ipi_lock);
-	return (0);
+	return 0;
 }
 
 static int
@@ -674,13 +720,14 @@ shutdown_sockets_on_interface_proc_callout(proc_t p, void *arg)
 	int i;
 	struct ifnet *ifp = (struct ifnet *)arg;
 
-	if (ifp == NULL)
-		return (PROC_RETURNED);
+	if (ifp == NULL) {
+		return PROC_RETURNED;
+	}
 
 	proc_fdlock(p);
 	fdp = p->p_fd;
 	for (i = 0; i < fdp->fd_nfiles; i++) {
-		struct fileproc	*fp = fdp->fd_ofiles[i];
+		struct fileproc *fp = fdp->fd_ofiles[i];
 		struct fileglob *fg;
 		struct socket *so;
 		struct inpcb *inp;
@@ -692,17 +739,20 @@ shutdown_sockets_on_interface_proc_callout(proc_t p, void *arg)
 		}
 
 		fg = fp->f_fglob;
-		if (FILEGLOB_DTYPE(fg) != DTYPE_SOCKET)
+		if (FILEGLOB_DTYPE(fg) != DTYPE_SOCKET) {
 			continue;
+		}
 
 		so = (struct socket *)fp->f_fglob->fg_data;
-		if (SOCK_DOM(so) != PF_INET && SOCK_DOM(so) != PF_INET6)
+		if (SOCK_DOM(so) != PF_INET && SOCK_DOM(so) != PF_INET6) {
 			continue;
+		}
 
 		inp = (struct inpcb *)so->so_pcb;
 
-		if (in_pcb_checkstate(inp, WNT_ACQUIRE, 0) == WNT_STOPUSING)
+		if (in_pcb_checkstate(inp, WNT_ACQUIRE, 0) == WNT_STOPUSING) {
 			continue;
+		}
 
 		socket_lock(so, 1);
 
@@ -740,13 +790,13 @@ shutdown_sockets_on_interface_proc_callout(proc_t p, void *arg)
 	}
 	proc_fdunlock(p);
 
-	return (PROC_RETURNED);
+	return PROC_RETURNED;
 }
 
 void
 shutdown_sockets_on_interface(struct ifnet *ifp)
 {
 	proc_iterate(PROC_ALLPROCLIST,
-		shutdown_sockets_on_interface_proc_callout,
-		ifp, NULL, NULL);
+	    shutdown_sockets_on_interface_proc_callout,
+	    ifp, NULL, NULL);
 }

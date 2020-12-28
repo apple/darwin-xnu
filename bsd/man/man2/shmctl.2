@@ -60,7 +60,7 @@ This structure is defined as follows in
 .Bd -literal
 struct shmid_ds {
     struct ipc_perm  shm_perm;     /* operation permissions */
-    int              shm_segsz;    /* size of segment in bytes */
+    size_t           shm_segsz;    /* size of segment in bytes */
     pid_t            shm_lpid;     /* pid of last shm op */
     pid_t            shm_cpid;     /* pid of creator */
     short            shm_nattch;   /* # of current attaches */

@@ -175,6 +175,15 @@ type thread_act_consume_ref_t = mach_port_move_send_t
 #endif	/* KERNEL_SERVER */
 		;
 
+type suid_cred_path_t = c_string[*:1024];
+type suid_cred_uid_t = uint32_t;
+type suid_cred_t = mach_port_t
+#if	KERNEL_SERVER
+		outtran: mach_port_t convert_suid_cred_to_port(suid_cred_t)
+#endif	/* KERNEL_SERVER */
+		;
+
+
 		/* thread_state_t: This inline array can hold
 		 * a machine-dependent amount of data, defined in
 		 * mach/machine/???? (currently THREAD_STATE_MAX,
@@ -218,6 +227,12 @@ type ipc_space_inspect_t = mach_port_t
 #endif	/* KERNEL_SERVER */
 		;
 
+type arcade_register_t = mach_port_t
+#if	KERNEL_SERVER
+		intran: arcade_register_t convert_port_to_arcade_register(mach_port_t)
+#endif	/* KERNEL_SERVER */
+		;
+
 type vm_prot_t = int;
 type vm_inherit_t = int;
 type vm_purgable_t = int;
@@ -258,11 +273,12 @@ type thread_policy_t		= array[*:16] of integer_t;
 		 * task_basic_info_64_2_t
 		 * mach_task_basic_info_t (12 ints)
 		 * task_power_info_t (18 ints)
+		 * task_vm_info_t (87 ints)
 		 * If other task_info flavors are added, this
 		 * definition may need to be changed. (See
 		 * mach/task_info.h and mach/policy.h) */
 type task_flavor_t		= int;
-type task_info_t		= array[*:52] of integer_t;
+type task_info_t		= array[*:87] of integer_t;
 
 type task_purgable_info_t	= struct[68] of integer_t;
 
@@ -271,6 +287,8 @@ type task_policy_t		= array[*:16] of integer_t;
 
 type task_inspect_flavor_t = natural_t;
 type task_inspect_info_t = array[*:4] of integer_t;
+
+type task_exc_guard_behavior_t = uint32_t;
 
 type mem_entry_name_port_t = mach_port_t
 #if     KERNEL_SERVER
@@ -372,18 +390,27 @@ type processor_t = mach_port_t
 #endif	/* KERNEL_SERVER */
 		;
 
-type processor_array_t 	= ^array[] of processor_t;
+type processor_array_t = ^array[] of processor_t;
 
-		/* processor_info_t: variable-sized inline array that can
+		/*
+		 * processor_info_t: variable-sized inline array that can
 		 * contain:
-		 * processor_basic_info_t:   (5 ints)
-		 * processor_cpu_load_info_t:(4 ints)
-		 * processor_machine_info_t :(12 ints)
+		 *
+		 * - processor_basic_info_t:    (5 ints)
+		 * - processor_cpu_load_info_t: (4 ints)
+		 * - processor_machine_info_t:  (12 ints)
+		 * - processor_cpu_stat_t:      (10 ints)
+		 * - processor_cpu_stat64_t:    (20 ints)
+		 *
 		 * If other processor_info flavors are added, this definition
-		 * may need to be changed. (See mach/processor_info.h) */
-type processor_flavor_t		= int;
-type processor_info_t		= array[*:12] of integer_t;
-type processor_info_array_t	= ^array[] of integer_t;
+		 * may need to be changed.
+		 *
+		 * See mach/processor_info.h and mach/arm/processor_info.h.
+		 */
+
+type processor_flavor_t     = int;
+type processor_info_t       = array[*:20] of integer_t;
+type processor_info_array_t = ^array[] of integer_t;
 
 type processor_set_t = mach_port_t
 #if	KERNEL_SERVER
@@ -540,6 +567,8 @@ type task_suspension_token_t = mach_port_move_send_once_t
 #endif	/* KERNEL_SERVER */
 		;
 
+type vfs_path_t = c_string[4096];
+type nspace_path_t = c_string[1024];	/* 1024 == PATH_MAX */
 
 /* public voucher types */
 
@@ -615,10 +644,14 @@ simport <kern/sync_lock.h>;	/* for lock-set conversions */
 simport <kern/sync_sema.h>;	/* for semaphore conversions */
 simport <vm/memory_object.h>;	/* for memory object type conversions */
 simport <vm/vm_map.h>;		/* for vm_map conversions */
+#if CONFIG_ARCADE
+simport <kern/arcade.h>;    /* for arcade_register conversions */
+#endif
 #endif	/* MACH_KERNEL_PRIVATE */
 
 simport <kern/ipc_mig.h>;	/* pick up kernel-specific MIG things */
 
+simport <kern/suid_cred.h>;
 #endif /* KERNEL_SERVER */
 
 import <mach/mig.h>;

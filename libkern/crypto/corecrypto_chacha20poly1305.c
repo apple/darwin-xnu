@@ -30,57 +30,68 @@
 #include <libkern/crypto/crypto_internal.h>
 #include <libkern/crypto/chacha20poly1305.h>
 
-static ccchacha20poly1305_fns_t fns(void)
+static ccchacha20poly1305_fns_t
+fns(void)
 {
-    return g_crypto_funcs->ccchacha20poly1305_fns;
+	return g_crypto_funcs->ccchacha20poly1305_fns;
 }
 
-static const struct ccchacha20poly1305_info *info(void)
+static const struct ccchacha20poly1305_info *
+info(void)
 {
-    return fns()->info();
+	return fns()->info();
 }
 
-int	chacha20poly1305_init(chacha20poly1305_ctx *ctx, const uint8_t *key)
+int
+chacha20poly1305_init(chacha20poly1305_ctx *ctx, const uint8_t *key)
 {
-    return fns()->init(info(), ctx, key);
+	return fns()->init(info(), ctx, key);
 }
 
-int chacha20poly1305_reset(chacha20poly1305_ctx *ctx)
+int
+chacha20poly1305_reset(chacha20poly1305_ctx *ctx)
 {
-    return fns()->reset(info(), ctx);
+	return fns()->reset(info(), ctx);
 }
 
-int chacha20poly1305_setnonce(chacha20poly1305_ctx *ctx, const uint8_t *nonce)
+int
+chacha20poly1305_setnonce(chacha20poly1305_ctx *ctx, const uint8_t *nonce)
 {
-    return fns()->setnonce(info(), ctx, nonce);
+	return fns()->setnonce(info(), ctx, nonce);
 }
 
-int chacha20poly1305_incnonce(chacha20poly1305_ctx *ctx, uint8_t *nonce)
+int
+chacha20poly1305_incnonce(chacha20poly1305_ctx *ctx, uint8_t *nonce)
 {
-    return fns()->incnonce(info(), ctx, nonce);
+	return fns()->incnonce(info(), ctx, nonce);
 }
 
-int	chacha20poly1305_aad(chacha20poly1305_ctx *ctx, size_t nbytes, const void *aad)
+int
+chacha20poly1305_aad(chacha20poly1305_ctx *ctx, size_t nbytes, const void *aad)
 {
-    return fns()->aad(info(), ctx, nbytes, aad);
+	return fns()->aad(info(), ctx, nbytes, aad);
 }
 
-int	chacha20poly1305_encrypt(chacha20poly1305_ctx *ctx, size_t nbytes, const void *ptext, void *ctext)
+int
+chacha20poly1305_encrypt(chacha20poly1305_ctx *ctx, size_t nbytes, const void *ptext, void *ctext)
 {
-    return fns()->encrypt(info(), ctx, nbytes, ptext, ctext);
+	return fns()->encrypt(info(), ctx, nbytes, ptext, ctext);
 }
 
-int	chacha20poly1305_finalize(chacha20poly1305_ctx *ctx, uint8_t *tag)
+int
+chacha20poly1305_finalize(chacha20poly1305_ctx *ctx, uint8_t *tag)
 {
-    return fns()->finalize(info(), ctx, tag);
+	return fns()->finalize(info(), ctx, tag);
 }
 
-int	chacha20poly1305_decrypt(chacha20poly1305_ctx *ctx, size_t nbytes, const void *ctext, void *ptext)
+int
+chacha20poly1305_decrypt(chacha20poly1305_ctx *ctx, size_t nbytes, const void *ctext, void *ptext)
 {
-    return fns()->decrypt(info(), ctx, nbytes, ctext, ptext);
+	return fns()->decrypt(info(), ctx, nbytes, ctext, ptext);
 }
 
-int	chacha20poly1305_verify(chacha20poly1305_ctx *ctx, const uint8_t *tag)
+int
+chacha20poly1305_verify(chacha20poly1305_ctx *ctx, const uint8_t *tag)
 {
-    return fns()->verify(info(), ctx, tag);
+	return fns()->verify(info(), ctx, tag);
 }

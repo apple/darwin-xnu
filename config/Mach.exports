@@ -56,8 +56,10 @@ _thread_call_enter1_delayed
 _thread_call_enter_delayed
 _thread_call_free
 _thread_deallocate
+_thread_has_thread_name
 _thread_policy_set
 _thread_reference
+_thread_set_thread_name
 _thread_terminate
 _thread_tid
 _thread_wakeup_prim

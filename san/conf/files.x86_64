@@ -1,5 +1,2 @@
-# options
-
-# KASAN
-san/kasan-x86_64.c standard
-san/kasan-test-x86_64.s standard
+san/kasan-x86_64.c          optional config_kasan
+san/kasan-test-x86_64.s     optional config_kasan

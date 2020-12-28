@@ -2,7 +2,7 @@
  * Copyright (c) 2013 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -38,10 +38,10 @@
  */
 
 /* Flags for use with sfi_process_set_flags() */
-#define SFI_PROCESS_SET_MANAGED		0x00000001
-#define SFI_PROCESS_SET_UNMANAGED	0x00000002
+#define SFI_PROCESS_SET_MANAGED         0x00000001
+#define SFI_PROCESS_SET_UNMANAGED       0x00000002
 
-#define SFI_PROCESS_SET_MANAGED_MASK	0x00000003
+#define SFI_PROCESS_SET_MANAGED_MASK    0x00000003
 
 #ifndef KERNEL
 /*
@@ -72,7 +72,7 @@ int system_get_sfi_window(uint64_t *sfi_window_usec);
  * used is implementation dependent and may be
  * longer. sfi_get_class_offtime() can be used to determine the actual
  * value.
- * 
+ *
  * A value of 0 for offtime_usec can be used to disable "Selective
  * Forced Idle" for all the threads placed in class_id.
  *
@@ -98,17 +98,17 @@ int sfi_process_get_flags(pid_t pid, uint32_t *flags);
 #if PRIVATE
 
 /* This is the private system call interface between Libsyscall and xnu */
-#define SFI_CTL_OPERATION_SFI_SET_WINDOW	0x00000001
-#define SFI_CTL_OPERATION_SFI_GET_WINDOW	0x00000002
-#define SFI_CTL_OPERATION_SET_CLASS_OFFTIME	0x00000003
-#define SFI_CTL_OPERATION_GET_CLASS_OFFTIME	0x00000004
+#define SFI_CTL_OPERATION_SFI_SET_WINDOW        0x00000001
+#define SFI_CTL_OPERATION_SFI_GET_WINDOW        0x00000002
+#define SFI_CTL_OPERATION_SET_CLASS_OFFTIME     0x00000003
+#define SFI_CTL_OPERATION_GET_CLASS_OFFTIME     0x00000004
 
-#define SFI_PIDCTL_OPERATION_PID_SET_FLAGS	0x00000001
-#define SFI_PIDCTL_OPERATION_PID_GET_FLAGS	0x00000002
+#define SFI_PIDCTL_OPERATION_PID_SET_FLAGS      0x00000001
+#define SFI_PIDCTL_OPERATION_PID_GET_FLAGS      0x00000002
 
 int __sfi_ctl(uint32_t operation, uint32_t sfi_class, uint64_t time, uint64_t *out_time);
 int __sfi_pidctl(uint32_t operation, pid_t pid, uint32_t sfi_flags, uint32_t *out_sfi_flags);
 
 #endif /* PRIVATE */
 
-#endif	/* _SYS_SFI_H_ */
+#endif  /* _SYS_SFI_H_ */

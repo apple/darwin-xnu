@@ -6,9 +6,9 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-INSTINC_SUBDIRS = IOKit
+INSTINC_SUBDIRS = IOKit DriverKit System IOKitUser
 
-EXPINC_SUBDIRS = IOKit
+EXPINC_SUBDIRS = IOKit DriverKit
 
 COMP_SUBDIRS = conf
 

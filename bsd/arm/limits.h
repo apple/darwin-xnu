@@ -42,11 +42,11 @@
 #include <sys/cdefs.h>
 #include <arm/_limits.h>
 
-#define	CHAR_BIT	8		/* number of bits in a char */
-#define	MB_LEN_MAX	6		/* Allow 31 bit UTF2 */
+#define CHAR_BIT        8               /* number of bits in a char */
+#define MB_LEN_MAX      6               /* Allow 31 bit UTF2 */
 
 #if !defined(_ANSI_SOURCE) && (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE))
-#define	CLK_TCK		__DARWIN_CLK_TCK	/* ticks per second */
+#define CLK_TCK         __DARWIN_CLK_TCK        /* ticks per second */
 #endif /* !_ANSI_SOURCE && (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 /*
@@ -59,50 +59,50 @@
  * These numbers work for pcc as well.  The UINT_MAX and ULONG_MAX values
  * are written as hex so that GCC will be quiet about large integer constants.
  */
-#define	SCHAR_MAX	127		/* min value for a signed char */
-#define	SCHAR_MIN	(-128)		/* max value for a signed char */
+#define SCHAR_MAX       127             /* min value for a signed char */
+#define SCHAR_MIN       (-128)          /* max value for a signed char */
 
-#define	UCHAR_MAX	255		/* max value for an unsigned char */
-#define	CHAR_MAX	127		/* max value for a char */
-#define	CHAR_MIN	(-128)		/* min value for a char */
+#define UCHAR_MAX       255             /* max value for an unsigned char */
+#define CHAR_MAX        127             /* max value for a char */
+#define CHAR_MIN        (-128)          /* min value for a char */
 
-#define	USHRT_MAX	65535		/* max value for an unsigned short */
-#define	SHRT_MAX	32767		/* max value for a short */
-#define	SHRT_MIN	(-32768)	/* min value for a short */
+#define USHRT_MAX       65535           /* max value for an unsigned short */
+#define SHRT_MAX        32767           /* max value for a short */
+#define SHRT_MIN        (-32768)        /* min value for a short */
 
-#define	UINT_MAX	0xffffffff	/* max value for an unsigned int */
-#define	INT_MAX		2147483647	/* max value for an int */
-#define	INT_MIN		(-2147483647-1)	/* min value for an int */
+#define UINT_MAX        0xffffffff      /* max value for an unsigned int */
+#define INT_MAX         2147483647      /* max value for an int */
+#define INT_MIN         (-2147483647-1) /* min value for an int */
 
 #ifdef __LP64__
-#define	ULONG_MAX	0xffffffffffffffffUL	/* max unsigned long */
-#define	LONG_MAX	0x7fffffffffffffffL	/* max signed long */
-#define	LONG_MIN	(-0x7fffffffffffffffL-1) /* min signed long */
+#define ULONG_MAX       0xffffffffffffffffUL    /* max unsigned long */
+#define LONG_MAX        0x7fffffffffffffffL     /* max signed long */
+#define LONG_MIN        (-0x7fffffffffffffffL-1) /* min signed long */
 #else /* !__LP64__ */
-#define	ULONG_MAX	0xffffffffUL	/* max unsigned long */
-#define	LONG_MAX	2147483647L	/* max signed long */
-#define	LONG_MIN	(-2147483647L-1) /* min signed long */
+#define ULONG_MAX       0xffffffffUL    /* max unsigned long */
+#define LONG_MAX        2147483647L     /* max signed long */
+#define LONG_MIN        (-2147483647L-1) /* min signed long */
 #endif /* __LP64__ */
 
-#define	ULLONG_MAX	0xffffffffffffffffULL	/* max unsigned long long */
-#define	LLONG_MAX	0x7fffffffffffffffLL	/* max signed long long */
-#define	LLONG_MIN	(-0x7fffffffffffffffLL-1) /* min signed long long */
+#define ULLONG_MAX      0xffffffffffffffffULL   /* max unsigned long long */
+#define LLONG_MAX       0x7fffffffffffffffLL    /* max signed long long */
+#define LLONG_MIN       (-0x7fffffffffffffffLL-1) /* min signed long long */
 
 #if !defined(_ANSI_SOURCE)
 #ifdef __LP64__
-#define LONG_BIT	64
+#define LONG_BIT        64
 #else /* !__LP64__ */
-#define LONG_BIT	32
+#define LONG_BIT        32
 #endif /* __LP64__ */
-#define	SSIZE_MAX	LONG_MAX	/* max value for a ssize_t */
-#define WORD_BIT	32
+#define SSIZE_MAX       LONG_MAX        /* max value for a ssize_t */
+#define WORD_BIT        32
 
 #if (!defined(_POSIX_C_SOURCE) && !defined(_XOPEN_SOURCE)) || defined(_DARWIN_C_SOURCE)
-#define	SIZE_T_MAX	ULONG_MAX	/* max value for a size_t */
+#define SIZE_T_MAX      ULONG_MAX       /* max value for a size_t */
 
-#define	UQUAD_MAX	ULLONG_MAX
-#define	QUAD_MAX	LLONG_MAX
-#define	QUAD_MIN	LLONG_MIN
+#define UQUAD_MAX       ULLONG_MAX
+#define QUAD_MAX        LLONG_MAX
+#define QUAD_MIN        LLONG_MIN
 
 #endif /* (!_POSIX_C_SOURCE && !_XOPEN_SOURCE) || _DARWIN_C_SOURCE */
 #endif /* !_ANSI_SOURCE */

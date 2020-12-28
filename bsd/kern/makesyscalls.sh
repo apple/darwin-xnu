@@ -409,6 +409,9 @@ s/\$//g
 		current_field++
 		funcname = $current_field
 		argalias = funcname "_args"
+		if (substr(argalias, 1, 4) == "sys_") {
+			argalias = substr(argalias, 5)
+		}
 		current_field++ # bump past function name
 
 		if ($current_field != "(")
@@ -681,6 +684,9 @@ s/\$//g
 		# output to syscalls.c
 		if (add_sysnames_entry == 1) {
 			tempname = funcname
+			if (substr(tempname, 1, 4) == "sys_") {
+				tempname = substr(tempname, 5)
+			}
 			if (funcname == "nosys" || funcname == "enosys") {
 				if (syscall_num == 0)
 					tempname = "syscall"
@@ -701,6 +707,9 @@ s/\$//g
 		# output to syscalls.h
 		if (add_sysheader_entry == 1) {
 			tempname = funcname
+			if (substr(tempname, 1, 4) == "sys_") {
+				tempname = substr(tempname, 5)
+			}
 			if (syscall_num == 0) {
 				tempname = "syscall"
 			}
@@ -762,7 +771,7 @@ s/\$//g
 		printf("\n#endif /* !%s */\n", sysproto_h) > sysprotoend
 
 		printf("};\n") > sysent
-		printf("unsigned int	nsysent = sizeof(sysent) / sizeof(sysent[0]);\n") > sysent
+		printf("const unsigned int	nsysent = sizeof(sysent) / sizeof(sysent[0]);\n") > sysent
 
 		printf("};\n") > syscallnamestempfile
 		printf("#define\t%sMAXSYSCALL\t%d\n", syscallprefix, syscall_num) \

@@ -21,7 +21,7 @@
 static const char corefile_ctl[]     = "kern.corefile";
 static const char coredump_ctl[]     = "kern.coredump";
 /* The directory where coredumps will be */
-static const char dump_dir[]	     = "/cores";
+static const char dump_dir[]         = "/cores";
 /* The default coredump location if the kern.coredump ctl is invalid */
 static const char default_dump_fmt[] = "/cores/core.%d";
 /* The coredump location when we set kern.coredump ctl to something valid */
@@ -48,14 +48,16 @@ static const struct timespec timeout = {
 #if TARGET_OS_OSX
 static int fork_and_wait_for_segfault(void);
 
-static void sigalrm_handler(int sig)
+static void
+sigalrm_handler(int sig)
 {
 	(void)sig;
 	stop_looking = 1;
 	return;
 }
 
-static void list_coredump_files()
+static void
+list_coredump_files()
 {
 	int ret;
 	char buf[BUFFLEN] = { 0 };
@@ -67,7 +69,9 @@ static void list_coredump_files()
 	return;
 }
 
-static int fork_and_wait_for_segfault() {
+static int
+fork_and_wait_for_segfault()
+{
 	int pid, ret;
 	pid = fork();
 	if (pid == 0) {
@@ -82,7 +86,8 @@ static int fork_and_wait_for_segfault() {
 	return pid;
 }
 
-static int setup_coredump_kevent(struct kevent *kev, int dir)
+static int
+setup_coredump_kevent(struct kevent *kev, int dir)
 {
 	int ret;
 	int kqfd;
@@ -96,7 +101,8 @@ static int setup_coredump_kevent(struct kevent *kev, int dir)
 	return kqfd;
 }
 
-static void look_for_coredump(const char *format, int pid, int kqfd, struct kevent *kev)
+static void
+look_for_coredump(const char *format, int pid, int kqfd, struct kevent *kev)
 {
 	int ret = 0;
 	int i = 0;
@@ -115,10 +121,11 @@ static void look_for_coredump(const char *format, int pid, int kqfd, struct keve
 		snprintf(buf, BUFFLEN, format, pid);
 		ret = remove(buf);
 
-		if (ret != -1)
+		if (ret != -1) {
 			break;
+		}
 
-		T_LOG("Couldn't find coredump file (try #%d).", i+1);
+		T_LOG("Couldn't find coredump file (try #%d).", i + 1);
 		i++;
 	}
 	alarm(0);
@@ -130,7 +137,8 @@ static void look_for_coredump(const char *format, int pid, int kqfd, struct keve
 	T_ASSERT_POSIX_SUCCESS(ret, "Removing coredump file (should be at %s)", buf);
 }
 
-static void sysctl_enable_coredumps(void)
+static void
+sysctl_enable_coredumps(void)
 {
 	int ret;
 	int enable_core_dump = 1;

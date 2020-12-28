@@ -60,27 +60,27 @@ extern "C" {
 #define kIOReportChannelNameIdx         2       // optional
 
 /*  Histogram Segment Configuration
-    Currently supports 2 types of scaling to compute bucket upper bounds,
-    linear or exponential.
-    scale_flag = 0 -> linear scale
-                 1 -> exponential scale
-    upper_bound[n] = (scale_flag) ? pow(base,(n+1)) : base * (n+1);
-*/
+ *   Currently supports 2 types of scaling to compute bucket upper bounds,
+ *   linear or exponential.
+ *   scale_flag = 0 -> linear scale
+ *                1 -> exponential scale
+ *   upper_bound[n] = (scale_flag) ? pow(base,(n+1)) : base * (n+1);
+ */
 #define kIOHistogramScaleLinear 0
 #define kIOHistogramScaleExponential 1
 typedef struct {
-    uint32_t    base_bucket_width;    // segment[0].bucket[0] = [0, base_width]
-    uint32_t    scale_flag;           // bit 0 only in current use (see #defs)
-    uint32_t    segment_idx;          // for multiple segments histograms
-    uint32_t    segment_bucket_count; // number of buckets in this segment
+	uint32_t    base_bucket_width;// segment[0].bucket[0] = [0, base_width]
+	uint32_t    scale_flag;       // bit 0 only in current use (see #defs)
+	uint32_t    segment_idx;      // for multiple segments histograms
+	uint32_t    segment_bucket_count;// number of buckets in this segment
 } __attribute((packed)) IOHistogramSegmentConfig;
 
 // "normalized distribution"(FIXME?) internal format (unused?)
 typedef struct {
-    uint64_t    samples;
-    uint64_t    mean;
-    uint64_t    variance;
-    uint64_t    reserved;
+	uint64_t    samples;
+	uint64_t    mean;
+	uint64_t    variance;
+	uint64_t    reserved;
 } __attribute((packed)) IONormDistReportValues;
 
 #ifdef __cplusplus

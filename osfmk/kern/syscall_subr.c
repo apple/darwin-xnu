@@ -28,28 +28,28 @@
 /*
  * @OSF_COPYRIGHT@
  */
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1991,1990,1989,1988,1987 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
  * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
- * 
+ *
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
@@ -84,11 +84,11 @@ static void thread_depress_ms(mach_msg_timeout_t interval);
  */
 kern_return_t
 pfz_exit(
-__unused	struct pfz_exit_args *args)
+	__unused        struct pfz_exit_args *args)
 {
 	/* For now, nothing special to do.  We'll pick up the ASTs on kernel exit. */
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 
@@ -102,13 +102,15 @@ __unused	struct pfz_exit_args *args)
 static void
 swtch_continue(void)
 {
-	processor_t	myprocessor;
-	boolean_t	result;
+	processor_t     myprocessor;
+	boolean_t       result;
 
 	disable_preemption();
 	myprocessor = current_processor();
 	result = SCHED(thread_should_yield)(myprocessor, current_thread());
 	enable_preemption();
+
+	ml_delay_on_yield();
 
 	thread_syscall_return(result);
 	/*NOTREACHED*/
@@ -118,14 +120,14 @@ boolean_t
 swtch(
 	__unused struct swtch_args *args)
 {
-	processor_t	myprocessor;
+	processor_t     myprocessor;
 
 	disable_preemption();
 	myprocessor = current_processor();
 	if (!SCHED(thread_should_yield)(myprocessor, current_thread())) {
 		mp_enable_preemption();
 
-		return (FALSE);
+		return FALSE;
 	}
 	enable_preemption();
 
@@ -137,8 +139,8 @@ swtch(
 static void
 swtch_pri_continue(void)
 {
-	processor_t	myprocessor;
-	boolean_t	result;
+	processor_t     myprocessor;
+	boolean_t       result;
 
 	thread_depress_abort(current_thread());
 
@@ -147,22 +149,24 @@ swtch_pri_continue(void)
 	result = SCHED(thread_should_yield)(myprocessor, current_thread());
 	mp_enable_preemption();
 
+	ml_delay_on_yield();
+
 	thread_syscall_return(result);
 	/*NOTREACHED*/
 }
 
 boolean_t
 swtch_pri(
-__unused	struct swtch_pri_args *args)
+	__unused        struct swtch_pri_args *args)
 {
-	processor_t	myprocessor;
+	processor_t     myprocessor;
 
 	disable_preemption();
 	myprocessor = current_processor();
 	if (!SCHED(thread_should_yield)(myprocessor, current_thread())) {
 		mp_enable_preemption();
 
-		return (FALSE);
+		return FALSE;
 	}
 	enable_preemption();
 
@@ -179,8 +183,11 @@ thread_switch_continue(void *parameter, __unused int ret)
 	thread_t self = current_thread();
 	int option = (int)(intptr_t)parameter;
 
-	if (option == SWITCH_OPTION_DEPRESS || option == SWITCH_OPTION_OSLOCK_DEPRESS)
+	if (option == SWITCH_OPTION_DEPRESS || option == SWITCH_OPTION_OSLOCK_DEPRESS) {
 		thread_depress_abort(self);
+	}
+
+	ml_delay_on_yield();
 
 	thread_syscall_return(KERN_SUCCESS);
 	/*NOTREACHED*/
@@ -195,18 +202,23 @@ kern_return_t
 thread_switch(
 	struct thread_switch_args *args)
 {
-	thread_t			thread = THREAD_NULL;
-	thread_t			self = current_thread();
-	mach_port_name_t		thread_name = args->thread_name;
-	int						option = args->option;
-	mach_msg_timeout_t		option_time = args->option_time;
-	uint32_t				scale_factor = NSEC_PER_MSEC;
-	boolean_t				depress_option = FALSE;
-	boolean_t				wait_option = FALSE;
-	wait_interrupt_t		interruptible = THREAD_ABORTSAFE;
+	thread_t                        thread = THREAD_NULL;
+	thread_t                        self = current_thread();
+	mach_port_name_t                thread_name = args->thread_name;
+	int                             option = args->option;
+	mach_msg_timeout_t              option_time = args->option_time;
+	uint32_t                        scale_factor = NSEC_PER_MSEC;
+	boolean_t                       depress_option = FALSE;
+	boolean_t                       wait_option = FALSE;
+	wait_interrupt_t                interruptible = THREAD_ABORTSAFE;
+	port_to_thread_options_t        ptt_options = PORT_TO_THREAD_NOT_CURRENT_THREAD;
 
-    /*
+	/*
 	 *	Validate and process option.
+	 *
+	 * OSLock boosting only applies to other threads
+	 * in your same task (even if you have a port for
+	 * a thread in another task)
 	 */
 	switch (option) {
 	case SWITCH_OPTION_NONE:
@@ -225,60 +237,36 @@ thread_switch(
 	case SWITCH_OPTION_OSLOCK_DEPRESS:
 		depress_option = TRUE;
 		interruptible |= THREAD_WAIT_NOREPORT;
+		ptt_options |= PORT_TO_THREAD_IN_CURRENT_TASK;
 		break;
 	case SWITCH_OPTION_OSLOCK_WAIT:
 		wait_option = TRUE;
 		interruptible |= THREAD_WAIT_NOREPORT;
+		ptt_options |= PORT_TO_THREAD_IN_CURRENT_TASK;
 		break;
 	default:
-	    return (KERN_INVALID_ARGUMENT);
-    }
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	/*
 	 * Translate the port name if supplied.
 	 */
 	if (thread_name != MACH_PORT_NULL) {
-		ipc_port_t port;
-
-		if (ipc_port_translate_send(self->task->itk_space,
-		                            thread_name, &port) == KERN_SUCCESS) {
-			ip_reference(port);
-			ip_unlock(port);
-
-			thread = convert_port_to_thread(port);
-			ip_release(port);
-
-			if (thread == self) {
-				thread_deallocate(thread);
-				thread = THREAD_NULL;
-			}
-		}
+		thread = port_name_to_thread(thread_name, ptt_options);
 	}
 
 	if (option == SWITCH_OPTION_OSLOCK_DEPRESS || option == SWITCH_OPTION_OSLOCK_WAIT) {
 		if (thread != THREAD_NULL) {
+			/*
+			 * Attempt to kick the lock owner up to our same IO throttling tier.
+			 * If the thread is currently blocked in throttle_lowpri_io(),
+			 * it will immediately break out.
+			 *
+			 * TODO: SFI break out?
+			 */
+			int new_policy = proc_get_effective_thread_policy(self, TASK_POLICY_IO);
 
-			if (thread->task != self->task) {
-				/*
-				 * OSLock boosting only applies to other threads
-				 * in your same task (even if you have a port for
-				 * a thread in another task)
-				 */
-
-				thread_deallocate(thread);
-				thread = THREAD_NULL;
-			} else {
-				/*
-				 * Attempt to kick the lock owner up to our same IO throttling tier.
-				 * If the thread is currently blocked in throttle_lowpri_io(),
-				 * it will immediately break out.
-				 *
-				 * TODO: SFI break out?
-				 */
-				int new_policy = proc_get_effective_thread_policy(self, TASK_POLICY_IO);
-
-				set_thread_iotier_override(thread, new_policy);
-			}
+			set_thread_iotier_override(thread, new_policy);
 		}
 	}
 
@@ -291,19 +279,20 @@ thread_switch(
 		/* This may return a different thread if the target is pushing on something */
 		thread_t pulled_thread = thread_run_queue_remove_for_handoff(thread);
 
-		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED,MACH_SCHED_THREAD_SWITCH)|DBG_FUNC_NONE,
-				      thread_tid(thread), thread->state,
-				      pulled_thread ? TRUE : FALSE, 0, 0);
+		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_THREAD_SWITCH) | DBG_FUNC_NONE,
+		    thread_tid(thread), thread->state,
+		    pulled_thread ? TRUE : FALSE, 0, 0);
 
 		if (pulled_thread != THREAD_NULL) {
 			/* We can't be dropping the last ref here */
 			thread_deallocate_safe(thread);
 
-			if (wait_option)
+			if (wait_option) {
 				assert_wait_timeout((event_t)assert_wait_timeout, interruptible,
-				                    option_time, scale_factor);
-			else if (depress_option)
+				    option_time, scale_factor);
+			} else if (depress_option) {
 				thread_depress_ms(option_time);
+			}
 
 			thread_run(self, thread_switch_continue, (void *)(intptr_t)option, pulled_thread);
 			__builtin_unreachable();
@@ -314,10 +303,22 @@ thread_switch(
 		thread_deallocate(thread);
 	}
 
-	if (wait_option)
+	if (wait_option) {
 		assert_wait_timeout((event_t)assert_wait_timeout, interruptible, option_time, scale_factor);
-	else if (depress_option)
-		thread_depress_ms(option_time);
+	} else {
+		disable_preemption();
+		bool should_yield = SCHED(thread_should_yield)(current_processor(), current_thread());
+		enable_preemption();
+
+		if (should_yield == false) {
+			/* Early-return if yielding to the scheduler will not be beneficial */
+			return KERN_SUCCESS;
+		}
+
+		if (depress_option) {
+			thread_depress_ms(option_time);
+		}
+	}
 
 	thread_yield_with_continuation(thread_switch_continue, (void *)(intptr_t)option);
 	__builtin_unreachable();
@@ -325,49 +326,14 @@ thread_switch(
 
 void
 thread_yield_with_continuation(
-	thread_continue_t	continuation,
-	void				*parameter)
+	thread_continue_t       continuation,
+	void                            *parameter)
 {
 	assert(continuation);
 	thread_block_reason(continuation, parameter, AST_YIELD);
 	__builtin_unreachable();
 }
 
-
-/* Returns a +1 thread reference */
-thread_t
-port_name_to_thread_for_ulock(mach_port_name_t thread_name)
-{
-	thread_t thread = THREAD_NULL;
-	thread_t self = current_thread();
-
-	/*
-	 * Translate the port name if supplied.
-	 */
-	if (thread_name != MACH_PORT_NULL) {
-		ipc_port_t port;
-
-		if (ipc_port_translate_send(self->task->itk_space,
-		                            thread_name, &port) == KERN_SUCCESS) {
-			ip_reference(port);
-			ip_unlock(port);
-
-			thread = convert_port_to_thread(port);
-			ip_release(port);
-
-			if (thread == THREAD_NULL) {
-				return thread;
-			}
-
-			if ((thread == self) || (thread->task != self->task)) {
-				thread_deallocate(thread);
-				thread = THREAD_NULL;
-			}
-		}
-	}
-
-	return thread;
-}
 
 /* This function is called after an assert_wait(), therefore it must not
  * cause another wait until after the thread_run() or thread_block()
@@ -380,7 +346,7 @@ port_name_to_thread_for_ulock(mach_port_name_t thread_name)
  */
 static wait_result_t
 thread_handoff_internal(thread_t thread, thread_continue_t continuation,
-		void *parameter)
+    void *parameter)
 {
 	thread_t deallocate_thread = THREAD_NULL;
 	thread_t self = current_thread();
@@ -393,9 +359,9 @@ thread_handoff_internal(thread_t thread, thread_continue_t continuation,
 
 		thread_t pulled_thread = thread_run_queue_remove_for_handoff(thread);
 
-		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED,MACH_SCHED_THREAD_SWITCH)|DBG_FUNC_NONE,
-				      thread_tid(thread), thread->state,
-				      pulled_thread ? TRUE : FALSE, 0, 0);
+		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_THREAD_SWITCH) | DBG_FUNC_NONE,
+		    thread_tid(thread), thread->state,
+		    pulled_thread ? TRUE : FALSE, 0, 0);
 
 		if (pulled_thread != THREAD_NULL) {
 			if (continuation == NULL) {
@@ -425,7 +391,7 @@ thread_handoff_internal(thread_t thread, thread_continue_t continuation,
 
 void
 thread_handoff_parameter(thread_t thread, thread_continue_t continuation,
-		void *parameter)
+    void *parameter)
 {
 	thread_handoff_internal(thread, continuation, parameter);
 	panic("NULL continuation passed to %s", __func__);
@@ -477,8 +443,9 @@ thread_depress_abstime(uint64_t interval)
 			uint64_t deadline;
 
 			clock_absolutetime_interval_to_deadline(interval, &deadline);
-			if (!timer_call_enter(&self->depress_timer, deadline, TIMER_CALL_USER_CRITICAL))
+			if (!timer_call_enter(&self->depress_timer, deadline, TIMER_CALL_USER_CRITICAL)) {
 				self->depress_timer_active++;
+			}
 		}
 	}
 
@@ -500,7 +467,7 @@ thread_depress_ms(mach_msg_timeout_t interval)
  */
 void
 thread_depress_expire(void      *p0,
-             __unused void      *p1)
+    __unused void      *p1)
 {
 	thread_t thread = (thread_t)p0;
 
@@ -511,6 +478,9 @@ thread_depress_expire(void      *p0,
 
 	if (--thread->depress_timer_active == 0) {
 		thread->sched_flags &= ~TH_SFLAG_DEPRESSED_MASK;
+		if ((thread->state & TH_RUN) == TH_RUN) {
+			thread->last_basepri_change_time = mach_absolute_time();
+		}
 		thread_recompute_sched_pri(thread, SETPRI_DEFAULT);
 	}
 
@@ -552,17 +522,22 @@ thread_depress_abort(thread_t thread)
 kern_return_t
 thread_depress_abort_locked(thread_t thread)
 {
-	if ((thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) == 0)
+	if ((thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) == 0) {
 		return KERN_NOT_DEPRESSED;
+	}
 
 	assert((thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) != TH_SFLAG_DEPRESSED_MASK);
 
 	thread->sched_flags &= ~TH_SFLAG_DEPRESSED_MASK;
+	if ((thread->state & TH_RUN) == TH_RUN) {
+		thread->last_basepri_change_time = mach_absolute_time();
+	}
 
 	thread_recompute_sched_pri(thread, SETPRI_LAZY);
 
-	if (timer_call_cancel(&thread->depress_timer))
+	if (timer_call_cancel(&thread->depress_timer)) {
 		thread->depress_timer_active--;
+	}
 
 	return KERN_SUCCESS;
 }
@@ -578,14 +553,15 @@ thread_poll_yield(thread_t self)
 	assert(self == current_thread());
 	assert((self->sched_flags & TH_SFLAG_DEPRESS) == 0);
 
-	if (self->sched_mode != TH_MODE_FIXED)
+	if (self->sched_mode != TH_MODE_FIXED) {
 		return;
+	}
 
 	spl_t s = splsched();
 
 	uint64_t abstime = mach_absolute_time();
 	uint64_t total_computation = abstime -
-	        self->computation_epoch + self->computation_metered;
+	    self->computation_epoch + self->computation_metered;
 
 	if (total_computation >= max_poll_computation) {
 		thread_lock(self);
@@ -594,11 +570,12 @@ thread_poll_yield(thread_t self)
 		self->computation_metered = 0;
 
 		uint64_t yield_expiration = abstime +
-		         (total_computation >> sched_poll_yield_shift);
+		    (total_computation >> sched_poll_yield_shift);
 
 		if (!timer_call_enter(&self->depress_timer, yield_expiration,
-		                      TIMER_CALL_USER_CRITICAL))
+		    TIMER_CALL_USER_CRITICAL)) {
 			self->depress_timer_active++;
+		}
 
 		self->sched_flags |= TH_SFLAG_POLLDEPRESS;
 		thread_recompute_sched_pri(self, SETPRI_DEFAULT);
@@ -620,7 +597,7 @@ thread_yield_internal(mach_msg_timeout_t ms)
 
 	assert((self->sched_flags & TH_SFLAG_DEPRESSED_MASK) != TH_SFLAG_DEPRESSED_MASK);
 
-	processor_t	myprocessor;
+	processor_t     myprocessor;
 
 	disable_preemption();
 	myprocessor = current_processor();
@@ -648,8 +625,8 @@ thread_yield_internal(mach_msg_timeout_t ms)
 void
 thread_yield_to_preemption()
 {
-	/* 
-	 * ast_pending() should ideally be called with interrupts disabled, but 
+	/*
+	 * ast_pending() should ideally be called with interrupts disabled, but
 	 * the check here is fine because csw_check() will do the right thing.
 	 */
 	ast_t *pending_ast = ast_pending();
@@ -663,15 +640,14 @@ thread_yield_to_preemption()
 
 		p = current_processor();
 		thread_lock(self);
-		ast = csw_check(p, AST_YIELD);
+		ast = csw_check(self, p, AST_YIELD);
 		ast_on(ast);
 		thread_unlock(self);
 
 		if (ast != AST_NONE) {
-			(void)thread_block_reason(THREAD_CONTINUE_NULL,	NULL, ast);
+			(void)thread_block_reason(THREAD_CONTINUE_NULL, NULL, ast);
 		}
 
 		splx(s);
 	}
 }
-

@@ -10,9 +10,12 @@ CPU_TYPE_I386 = 0x00000007
 CPU_TYPE_X86_64 = 0x01000007
 CPU_TYPE_ARM = 0x0000000c
 CPU_TYPE_ARM64 = 0x0100000c
+CPU_TYPE_ARM64_32 = 0x0200000c
 
 def GetRegisterSetForCPU(cputype, subtype):
     if cputype == CPU_TYPE_ARM64:
+        retval = Armv8_RegisterSet
+    elif cputype == CPU_TYPE_ARM64_32:
         retval = Armv8_RegisterSet
     elif cputype == CPU_TYPE_ARM:
         retval = Armv7_RegisterSet
@@ -52,6 +55,9 @@ class UserThreadObject(object):
                     self.saved_state = self.thread.machine.PcbData
                 else:
                     self.saved_state = self.thread.machine.contextData.ss.uss.ss_32
+            if cputype == CPU_TYPE_ARM64_32:
+                self.reg_type = "arm64"
+                self.saved_state = self.thread.machine.upcb.uss.ss_64
 
         logging.debug("created thread id 0x%x of type %s, is_kern_64bit 0x%x cputype 0x%x"
                       % (self.thread_id, self.reg_type, is_kern_64bit, cputype))
@@ -101,8 +107,7 @@ class UserProcess(target.Process):
         if task.t_flags & 0x2:
             dataregisters64bit = True
 
-        is_kern_64bit = kern.arch in ['x86_64', 'x86_64h', 'arm64'
-        ]
+        is_kern_64bit = kern.arch in ['x86_64', 'x86_64h', 'arm64', 'arm64e']
 
         self.cputype = unsigned(self.proc.p_cputype)
         self.cpusubtype = unsigned(self.proc.p_cpusubtype)

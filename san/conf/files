@@ -1,7 +1,14 @@
-san/kasan.c standard
-san/kasan-fakestack.c standard
-san/kasan-test.c standard
-san/kasan-memintrinsics.c standard
-san/kasan_dynamic_blacklist.c standard
-san/ubsan.c standard
-san/ubsan_log.c standard
+OPTIONS/CONFIG_KASAN            optional config_kasan
+OPTIONS/CONFIG_UBSAN            optional config_ubsan
+OPTIONS/CONFIG_KSANCOV          optional config_ksancov
+
+san/kasan.c                     optional config_kasan
+san/kasan-fakestack.c           optional config_kasan
+san/kasan-test.c                optional config_kasan
+san/kasan-memintrinsics.c       optional config_kasan
+san/kasan_dynamic_blacklist.c   optional config_kasan
+
+san/ubsan.c                     optional config_ubsan
+san/ubsan_log.c                 optional config_ubsan
+
+san/ksancov.c                   optional config_ksancov

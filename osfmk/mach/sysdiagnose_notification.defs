@@ -47,4 +47,9 @@ simpleroutine sysdiagnose_notification(
               sysdiagnose_port    : mach_port_t;
               flags               : uint32_t);
 
+simpleroutine sysdiagnose_notification_with_audit_token(
+              sysdiagnose_port    : mach_port_t;
+              flags               : uint32_t;
+              ServerAuditToken atoken : audit_token_t);
+
 /* vim: set ft=c : */

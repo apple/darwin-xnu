@@ -2,7 +2,7 @@
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,14 +22,14 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <IOKit/pwr_mgt/IOPowerConnection.h>
 
 #define super IOService
-OSDefineMetaClassAndStructors(IOPowerConnection,IOService)
+OSDefineMetaClassAndStructors(IOPowerConnection, IOService)
 
 
 // **********************************************************************************
@@ -37,9 +37,10 @@ OSDefineMetaClassAndStructors(IOPowerConnection,IOService)
 //
 // Parent of the connection calls here to save the childs desire
 // **********************************************************************************
-void IOPowerConnection::setDesiredDomainState (unsigned long stateNumber )
+void
+IOPowerConnection::setDesiredDomainState(unsigned long stateNumber )
 {
-    desiredDomainState = stateNumber;
+	desiredDomainState = stateNumber;
 }
 
 
@@ -47,9 +48,10 @@ void IOPowerConnection::setDesiredDomainState (unsigned long stateNumber )
 // getDesiredDomainState
 //
 // **********************************************************************************
-unsigned long IOPowerConnection::getDesiredDomainState ( void )
+unsigned long
+IOPowerConnection::getDesiredDomainState( void )
 {
-    return desiredDomainState;
+	return desiredDomainState;
 }
 
 
@@ -58,9 +60,10 @@ unsigned long IOPowerConnection::getDesiredDomainState ( void )
 //
 // Parent of the connection calls here when the child requests power
 // **********************************************************************************
-void IOPowerConnection::setChildHasRequestedPower ( void )
+void
+IOPowerConnection::setChildHasRequestedPower( void )
 {
-    requestFlag = true;
+	requestFlag = true;
 }
 
 // **********************************************************************************
@@ -68,9 +71,10 @@ void IOPowerConnection::setChildHasRequestedPower ( void )
 //
 // Parent of the connection calls here when the child requests power
 // **********************************************************************************
-bool IOPowerConnection::childHasRequestedPower ( void )
+bool
+IOPowerConnection::childHasRequestedPower( void )
 {
-    return requestFlag;
+	return requestFlag;
 }
 
 
@@ -78,9 +82,10 @@ bool IOPowerConnection::childHasRequestedPower ( void )
 // setPreventIdleSleepFlag
 //
 // **********************************************************************************
-void IOPowerConnection::setPreventIdleSleepFlag ( unsigned long flag )
+void
+IOPowerConnection::setPreventIdleSleepFlag( unsigned long flag )
 {
-    preventIdleSleepFlag = (flag != 0);
+	preventIdleSleepFlag = (flag != 0);
 }
 
 
@@ -88,9 +93,10 @@ void IOPowerConnection::setPreventIdleSleepFlag ( unsigned long flag )
 // getPreventIdleSleepFlag
 //
 // **********************************************************************************
-bool IOPowerConnection::getPreventIdleSleepFlag ( void )
+bool
+IOPowerConnection::getPreventIdleSleepFlag( void )
 {
-    return preventIdleSleepFlag;
+	return preventIdleSleepFlag;
 }
 
 
@@ -98,9 +104,10 @@ bool IOPowerConnection::getPreventIdleSleepFlag ( void )
 // setPreventSystemSleepFlag
 //
 // **********************************************************************************
-void IOPowerConnection::setPreventSystemSleepFlag ( unsigned long flag )
+void
+IOPowerConnection::setPreventSystemSleepFlag( unsigned long flag )
 {
-    preventSystemSleepFlag = (flag != 0);
+	preventSystemSleepFlag = (flag != 0);
 }
 
 
@@ -108,9 +115,10 @@ void IOPowerConnection::setPreventSystemSleepFlag ( unsigned long flag )
 // getPreventSystemSleepFlag
 //
 // **********************************************************************************
-bool IOPowerConnection::getPreventSystemSleepFlag ( void )
+bool
+IOPowerConnection::getPreventSystemSleepFlag( void )
 {
-    return preventSystemSleepFlag;
+	return preventSystemSleepFlag;
 }
 
 
@@ -120,9 +128,10 @@ bool IOPowerConnection::getPreventSystemSleepFlag ( void )
 // Child of the connection calls here to set its reminder that the parent does
 // or does not yet know the state if its domain.
 // **********************************************************************************
-void IOPowerConnection::setParentKnowsState (bool flag )
+void
+IOPowerConnection::setParentKnowsState(bool flag )
 {
-    stateKnown = flag;
+	stateKnown = flag;
 }
 
 
@@ -132,9 +141,10 @@ void IOPowerConnection::setParentKnowsState (bool flag )
 // Child of the connection calls here to save what the parent says
 // is the state if its domain.
 // **********************************************************************************
-void IOPowerConnection::setParentCurrentPowerFlags (IOPMPowerFlags flags )
+void
+IOPowerConnection::setParentCurrentPowerFlags(IOPMPowerFlags flags )
 {
-    currentPowerFlags = flags;
+	currentPowerFlags = flags;
 }
 
 
@@ -142,9 +152,10 @@ void IOPowerConnection::setParentCurrentPowerFlags (IOPMPowerFlags flags )
 // parentKnowsState
 //
 // **********************************************************************************
-bool IOPowerConnection::parentKnowsState (void )
+bool
+IOPowerConnection::parentKnowsState(void )
 {
-    return stateKnown;
+	return stateKnown;
 }
 
 
@@ -152,9 +163,10 @@ bool IOPowerConnection::parentKnowsState (void )
 // parentCurrentPowerFlags
 //
 // **********************************************************************************
-IOPMPowerFlags IOPowerConnection::parentCurrentPowerFlags (void )
+IOPMPowerFlags
+IOPowerConnection::parentCurrentPowerFlags(void )
 {
-    return currentPowerFlags;
+	return currentPowerFlags;
 }
 
 
@@ -162,9 +174,10 @@ IOPMPowerFlags IOPowerConnection::parentCurrentPowerFlags (void )
 // setAwaitingAck
 //
 // **********************************************************************************
-void IOPowerConnection::setAwaitingAck ( bool value )
+void
+IOPowerConnection::setAwaitingAck( bool value )
 {
-    awaitingAck = value;
+	awaitingAck = value;
 }
 
 
@@ -172,9 +185,10 @@ void IOPowerConnection::setAwaitingAck ( bool value )
 // getAwaitingAck
 //
 // **********************************************************************************
-bool IOPowerConnection::getAwaitingAck ( void )
+bool
+IOPowerConnection::getAwaitingAck( void )
 {
-    return awaitingAck;
+	return awaitingAck;
 }
 
 
@@ -182,7 +196,8 @@ bool IOPowerConnection::getAwaitingAck ( void )
 // setReadyFlag
 //
 // **********************************************************************************
-void IOPowerConnection::setReadyFlag( bool flag )
+void
+IOPowerConnection::setReadyFlag( bool flag )
 {
 	readyFlag = flag;
 }
@@ -192,7 +207,8 @@ void IOPowerConnection::setReadyFlag( bool flag )
 // getReadyFlag
 //
 // **********************************************************************************
-bool IOPowerConnection::getReadyFlag( void ) const
+bool
+IOPowerConnection::getReadyFlag( void ) const
 {
 	return readyFlag;
 }

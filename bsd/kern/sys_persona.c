@@ -35,20 +35,32 @@
 #include <sys/persona.h>
 #include <sys/proc.h>
 
-#include <libkern/libkern.h>
+#include <kern/task.h>
+#include <kern/thread.h>
+#include <mach/thread_act.h>
+#include <mach/mach_types.h>
 
-static int kpersona_copyin(user_addr_t infop, struct kpersona_info *kinfo)
+#include <libkern/libkern.h>
+#include <IOKit/IOBSD.h>
+
+extern kern_return_t bank_get_bank_ledger_thread_group_and_persona(void *voucher,
+    void *bankledger, void **banktg, uint32_t *persona_id);
+
+static int
+kpersona_copyin(user_addr_t infop, struct kpersona_info *kinfo)
 {
 	uint32_t info_v = 0;
 	int error;
 
 	error = copyin(infop, &info_v, sizeof(info_v));
-	if (error)
+	if (error) {
 		return error;
+	}
 
 	/* only support a single version of the struct for now */
-	if (info_v != PERSONA_INFO_V1)
+	if (info_v != PERSONA_INFO_V1) {
 		return EINVAL;
+	}
 
 	error = copyin(infop, kinfo, sizeof(*kinfo));
 
@@ -58,52 +70,76 @@ static int kpersona_copyin(user_addr_t infop, struct kpersona_info *kinfo)
 	return error;
 }
 
-static int kpersona_copyout(struct kpersona_info *kinfo, user_addr_t infop)
+static int
+kpersona_copyout(struct kpersona_info *kinfo, user_addr_t infop)
 {
 	uint32_t info_v;
 	int error;
 
 	error = copyin(infop, &info_v, sizeof(info_v));
-	if (error)
+	if (error) {
 		return error;
+	}
 
 	/* only support a single version of the struct for now */
 	/* TODO: in the future compare info_v to kinfo->persona_info_version */
-	if (info_v != PERSONA_INFO_V1)
+	if (info_v != PERSONA_INFO_V1) {
 		return EINVAL;
+	}
 
 	error = copyout(kinfo, infop, sizeof(*kinfo));
 	return error;
 }
 
 
-static int kpersona_alloc_syscall(user_addr_t infop, user_addr_t idp)
+static int
+kpersona_alloc_syscall(user_addr_t infop, user_addr_t idp, user_addr_t path)
 {
 	int error;
 	struct kpersona_info kinfo;
-	struct persona *persona;
+	struct persona *persona = NULL;
 	uid_t id = PERSONA_ID_NONE;
 	const char *login;
+	char *pna_path = NULL;
 
-	/*
-	 * TODO: rdar://problem/19981151
-	 * Add entitlement check!
-	 */
-	if (!kauth_cred_issuser(kauth_cred_get()))
+	if (!IOTaskHasEntitlement(current_task(), PERSONA_MGMT_ENTITLEMENT)) {
 		return EPERM;
+	}
 
 	error = kpersona_copyin(infop, &kinfo);
-	if (error)
+	if (error) {
 		return error;
+	}
 
 	login = kinfo.persona_name[0] ? kinfo.persona_name : NULL;
-	if (kinfo.persona_id != PERSONA_ID_NONE && kinfo.persona_id != (uid_t)0)
+	if (kinfo.persona_id != PERSONA_ID_NONE && kinfo.persona_id != (uid_t)0) {
 		id = kinfo.persona_id;
+	}
+
+	if (path) {
+		MALLOC_ZONE(pna_path, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK | M_ZERO);
+		if (pna_path == NULL) {
+			return ENOMEM;
+		}
+		size_t pathlen;
+		error = copyinstr(path, (void *)pna_path, MAXPATHLEN, &pathlen);
+		if (error) {
+			FREE_ZONE(pna_path, MAXPATHLEN, M_NAMEI);
+			return error;
+		}
+	}
 
 	error = 0;
-	persona = persona_alloc(id, login, kinfo.persona_type, &error);
-	if (!persona)
+	persona = persona_alloc(id, login, kinfo.persona_type, pna_path, &error);
+	if (!persona) {
+		if (pna_path != NULL) {
+			FREE_ZONE(pna_path, MAXPATHLEN, M_NAMEI);
+		}
 		return error;
+	}
+
+	/* persona struct contains a reference to pna_path */
+	pna_path = NULL;
 
 	error = persona_init_begin(persona);
 	if (error) {
@@ -112,20 +148,23 @@ static int kpersona_alloc_syscall(user_addr_t infop, user_addr_t idp)
 
 	if (kinfo.persona_gid) {
 		error = persona_set_gid(persona, kinfo.persona_gid);
-		if (error)
+		if (error) {
 			goto out_persona_err;
+		}
 	}
 
 	if (kinfo.persona_ngroups > 0) {
 		/* force gmuid 0 to *opt-out* of memberd */
-		if (kinfo.persona_gmuid == 0)
+		if (kinfo.persona_gmuid == 0) {
 			kinfo.persona_gmuid = KAUTH_UID_NONE;
+		}
 
 		error = persona_set_groups(persona, kinfo.persona_groups,
-					   kinfo.persona_ngroups,
-					   kinfo.persona_gmuid);
-		if (error)
+		    kinfo.persona_ngroups,
+		    kinfo.persona_gmuid);
+		if (error) {
 			goto out_persona_err;
+		}
 	}
 
 	error = copyout(&persona->pna_id, idp, sizeof(persona->pna_id));
@@ -135,6 +174,11 @@ static int kpersona_alloc_syscall(user_addr_t infop, user_addr_t idp)
 
 	kinfo.persona_id = persona->pna_id;
 	error = kpersona_copyout(&kinfo, infop);
+	if (error) {
+		goto out_persona_err;
+	}
+
+	error = persona_verify_and_set_uniqueness(persona);
 	if (error) {
 		goto out_persona_err;
 	}
@@ -155,29 +199,34 @@ out_persona_err:
 #if PERSONA_DEBUG
 	printf("%s:  ERROR:%d\n", __func__, error);
 #endif
-	if (persona)
+	if (persona) {
 		persona_put(persona);
+	}
 	return error;
 }
 
-static int kpersona_dealloc_syscall(user_addr_t idp)
+static int
+kpersona_dealloc_syscall(user_addr_t idp)
 {
 	int error = 0;
 	uid_t persona_id;
 	struct persona *persona;
 
-	if (!kauth_cred_issuser(kauth_cred_get()))
+	if (!IOTaskHasEntitlement(current_task(), PERSONA_MGMT_ENTITLEMENT)) {
 		return EPERM;
+	}
 
 	error = copyin(idp, &persona_id, sizeof(persona_id));
-	if (error)
+	if (error) {
 		return error;
+	}
 
 	/* invalidate the persona (deny subsequent spawn/fork) */
 	persona = persona_lookup_and_invalidate(persona_id);
 
-	if (!persona)
+	if (!persona) {
 		return ESRCH;
+	}
 
 	/* one reference from the _lookup() */
 	persona_put(persona);
@@ -188,13 +237,17 @@ static int kpersona_dealloc_syscall(user_addr_t idp)
 	return error;
 }
 
-static int kpersona_get_syscall(user_addr_t idp)
+static int
+kpersona_get_syscall(user_addr_t idp)
 {
 	int error;
-	struct persona *persona = current_persona_get();
+	struct persona *persona;
 
-	if (!persona)
+	persona = current_persona_get();
+
+	if (!persona) {
 		return ESRCH;
+	}
 
 	error = copyout(&persona->pna_id, idp, sizeof(persona->pna_id));
 	persona_put(persona);
@@ -202,29 +255,94 @@ static int kpersona_get_syscall(user_addr_t idp)
 	return error;
 }
 
-static int kpersona_info_syscall(user_addr_t idp, user_addr_t infop)
+static int
+kpersona_getpath_syscall(user_addr_t idp, user_addr_t path)
 {
 	int error;
+	uid_t persona_id;
+	struct persona *persona;
+	size_t pathlen;
+	uid_t current_persona_id = PERSONA_ID_NONE;
+
+	if (!path) {
+		return EINVAL;
+	}
+
+	error = copyin(idp, &persona_id, sizeof(persona_id));
+	if (error) {
+		return error;
+	}
+
+	/* Get current thread's persona id to compare if the
+	 * input persona_id matches the current persona id
+	 */
+	persona = current_persona_get();
+	if (persona) {
+		current_persona_id = persona->pna_id;
+	}
+
+	if (persona_id && persona_id != current_persona_id) {
+		/* Release the reference on the current persona id's persona */
+		persona_put(persona);
+		if (!kauth_cred_issuser(kauth_cred_get()) &&
+		    !IOTaskHasEntitlement(current_task(), PERSONA_MGMT_ENTITLEMENT)) {
+			return EPERM;
+		}
+		persona = persona_lookup(persona_id);
+	}
+
+	if (!persona) {
+		return ESRCH;
+	}
+
+	if (persona->pna_path) {
+		error = copyoutstr((void *)persona->pna_path, path, MAXPATHLEN, &pathlen);
+	}
+
+	persona_put(persona);
+
+	return error;
+}
+
+static int
+kpersona_info_syscall(user_addr_t idp, user_addr_t infop)
+{
+	int error;
+	uid_t current_persona_id = PERSONA_ID_NONE;
 	uid_t persona_id;
 	struct persona *persona;
 	struct kpersona_info kinfo;
 
 	error = copyin(idp, &persona_id, sizeof(persona_id));
-	if (error)
+	if (error) {
 		return error;
+	}
 
-	/*
-	 * TODO: rdar://problem/19981151
-	 * Add entitlement check!
+	/* Get current thread's persona id to compare if the
+	 * input persona_id matches the current persona id
 	 */
+	persona = current_persona_get();
+	if (persona) {
+		current_persona_id = persona->pna_id;
+	}
 
-	persona = persona_lookup(persona_id);
-	if (!persona)
+	if (persona_id && persona_id != current_persona_id) {
+		/* Release the reference on the current persona id's persona */
+		persona_put(persona);
+		if (!kauth_cred_issuser(kauth_cred_get()) &&
+		    !IOTaskHasEntitlement(current_task(), PERSONA_MGMT_ENTITLEMENT)) {
+			return EPERM;
+		}
+		persona = persona_lookup(persona_id);
+	}
+
+	if (!persona) {
 		return ESRCH;
+	}
 
 	persona_dbg("FOUND: persona: id:%d, gid:%d, login:\"%s\"",
-		    persona->pna_id, persona_get_gid(persona),
-		    persona->pna_login);
+	    persona->pna_id, persona_get_gid(persona),
+	    persona->pna_login);
 
 	memset(&kinfo, 0, sizeof(kinfo));
 	kinfo.persona_info_version = PERSONA_INFO_V1;
@@ -249,7 +367,8 @@ static int kpersona_info_syscall(user_addr_t idp, user_addr_t infop)
 	return error;
 }
 
-static int kpersona_pidinfo_syscall(user_addr_t idp, user_addr_t infop)
+static int
+kpersona_pidinfo_syscall(user_addr_t idp, user_addr_t infop)
 {
 	int error;
 	pid_t pid;
@@ -257,16 +376,19 @@ static int kpersona_pidinfo_syscall(user_addr_t idp, user_addr_t infop)
 	struct kpersona_info kinfo;
 
 	error = copyin(idp, &pid, sizeof(pid));
-	if (error)
+	if (error) {
 		return error;
+	}
 
 	if (!kauth_cred_issuser(kauth_cred_get())
-	    && (pid != current_proc()->p_pid))
+	    && (pid != current_proc()->p_pid)) {
 		return EPERM;
+	}
 
 	persona = persona_proc_get(pid);
-	if (!persona)
+	if (!persona) {
 		return ESRCH;
+	}
 
 	memset(&kinfo, 0, sizeof(kinfo));
 	kinfo.persona_info_version = PERSONA_INFO_V1;
@@ -287,7 +409,8 @@ static int kpersona_pidinfo_syscall(user_addr_t idp, user_addr_t infop)
 	return error;
 }
 
-static int kpersona_find_syscall(user_addr_t infop, user_addr_t idp, user_addr_t idlenp)
+static int
+kpersona_find_syscall(user_addr_t infop, user_addr_t idp, user_addr_t idlenp)
 {
 	int error;
 	struct kpersona_info kinfo;
@@ -296,21 +419,24 @@ static int kpersona_find_syscall(user_addr_t infop, user_addr_t idp, user_addr_t
 	struct persona **persona = NULL;
 
 	error = copyin(idlenp, &u_idlen, sizeof(u_idlen));
-	if (error)
+	if (error) {
 		return error;
+	}
 
-	if (u_idlen > g_max_personas)
+	if (u_idlen > g_max_personas) {
 		u_idlen = g_max_personas;
+	}
 
 	error = kpersona_copyin(infop, &kinfo);
-	if (error)
+	if (error) {
 		goto out;
+	}
 
 	login = kinfo.persona_name[0] ? kinfo.persona_name : NULL;
 
 	if (u_idlen > 0) {
 		MALLOC(persona, struct persona **, sizeof(*persona) * u_idlen,
-		       M_TEMP, M_WAITOK|M_ZERO);
+		    M_TEMP, M_WAITOK | M_ZERO);
 		if (!persona) {
 			error = ENOMEM;
 			goto out;
@@ -318,25 +444,29 @@ static int kpersona_find_syscall(user_addr_t infop, user_addr_t idp, user_addr_t
 	}
 
 	k_idlen = u_idlen;
-	error = persona_find(login, kinfo.persona_id, persona, &k_idlen);
-	if (error)
+	error = persona_find_all(login, kinfo.persona_id, kinfo.persona_type, persona, &k_idlen);
+	if (error) {
 		goto out;
+	}
 
 	/* copyout all the IDs of each persona we found */
 	for (size_t i = 0; i < k_idlen; i++) {
-		if (i >= u_idlen)
+		if (i >= u_idlen) {
 			break;
+		}
 		error = copyout(&persona[i]->pna_id,
-				idp + (i * sizeof(persona[i]->pna_id)),
-				sizeof(persona[i]->pna_id));
-		if (error)
+		    idp + (i * sizeof(persona[i]->pna_id)),
+		    sizeof(persona[i]->pna_id));
+		if (error) {
 			goto out;
+		}
 	}
 
 out:
 	if (persona) {
-		for (size_t i = 0; i < u_idlen; i++)
+		for (size_t i = 0; i < u_idlen; i++) {
 			persona_put(persona[i]);
+		}
 		FREE(persona, M_TEMP);
 	}
 
@@ -345,27 +475,34 @@ out:
 	return error;
 }
 
-
 /*
  * Syscall entry point / demux.
  */
-int persona(__unused proc_t p, struct persona_args *pargs, __unused int32_t *retval)
+int
+persona(__unused proc_t p, struct persona_args *pargs, __unused int32_t *retval)
 {
 	int error;
 	uint32_t op = pargs->operation;
 	/* uint32_t flags = pargs->flags; */
 	user_addr_t infop = pargs->info;
 	user_addr_t idp = pargs->id;
+	user_addr_t path = pargs->path;
 
 	switch (op) {
 	case PERSONA_OP_ALLOC:
-		error = kpersona_alloc_syscall(infop, idp);
+		error = kpersona_alloc_syscall(infop, idp, USER_ADDR_NULL);
+		break;
+	case PERSONA_OP_PALLOC:
+		error = kpersona_alloc_syscall(infop, idp, path);
 		break;
 	case PERSONA_OP_DEALLOC:
 		error = kpersona_dealloc_syscall(idp);
 		break;
 	case PERSONA_OP_GET:
 		error = kpersona_get_syscall(idp);
+		break;
+	case PERSONA_OP_GETPATH:
+		error = kpersona_getpath_syscall(idp, path);
 		break;
 	case PERSONA_OP_INFO:
 		error = kpersona_info_syscall(idp, infop);
@@ -374,6 +511,7 @@ int persona(__unused proc_t p, struct persona_args *pargs, __unused int32_t *ret
 		error = kpersona_pidinfo_syscall(idp, infop);
 		break;
 	case PERSONA_OP_FIND:
+	case PERSONA_OP_FIND_BY_TYPE:
 		error = kpersona_find_syscall(infop, idp, pargs->idlen);
 		break;
 	default:

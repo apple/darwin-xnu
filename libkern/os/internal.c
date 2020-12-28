@@ -28,58 +28,58 @@
 static bool
 _os_trace_addr_in_text_segment_32(const void *dso, const void *addr)
 {
-    const struct mach_header *mhp = (const struct mach_header *) dso;
-    const struct segment_command *sgp = (const struct segment_command *)(const void *)((const char *)mhp + sizeof(struct mach_header));
+	const struct mach_header *mhp = (const struct mach_header *) dso;
+	const struct segment_command *sgp = (const struct segment_command *)(const void *)((const char *)mhp + sizeof(struct mach_header));
 
-    for (uint32_t i = 0; i < mhp->ncmds; i++) {
-        if (sgp->cmd == LC_SEGMENT) {
-            if (strncmp(sgp->segname, SEG_TEXT, sizeof(sgp->segname)) == 0) {
-                return ((uintptr_t)addr >= (sgp->vmaddr) && (uintptr_t)addr < (sgp->vmaddr + sgp->vmsize));
-            }
-        }
-        sgp = (const struct segment_command *)(const void *)((const char *)sgp + sgp->cmdsize);
-    }
+	for (uint32_t i = 0; i < mhp->ncmds; i++) {
+		if (sgp->cmd == LC_SEGMENT) {
+			if (strncmp(sgp->segname, SEG_TEXT, sizeof(sgp->segname)) == 0) {
+				return (uintptr_t)addr >= (sgp->vmaddr) && (uintptr_t)addr < (sgp->vmaddr + sgp->vmsize);
+			}
+		}
+		sgp = (const struct segment_command *)(const void *)((const char *)sgp + sgp->cmdsize);
+	}
 
-    return false;
+	return false;
 }
 
 static bool
 _os_trace_addr_in_text_segment_64(const void *dso, const void *addr)
 {
-    const struct mach_header_64 *mhp = (const struct mach_header_64 *) dso;
-    const struct segment_command_64 *sgp = (const struct segment_command_64 *)(const void *)((const char *)mhp + sizeof(struct mach_header_64));
+	const struct mach_header_64 *mhp = (const struct mach_header_64 *) dso;
+	const struct segment_command_64 *sgp = (const struct segment_command_64 *)(const void *)((const char *)mhp + sizeof(struct mach_header_64));
 
-    for (uint32_t i = 0; i < mhp->ncmds; i++) {
-        if (sgp->cmd == LC_SEGMENT_64) {
-            if (strncmp(sgp->segname, SEG_TEXT, sizeof(sgp->segname)) == 0) {
-                return ((uintptr_t)addr >= (sgp->vmaddr) && (uintptr_t)addr < (sgp->vmaddr + sgp->vmsize));
-            }
-        }
-        sgp = (const struct segment_command_64 *)(const void *)((const char *)sgp + sgp->cmdsize);
-    }
+	for (uint32_t i = 0; i < mhp->ncmds; i++) {
+		if (sgp->cmd == LC_SEGMENT_64) {
+			if (strncmp(sgp->segname, SEG_TEXT, sizeof(sgp->segname)) == 0) {
+				return (uintptr_t)addr >= (sgp->vmaddr) && (uintptr_t)addr < (sgp->vmaddr + sgp->vmsize);
+			}
+		}
+		sgp = (const struct segment_command_64 *)(const void *)((const char *)sgp + sgp->cmdsize);
+	}
 
-    return false;
+	return false;
 }
 
 bool
 _os_trace_addr_in_text_segment(const void *dso, const void *addr)
 {
-    const struct mach_header *mhp = (const struct mach_header *) dso;
-    bool retval = false;
+	const struct mach_header *mhp = (const struct mach_header *) dso;
+	bool retval = false;
 
-    switch (mhp->magic) {
-        case MH_MAGIC:
-            retval = _os_trace_addr_in_text_segment_32(dso, addr);
-            break;
+	switch (mhp->magic) {
+	case MH_MAGIC:
+		retval = _os_trace_addr_in_text_segment_32(dso, addr);
+		break;
 
-        case MH_MAGIC_64:
-            retval = _os_trace_addr_in_text_segment_64(dso, addr);
-            break;
+	case MH_MAGIC_64:
+		retval = _os_trace_addr_in_text_segment_64(dso, addr);
+		break;
 
-        default:
-            retval = false;
-            break;
-    }
+	default:
+		retval = false;
+		break;
+	}
 
-    return retval;
+	return retval;
 }

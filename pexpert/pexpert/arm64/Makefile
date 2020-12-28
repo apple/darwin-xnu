@@ -13,15 +13,14 @@ DATAFILES = \
 	board_config.h \
 	boot.h \
 	S3c2410x.h \
-	S5L8960X.h \
 	T7000.h \
 	S8000.h \
 	T8010.h \
-	cyclone.h \
 	typhoon.h \
 	twister.h \
 	hurricane.h \
-	BCM2837.h
+	BCM2837.h \
+	spr_locks.h
 
 
 INSTALL_MD_LIST	= ${DATAFILES}

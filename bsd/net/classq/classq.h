@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -65,7 +65,7 @@
  * class queue definitions extracted from rm_class.h.
  */
 #ifndef _NET_CLASSQ_CLASSQ_H_
-#define	_NET_CLASSQ_CLASSQ_H_
+#define _NET_CLASSQ_CLASSQ_H_
 
 #ifdef PRIVATE
 #ifdef __cplusplus
@@ -77,8 +77,27 @@ extern "C" {
  */
 typedef enum classq_pkt_type {
 	QP_INVALID = 0,
-	QP_MBUF,	/* mbuf packet */
+	QP_MBUF,        /* mbuf packet */
 } classq_pkt_type_t;
+
+/*
+ * Packet
+ */
+typedef struct classq_pkt {
+	union {
+		struct mbuf             *cp_mbuf;       /* mbuf packet */
+	};
+	classq_pkt_type_t       cp_ptype;
+} classq_pkt_t;
+
+#define CLASSQ_PKT_INITIALIZER(_p)      \
+	(classq_pkt_t){ .cp_mbuf = NULL, .cp_ptype = QP_INVALID }
+
+#define CLASSQ_PKT_INIT_MBUF(_p, _m)    do {    \
+	(_p)->cp_ptype = QP_MBUF;               \
+	(_p)->cp_mbuf = (_m);                   \
+} while (0)
+
 
 /*
  * Packet Queue types
@@ -97,17 +116,17 @@ typedef enum classq_state {
 	QS_SUSPENDED
 } classq_state_t;
 
-#define	DEFAULT_QLIMIT	128 /* default */
+#define DEFAULT_QLIMIT  128 /* default */
 
-#define	CLASSQ_DEQUEUE_MAX_PKT_LIMIT	2048
-#define	CLASSQ_DEQUEUE_MAX_BYTE_LIMIT	(1024 * 1024)
+#define CLASSQ_DEQUEUE_MAX_PKT_LIMIT    2048
+#define CLASSQ_DEQUEUE_MAX_BYTE_LIMIT   (1024 * 1024)
 
 /*
  * generic packet counter
  */
 struct pktcntr {
-	u_int64_t	packets;
-	u_int64_t	bytes;
+	u_int64_t       packets;
+	u_int64_t       bytes;
 };
 
 #ifdef BSD_KERNEL_PRIVATE
@@ -122,61 +141,63 @@ typedef struct _class_queue_ {
 	union {
 		MBUFQ_HEAD(mq_head) __mbufq; /* mbuf packet queue */
 	} __pktq_u;
-	u_int32_t	qlen;	/* Queue length (in number of packets) */
-	u_int32_t	qlim;	/* Queue limit (in number of packets*) */
-	u_int64_t	qsize;	/* Approx. queue size (in number of bytes) */
-	classq_type_t	qtype;	/* Queue type */
-	classq_state_t	qstate;	/* Queue state */
-	classq_pkt_type_t	qptype; /* Packet type */
+	u_int32_t       qlen;   /* Queue length (in number of packets) */
+	u_int32_t       qlim;   /* Queue limit (in number of packets*) */
+	u_int64_t       qsize;  /* Approx. queue size (in number of bytes) */
+	classq_type_t   qtype;  /* Queue type */
+	classq_state_t  qstate; /* Queue state */
+	classq_pkt_type_t       qptype; /* Packet type */
 } class_queue_t;
 
-#define	qmbufq(q)	(q)->__pktq_u.__mbufq	/* Get mbuf packet queue */
-#define	qptype(q)	(q)->qptype		/* Get queue packet type */
-#define	qtype(q)	(q)->qtype		/* Get queue type */
-#define	qstate(q)	(q)->qstate		/* Get queue state */
-#define	qlimit(q)	(q)->qlim		/* Max packets to be queued */
-#define	qlen(q)		(q)->qlen		/* Current queue length. */
-#define	qsize(q)	(q)->qsize		/* Approx. bytes in queue */
+#define qmbufq(q)       (q)->__pktq_u.__mbufq   /* Get mbuf packet queue */
+#define qptype(q)       (q)->qptype             /* Get queue packet type */
+#define qtype(q)        (q)->qtype              /* Get queue type */
+#define qstate(q)       (q)->qstate             /* Get queue state */
+#define qlimit(q)       (q)->qlim               /* Max packets to be queued */
+#define qlen(q)         (q)->qlen               /* Current queue length. */
+#define qsize(q)        (q)->qsize              /* Approx. bytes in queue */
 
-#define	qhead(q)	MBUFQ_FIRST(&qmbufq(q))
+#define qhead(q)        MBUFQ_FIRST(&qmbufq(q))
 
-#define	qempty(q)	(qlen(q) == 0)	/* Is the queue empty?? */
-#define	q_is_red(q)	(qtype(q) == Q_RED)	/* Is the queue a RED queue */
-#define	q_is_rio(q)	(qtype(q) == Q_RIO)	/* Is the queue a RIO queue */
-#define	q_is_blue(q)	(qtype(q) == Q_BLUE)	/* Is the queue a BLUE queue */
-#define	q_is_sfb(q)	(qtype(q) == Q_SFB)	/* Is the queue a SFB queue */
-#define	q_is_red_or_rio(q) (qtype(q) == Q_RED || qtype(q) == Q_RIO)
-#define	q_is_suspended(q) (qstate(q) == QS_SUSPENDED)
+#define qempty(q)       (qlen(q) == 0)  /* Is the queue empty?? */
+#define q_is_red(q)     (qtype(q) == Q_RED)     /* Is the queue a RED queue */
+#define q_is_rio(q)     (qtype(q) == Q_RIO)     /* Is the queue a RIO queue */
+#define q_is_blue(q)    (qtype(q) == Q_BLUE)    /* Is the queue a BLUE queue */
+#define q_is_sfb(q)     (qtype(q) == Q_SFB)     /* Is the queue a SFB queue */
+#define q_is_red_or_rio(q) (qtype(q) == Q_RED || qtype(q) == Q_RIO)
+#define q_is_suspended(q) (qstate(q) == QS_SUSPENDED)
 
-#define	PKTCNTR_ADD(_cntr, _pkt, _len) do {				\
-	(_cntr)->packets += (_pkt);					\
-	(_cntr)->bytes += (_len);					\
+#define PKTCNTR_ADD(_cntr, _pkt, _len) do {                             \
+	(_cntr)->packets += (_pkt);                                     \
+	(_cntr)->bytes += (_len);                                       \
 } while (0)
 
-#define	PKTCNTR_CLEAR(_cntr) do {					\
-	(_cntr)->packets = 0;						\
-	(_cntr)->bytes = 0;						\
+#define PKTCNTR_CLEAR(_cntr) do {                                       \
+	(_cntr)->packets = 0;                                           \
+	(_cntr)->bytes = 0;                                             \
 } while (0)
 
 /* flags for mark_ecn() */
-#define	CLASSQF_ECN4	0x01	/* use packet marking for IPv4 packets */
-#define	CLASSQF_ECN6	0x02	/* use packet marking for IPv6 packets */
-#define	CLASSQF_ECN	(CLASSQF_ECN4 | CLASSQF_ECN6)
+#define CLASSQF_ECN4    0x01    /* use packet marking for IPv4 packets */
+#define CLASSQF_ECN6    0x02    /* use packet marking for IPv6 packets */
+#define CLASSQF_ECN     (CLASSQF_ECN4 | CLASSQF_ECN6)
 
 extern u_int32_t classq_verbose;
 
 SYSCTL_DECL(_net_classq);
 
 extern void _qinit(class_queue_t *, int, int, classq_pkt_type_t);
-extern void _addq(class_queue_t *, void *);
-extern void _addq_multi(class_queue_t *, void *, void *, u_int32_t, u_int32_t);
-extern void *_getq(class_queue_t *);
-extern void *_getq_all(class_queue_t *, void **, u_int32_t *, u_int64_t *);
-extern void *_getq_tail(class_queue_t *);
-extern void *_getq_random(class_queue_t *);
-extern void *_getq_flow(class_queue_t *, u_int32_t);
-extern void *_getq_scidx_lt(class_queue_t *, u_int32_t);
-extern void _removeq(class_queue_t *, void *);
+extern void _addq(class_queue_t *, classq_pkt_t *);
+extern void _addq_multi(class_queue_t *, classq_pkt_t *, classq_pkt_t *,
+    u_int32_t, u_int32_t);
+extern void _getq(class_queue_t *, classq_pkt_t *);
+extern void _getq_all(class_queue_t *, classq_pkt_t *, classq_pkt_t *,
+    u_int32_t *, u_int64_t *);
+extern void _getq_tail(class_queue_t *, classq_pkt_t *);
+extern void _getq_random(class_queue_t *, classq_pkt_t *);
+extern void _getq_flow(class_queue_t *, classq_pkt_t *, u_int32_t);
+extern void _getq_scidx_lt(class_queue_t *, classq_pkt_t *, u_int32_t);
+extern void _removeq(class_queue_t *, classq_pkt_t *);
 extern void _flushq(class_queue_t *);
 extern void _flushq_flow(class_queue_t *, u_int32_t, u_int32_t *, u_int32_t *);
 
@@ -184,8 +205,8 @@ extern void classq_init(void);
 
 #if PF_ECN
 extern u_int8_t read_dsfield(struct mbuf *, struct pf_mtag *);
-extern void	write_dsfield(struct mbuf *, struct pf_mtag *, u_int8_t);
-extern int	mark_ecn(struct mbuf *, struct pf_mtag *, int);
+extern void     write_dsfield(struct mbuf *, struct pf_mtag *, u_int8_t);
+extern int      mark_ecn(struct mbuf *, struct pf_mtag *, int);
 #endif /* PF_ECN */
 #endif /* BSD_KERNEL_PRIVATE */
 

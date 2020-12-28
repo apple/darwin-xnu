@@ -2,7 +2,7 @@
  * Copyright (c) 2004-2016 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
@@ -69,7 +69,7 @@
 static inline int
 isspace(char c)
 {
-	return (c == ' ' || c == '\t' || c == '\n' || c == '\12');
+	return c == ' ' || c == '\t' || c == '\n' || c == '\12';
 }
 #endif
 #include <stdarg.h>
@@ -77,41 +77,41 @@ isspace(char c)
 #include <sys/param.h>
 #include <sys/systm.h>
 
-#define	BUF		32 	/* Maximum length of numeric string. */
+#define BUF             32      /* Maximum length of numeric string. */
 
 /*
  * Flags used during conversion.
  */
-#define	LONG		0x01	/* l: long or double */
-#define	SHORT		0x04	/* h: short */
-#define	SUPPRESS	0x08	/* *: suppress assignment */
-#define	POINTER		0x10	/* p: void * (as hex) */
-#define	NOSKIP		0x20	/* [ or c: do not skip blanks */
-#define	LONGLONG	0x400	/* ll: long long (+ deprecated q: quad) */
-#define	SHORTSHORT	0x4000	/* hh: char */
-#define	UNSIGNED	0x8000	/* %[oupxX] conversions */
+#define LONG            0x01    /* l: long or double */
+#define SHORT           0x04    /* h: short */
+#define SUPPRESS        0x08    /* *: suppress assignment */
+#define POINTER         0x10    /* p: void * (as hex) */
+#define NOSKIP          0x20    /* [ or c: do not skip blanks */
+#define LONGLONG        0x400   /* ll: long long (+ deprecated q: quad) */
+#define SHORTSHORT      0x4000  /* hh: char */
+#define UNSIGNED        0x8000  /* %[oupxX] conversions */
 
 /*
  * The following are used in numeric conversions only:
  * SIGNOK, NDIGITS, DPTOK, and EXPOK are for floating point;
  * SIGNOK, NDIGITS, PFXOK, and NZDIGITS are for integral.
  */
-#define	SIGNOK		0x40	/* +/- is (still) legal */
-#define	NDIGITS		0x80	/* no digits detected */
+#define SIGNOK          0x40    /* +/- is (still) legal */
+#define NDIGITS         0x80    /* no digits detected */
 
-#define	DPTOK		0x100	/* (float) decimal point is still legal */
-#define	EXPOK		0x200	/* (float) exponent (e+3, etc) still legal */
+#define DPTOK           0x100   /* (float) decimal point is still legal */
+#define EXPOK           0x200   /* (float) exponent (e+3, etc) still legal */
 
-#define	PFXOK		0x100	/* 0x prefix is (still) legal */
-#define	NZDIGITS	0x200	/* no zero digits detected */
+#define PFXOK           0x100   /* 0x prefix is (still) legal */
+#define NZDIGITS        0x200   /* no zero digits detected */
 
 /*
  * Conversion types.
  */
-#define	CT_CHAR		0	/* %c conversion */
-#define	CT_CCL		1	/* %[...] conversion */
-#define	CT_STRING	2	/* %s conversion */
-#define	CT_INT		3	/* %[dioupxX] conversion */
+#define CT_CHAR         0       /* %c conversion */
+#define CT_CCL          1       /* %[...] conversion */
+#define CT_STRING       2       /* %s conversion */
+#define CT_INT          3       /* %[dioupxX] conversion */
 
 static const u_char *__sccl(char *, const u_char *);
 
@@ -120,11 +120,11 @@ sscanf(const char *ibuf, const char *fmt, ...)
 {
 	va_list ap;
 	int ret;
-	
+
 	va_start(ap, fmt);
 	ret = vsscanf(ibuf, fmt, ap);
 	va_end(ap);
-	return(ret);
+	return ret;
 }
 
 int
@@ -132,33 +132,34 @@ vsscanf(const char *inp, char const *fmt0, va_list ap)
 {
 	int inr;
 	const u_char *fmt = (const u_char *)fmt0;
-	int c;			/* character from format, or conversion */
-	size_t width;		/* field width, or 0 */
-	char *p;		/* points into all kinds of strings */
-	int n;			/* handy integer */
-	int flags;		/* flags as defined above */
-	char *p0;		/* saves original value of p when necessary */
-	int nassigned;		/* number of fields assigned */
-	int nconversions;	/* number of conversions */
-	int nread;		/* number of characters consumed from fp */
-	int base;		/* base argument to conversion function */
-	char ccltab[256];	/* character class table for %[...] */
-	char buf[BUF];		/* buffer for numeric conversions */
+	int c;                  /* character from format, or conversion */
+	size_t width;           /* field width, or 0 */
+	char *p;                /* points into all kinds of strings */
+	int n;                  /* handy integer */
+	int flags;              /* flags as defined above */
+	char *p0;               /* saves original value of p when necessary */
+	int nassigned;          /* number of fields assigned */
+	int nconversions;       /* number of conversions */
+	int nread;              /* number of characters consumed from fp */
+	int base;               /* base argument to conversion function */
+	char ccltab[256];       /* character class table for %[...] */
+	char buf[BUF];          /* buffer for numeric conversions */
 
 	/* `basefix' is used to avoid `if' tests in the integer scanner */
 	static short basefix[17] =
-		{ 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
+	{ 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
 
 	inr = strlen(inp);
-	
+
 	nassigned = 0;
 	nconversions = 0;
 	nread = 0;
-	base = 0;		/* XXX just to keep gcc happy */
+	base = 0;               /* XXX just to keep gcc happy */
 	for (;;) {
 		c = *fmt++;
-		if (c == 0)
-			return (nassigned);
+		if (c == 0) {
+			return nassigned;
+		}
 		if (isspace(c)) {
 			while (inr > 0 && isspace(*inp)) {
 				nread++;
@@ -167,22 +168,25 @@ vsscanf(const char *inp, char const *fmt0, va_list ap)
 			}
 			continue;
 		}
-		if (c != '%')
+		if (c != '%') {
 			goto literal;
+		}
 		width = 0;
 		flags = 0;
 		/*
 		 * switch on the format.  continue if done;
 		 * break once format type is derived.
 		 */
-again:		c = *fmt++;
+again:          c = *fmt++;
 		switch (c) {
 		case '%':
 literal:
-			if (inr <= 0)
+			if (inr <= 0) {
 				goto input_failure;
-			if (*inp != c)
+			}
+			if (*inp != c) {
 				goto match_failure;
+			}
 			inr--;
 			inp++;
 			nread++;
@@ -195,18 +199,20 @@ literal:
 			if (flags & LONG) {
 				flags &= ~LONG;
 				flags |= LONGLONG;
-			} else
+			} else {
 				flags |= LONG;
+			}
 			goto again;
 		case 'q':
-			flags |= LONGLONG;	/* not quite */
+			flags |= LONGLONG;      /* not quite */
 			goto again;
 		case 'h':
 			if (flags & SHORT) {
 				flags &= ~SHORT;
 				flags |= SHORTSHORT;
-			} else
+			} else {
 				flags |= SHORT;
+			}
 			goto again;
 
 		case '0': case '1': case '2': case '3': case '4':
@@ -241,7 +247,7 @@ literal:
 
 		case 'X':
 		case 'x':
-			flags |= PFXOK;	/* enable 0x prefixing */
+			flags |= PFXOK; /* enable 0x prefixing */
 			c = CT_INT;
 			flags |= UNSIGNED;
 			base = 16;
@@ -262,7 +268,7 @@ literal:
 			c = CT_CHAR;
 			break;
 
-		case 'p':	/* pointer format is like hex */
+		case 'p':       /* pointer format is like hex */
 			flags |= POINTER | PFXOK;
 			c = CT_INT;
 			flags |= UNSIGNED;
@@ -271,26 +277,29 @@ literal:
 
 		case 'n':
 			nconversions++;
-			if (flags & SUPPRESS)	/* ??? */
+			if (flags & SUPPRESS) { /* ??? */
 				continue;
-			if (flags & SHORTSHORT)
+			}
+			if (flags & SHORTSHORT) {
 				*va_arg(ap, char *) = nread;
-			else if (flags & SHORT)
+			} else if (flags & SHORT) {
 				*va_arg(ap, short *) = nread;
-			else if (flags & LONG)
+			} else if (flags & LONG) {
 				*va_arg(ap, long *) = nread;
-			else if (flags & LONGLONG)
+			} else if (flags & LONGLONG) {
 				*va_arg(ap, long long *) = nread;
-			else
+			} else {
 				*va_arg(ap, int *) = nread;
+			}
 			continue;
 		}
 
 		/*
 		 * We have a conversion that requires input.
 		 */
-		if (inr <= 0)
+		if (inr <= 0) {
 			goto input_failure;
+		}
 
 		/*
 		 * Consume leading white space, except for formats
@@ -299,10 +308,11 @@ literal:
 		if ((flags & NOSKIP) == 0) {
 			while (isspace(*inp)) {
 				nread++;
-				if (--inr > 0)
+				if (--inr > 0) {
 					inp++;
-				else 
+				} else {
 					goto input_failure;
+				}
 			}
 			/*
 			 * Note that there is at least one character in
@@ -315,11 +325,11 @@ literal:
 		 * Do the conversion.
 		 */
 		switch (c) {
-
 		case CT_CHAR:
 			/* scan arbitrary characters (sets NOSKIP) */
-			if (width == 0)
+			if (width == 0) {
 				width = 1;
+			}
 			if (flags & SUPPRESS) {
 				size_t sum = 0;
 				for (;;) {
@@ -327,8 +337,9 @@ literal:
 						sum += n;
 						width -= n;
 						inp += n;
-						if (sum == 0)
+						if (sum == 0) {
 							goto input_failure;
+						}
 						break;
 					} else {
 						sum += width;
@@ -350,8 +361,9 @@ literal:
 
 		case CT_CCL:
 			/* scan a (nonempty) character class (sets NOSKIP) */
-			if (width == 0)
-				width = (size_t)~0;	/* `infinity' */
+			if (width == 0) {
+				width = (size_t)~0;     /* `infinity' */
+			}
 			/* take only those things in the class */
 			if (flags & SUPPRESS) {
 				n = 0;
@@ -359,32 +371,38 @@ literal:
 					n++;
 					inr--;
 					inp++;
-					if (--width == 0)
+					if (--width == 0) {
 						break;
+					}
 					if (inr <= 0) {
-						if (n == 0)
+						if (n == 0) {
 							goto input_failure;
+						}
 						break;
 					}
 				}
-				if (n == 0)
+				if (n == 0) {
 					goto match_failure;
+				}
 			} else {
 				p0 = p = va_arg(ap, char *);
 				while (ccltab[(unsigned char)*inp]) {
 					inr--;
 					*p++ = *inp++;
-					if (--width == 0)
+					if (--width == 0) {
 						break;
+					}
 					if (inr <= 0) {
-						if (p == p0)
+						if (p == p0) {
 							goto input_failure;
+						}
 						break;
 					}
 				}
 				n = p - p0;
-				if (n == 0)
+				if (n == 0) {
 					goto match_failure;
+				}
 				*p = 0;
 				nassigned++;
 			}
@@ -394,18 +412,21 @@ literal:
 
 		case CT_STRING:
 			/* like CCL, but zero-length string OK, & no NOSKIP */
-			if (width == 0)
+			if (width == 0) {
 				width = (size_t)~0;
+			}
 			if (flags & SUPPRESS) {
 				n = 0;
 				while (!isspace(*inp)) {
 					n++;
 					inr--;
 					inp++;
-					if (--width == 0)
+					if (--width == 0) {
 						break;
-					if (inr <= 0)
+					}
+					if (inr <= 0) {
 						break;
+					}
 				}
 				nread += n;
 			} else {
@@ -413,10 +434,12 @@ literal:
 				while (!isspace(*inp)) {
 					inr--;
 					*p++ = *inp++;
-					if (--width == 0)
+					if (--width == 0) {
 						break;
-					if (inr <= 0)
+					}
+					if (inr <= 0) {
 						break;
+					}
 				}
 				*p = 0;
 				nread += p - p0;
@@ -428,12 +451,14 @@ literal:
 		case CT_INT:
 			/* scan an integer as if by the conversion function */
 #ifdef hardway
-			if (width == 0 || width > sizeof(buf) - 1)
+			if (width == 0 || width > sizeof(buf) - 1) {
 				width = sizeof(buf) - 1;
+			}
 #else
 			/* size_t is unsigned, hence this optimisation */
-			if (--width > sizeof(buf) - 2)
+			if (--width > sizeof(buf) - 2) {
 				width = sizeof(buf) - 2;
+			}
 			width++;
 #endif
 			flags |= SIGNOK | NDIGITS | NZDIGITS;
@@ -444,7 +469,6 @@ literal:
 				 * if we accept it as a part of number.
 				 */
 				switch (c) {
-
 				/*
 				 * The digit 0 is always legal, but is
 				 * special.  For %i conversions, if no
@@ -462,10 +486,11 @@ literal:
 						base = 8;
 						flags |= PFXOK;
 					}
-					if (flags & NZDIGITS)
-					    flags &= ~(SIGNOK|NZDIGITS|NDIGITS);
-					else
-					    flags &= ~(SIGNOK|PFXOK|NDIGITS);
+					if (flags & NZDIGITS) {
+						flags &= ~(SIGNOK | NZDIGITS | NDIGITS);
+					} else {
+						flags &= ~(SIGNOK | PFXOK | NDIGITS);
+					}
 					goto ok;
 
 				/* 1 through 7 always legal */
@@ -478,8 +503,9 @@ literal:
 				/* digits 8 and 9 ok iff decimal or hex */
 				case '8': case '9':
 					base = basefix[base];
-					if (base <= 8)
-						break;	/* not legal here */
+					if (base <= 8) {
+						break;  /* not legal here */
+					}
 					flags &= ~(SIGNOK | PFXOK | NDIGITS);
 					goto ok;
 
@@ -489,8 +515,9 @@ literal:
 				case 'a': case 'b': case 'c':
 				case 'd': case 'e': case 'f':
 					/* no need to fix base here */
-					if (base <= 10)
-						break;	/* not legal here */
+					if (base <= 10) {
+						break;  /* not legal here */
+					}
 					flags &= ~(SIGNOK | PFXOK | NDIGITS);
 					goto ok;
 
@@ -505,7 +532,7 @@ literal:
 				/* x ok iff flag still set & 2nd char */
 				case 'x': case 'X':
 					if (flags & PFXOK && p == buf + 1) {
-						base = 16;	/* if %i */
+						base = 16;      /* if %i */
 						flags &= ~PFXOK;
 						goto ok;
 					}
@@ -517,15 +544,16 @@ literal:
 				 * for a number.  Stop accumulating digits.
 				 */
 				break;
-		ok:
+ok:
 				/*
 				 * c is legal: store it and look at the next.
 				 */
 				*p++ = c;
-				if (--inr > 0)
+				if (--inr > 0) {
 					inp++;
-				else 
-					break;		/* end of input */
+				} else {
+					break;          /* end of input */
+				}
 			}
 			/*
 			 * If we had only a sign, it is no good; push
@@ -550,35 +578,36 @@ literal:
 				u_quad_t res;
 
 				*p = 0;
-				if ((flags & UNSIGNED) == 0)
-				    res = strtoq(buf, (char **)NULL, base);
-				else
-				    res = strtouq(buf, (char **)NULL, base);
-				if (flags & POINTER)
+				if ((flags & UNSIGNED) == 0) {
+					res = strtoq(buf, (char **)NULL, base);
+				} else {
+					res = strtouq(buf, (char **)NULL, base);
+				}
+				if (flags & POINTER) {
 					*va_arg(ap, void **) =
-						(void *)(uintptr_t)res;
-				else if (flags & SHORTSHORT)
+					    (void *)(uintptr_t)res;
+				} else if (flags & SHORTSHORT) {
 					*va_arg(ap, char *) = res;
-				else if (flags & SHORT)
+				} else if (flags & SHORT) {
 					*va_arg(ap, short *) = res;
-				else if (flags & LONG)
+				} else if (flags & LONG) {
 					*va_arg(ap, long *) = res;
-				else if (flags & LONGLONG)
+				} else if (flags & LONGLONG) {
 					*va_arg(ap, long long *) = res;
-				else
+				} else {
 					*va_arg(ap, int *) = res;
+				}
 				nassigned++;
 			}
 			nread += p - buf;
 			nconversions++;
 			break;
-
 		}
 	}
 input_failure:
-	return (nconversions != 0 ? nassigned : -1);
+	return nconversions != 0 ? nassigned : -1;
 match_failure:
-	return (nassigned);
+	return nassigned;
 }
 
 /*
@@ -593,19 +622,19 @@ __sccl(char *tab, const u_char *fmt)
 	int c, n, v;
 
 	/* first `clear' the whole table */
-	c = *fmt++;		/* first char hat => negated scanset */
+	c = *fmt++;             /* first char hat => negated scanset */
 	if (c == '^') {
-		v = 1;		/* default => accept */
-		c = *fmt++;	/* get new first char */
-	} else
-		v = 0;		/* default => reject */
-
+		v = 1;          /* default => accept */
+		c = *fmt++;     /* get new first char */
+	} else {
+		v = 0;          /* default => reject */
+	}
 	/* XXX: Will not work if sizeof(tab*) > sizeof(char) */
 	(void) memset(tab, v, 256);
 
-	if (c == 0)
-		return (fmt - 1);/* format ended before closing ] */
-
+	if (c == 0) {
+		return fmt - 1;/* format ended before closing ] */
+	}
 	/*
 	 * Now set the entries corresponding to the actual scanset
 	 * to the opposite of the above.
@@ -615,13 +644,12 @@ __sccl(char *tab, const u_char *fmt)
 	 */
 	v = 1 - v;
 	for (;;) {
-		tab[c] = v;		/* take character c */
+		tab[c] = v;             /* take character c */
 doswitch:
-		n = *fmt++;		/* and examine the next */
+		n = *fmt++;             /* and examine the next */
 		switch (n) {
-
-		case 0:			/* format ended too soon */
-			return (fmt - 1);
+		case 0:                 /* format ended too soon */
+			return fmt - 1;
 
 		case '-':
 			/*
@@ -645,12 +673,12 @@ doswitch:
 			n = *fmt;
 			if (n == ']' || n < c) {
 				c = '-';
-				break;	/* resume the for(;;) */
+				break;  /* resume the for(;;) */
 			}
 			fmt++;
 			/* fill in the range */
 			do {
-			    tab[++c] = v;
+				tab[++c] = v;
 			} while (c < n);
 			c = n;
 			/*
@@ -660,10 +688,10 @@ doswitch:
 			 */
 			goto doswitch;
 
-		case ']':		/* end of scanset */
-			return (fmt);
+		case ']':               /* end of scanset */
+			return fmt;
 
-		default:		/* just another character */
+		default:                /* just another character */
 			c = n;
 			break;
 		}

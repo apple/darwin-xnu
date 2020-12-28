@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2005-2008 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2005-2018 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,24 +22,17 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#define MACH__POSIX_C_SOURCE_PRIVATE 1	/* pulls in suitable savearea from
-					 * mach/ppc/thread_status.h */
 #include <arm/caches_internal.h>
-#include <arm/proc_reg.h>
-
 #include <kern/thread.h>
-#include <mach/thread_status.h>
 
 #if __has_include(<ptrauth.h>)
 #include <ptrauth.h>
 #endif
 #include <stdarg.h>
-#include <string.h>
-#include <sys/malloc.h>
 #include <sys/time.h>
 #include <sys/systm.h>
 #include <sys/proc.h>
@@ -47,22 +40,24 @@
 #include <sys/kauth.h>
 #include <sys/dtrace.h>
 #include <sys/dtrace_impl.h>
-#include <libkern/OSAtomic.h>
+#include <machine/atomic.h>
 #include <kern/simple_lock.h>
-#include <kern/sched_prim.h>		/* for thread_wakeup() */
+#include <kern/sched_prim.h>            /* for thread_wakeup() */
 #include <kern/thread_call.h>
 #include <kern/task.h>
-#include <miscfs/devfs/devfs.h>
-#include <mach/vm_param.h>
 
 extern struct arm_saved_state *find_kern_regs(thread_t);
 
 extern dtrace_id_t      dtrace_probeid_error;   /* special ERROR probe */
 typedef arm_saved_state_t savearea_t;
 
-extern lck_attr_t	*dtrace_lck_attr;
-extern lck_grp_t 	*dtrace_lck_grp;
+extern lck_attr_t       *dtrace_lck_attr;
+extern lck_grp_t        *dtrace_lck_grp;
 
+#if XNU_MONITOR
+extern void * pmap_stacks_start;
+extern void * pmap_stacks_end;
+#endif
 
 struct frame {
 	struct frame *backchain;
@@ -76,9 +71,9 @@ inline void
 dtrace_membar_producer(void)
 {
 #if __ARM_SMP__
-	__asm__ volatile("dmb ish" : : : "memory");
+	__asm__ volatile ("dmb ish" : : : "memory");
 #else
-	__asm__ volatile("nop" : : : "memory");
+	__asm__ volatile ("nop" : : : "memory");
 #endif
 }
 
@@ -86,9 +81,9 @@ inline void
 dtrace_membar_consumer(void)
 {
 #if __ARM_SMP__
-	__asm__ volatile("dmb ish" : : : "memory");
+	__asm__ volatile ("dmb ish" : : : "memory");
 #else
-	__asm__ volatile("nop" : : : "memory");
+	__asm__ volatile ("nop" : : : "memory");
 #endif
 }
 
@@ -104,7 +99,7 @@ dtrace_getipl(void)
 	 * in osfmk/kern/cpu_data.h
 	 */
 	/* return get_interrupt_level(); */
-	return (ml_at_interrupt_context() ? 1 : 0);
+	return ml_at_interrupt_context() ? 1 : 0;
 }
 
 #if __ARM_SMP__
@@ -126,11 +121,13 @@ xcRemote(void *foo)
 {
 	xcArg_t *pArg = (xcArg_t *) foo;
 
-	if (pArg->cpu == CPU->cpu_id || pArg->cpu == DTRACE_CPUALL)
-		(pArg->f) (pArg->arg);
+	if (pArg->cpu == CPU->cpu_id || pArg->cpu == DTRACE_CPUALL) {
+		(pArg->f)(pArg->arg);
+	}
 
-	if (hw_atomic_sub(&dt_xc_sync, 1) == 0)
+	if (os_atomic_dec(&dt_xc_sync, relaxed) == 0) {
 		thread_wakeup((event_t) &dt_xc_sync);
+	}
 }
 #endif
 
@@ -178,12 +175,6 @@ dtrace_isa_init(void)
 /**
  * Register definitions
  */
-#define ARM_FP 7
-#define ARM_SP 13
-#define ARM_LR 14
-#define ARM_PC 15
-#define ARM_CPSR 16
-
 #define ARM64_FP 29
 #define ARM64_LR 30
 #define ARM64_SP 31
@@ -200,48 +191,25 @@ dtrace_getreg(struct regs * savearea, uint_t reg)
 
 	if (regs == NULL) {
 		DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
-		return (0);
-	}
-
-	if (is_saved_state32(regs)) {
-		// Fix special registers if user is 32 bits
-		switch (reg) {
-			case ARM64_FP:
-				reg = ARM_FP;
-			break;
-			case ARM64_SP:
-				reg = ARM_SP;
-			break;
-			case ARM64_LR:
-				reg = ARM_LR;
-			break;
-			case ARM64_PC:
-				reg = ARM_PC;
-			break;
-			case ARM64_CPSR:
-				reg = ARM_CPSR;
-			break;
-		}
+		return 0;
 	}
 
 	if (!check_saved_state_reglimit(regs, reg)) {
 		DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
-		return (0);
+		return 0;
 	}
 
-	return ((uint64_t)get_saved_state_reg(regs, reg));
+	return (uint64_t)get_saved_state_reg(regs, reg);
 }
 
-#define RETURN_OFFSET 4
 #define RETURN_OFFSET64 8
 
 static int
 dtrace_getustack_common(uint64_t * pcstack, int pcstack_limit, user_addr_t pc,
-			user_addr_t sp)
+    user_addr_t sp)
 {
 	int ret = 0;
-	boolean_t is64bit = proc_is64bit_data(current_proc());
-	
+
 	ASSERT(pcstack == NULL || pcstack_limit > 0);
 
 	while (pc != 0) {
@@ -249,23 +217,20 @@ dtrace_getustack_common(uint64_t * pcstack, int pcstack_limit, user_addr_t pc,
 		if (pcstack != NULL) {
 			*pcstack++ = (uint64_t) pc;
 			pcstack_limit--;
-			if (pcstack_limit <= 0)
+			if (pcstack_limit <= 0) {
 				break;
+			}
 		}
 
-		if (sp == 0)
+		if (sp == 0) {
 			break;
-
-		if (is64bit) {
-			pc = dtrace_fuword64((sp + RETURN_OFFSET64));
-			sp = dtrace_fuword64(sp);
-		} else {
-			pc = dtrace_fuword32((sp + RETURN_OFFSET));
-			sp = dtrace_fuword32(sp);
 		}
+
+		pc = dtrace_fuword64((sp + RETURN_OFFSET64));
+		sp = dtrace_fuword64(sp);
 	}
 
-	return (ret);
+	return ret;
 }
 
 void
@@ -274,40 +239,46 @@ dtrace_getupcstack(uint64_t * pcstack, int pcstack_limit)
 	thread_t        thread = current_thread();
 	savearea_t     *regs;
 	user_addr_t     pc, sp, fp;
-	volatile uint16_t *flags = (volatile uint16_t *) & cpu_core[CPU->cpu_id].cpuc_dtrace_flags;
+	volatile uint16_t *flags = (volatile uint16_t *) &cpu_core[CPU->cpu_id].cpuc_dtrace_flags;
 	int n;
 
-	if (*flags & CPU_DTRACE_FAULT)
+	if (*flags & CPU_DTRACE_FAULT) {
 		return;
+	}
 
-	if (pcstack_limit <= 0)
+	if (pcstack_limit <= 0) {
 		return;
+	}
 
 	/*
 	 * If there's no user context we still need to zero the stack.
 	 */
-	if (thread == NULL)
+	if (thread == NULL) {
 		goto zero;
+	}
 
 	regs = (savearea_t *) find_user_regs(thread);
-	if (regs == NULL)
+	if (regs == NULL) {
 		goto zero;
+	}
 
 	*pcstack++ = (uint64_t)dtrace_proc_selfpid();
 	pcstack_limit--;
 
-	if (pcstack_limit <= 0)
+	if (pcstack_limit <= 0) {
 		return;
+	}
 
 	pc = get_saved_state_pc(regs);
 	sp = get_saved_state_sp(regs);
-	fp = get_saved_state_fp(regs);	
+	fp = get_saved_state_fp(regs);
 
 	if (DTRACE_CPUFLAG_ISSET(CPU_DTRACE_ENTRY)) {
 		*pcstack++ = (uint64_t) pc;
 		pcstack_limit--;
-		if (pcstack_limit <= 0)
+		if (pcstack_limit <= 0) {
 			return;
+		}
 
 		pc = get_saved_state_lr(regs);
 	}
@@ -321,8 +292,9 @@ dtrace_getupcstack(uint64_t * pcstack, int pcstack_limit)
 	pcstack_limit -= n;
 
 zero:
-	while (pcstack_limit-- > 0)
+	while (pcstack_limit-- > 0) {
 		*pcstack++ = 0ULL;
+	}
 }
 
 int
@@ -333,16 +305,19 @@ dtrace_getustackdepth(void)
 	user_addr_t     pc, sp, fp;
 	int             n = 0;
 
-	if (thread == NULL)
+	if (thread == NULL) {
 		return 0;
+	}
 
-	if (DTRACE_CPUFLAG_ISSET(CPU_DTRACE_FAULT))
-		return (-1);
+	if (DTRACE_CPUFLAG_ISSET(CPU_DTRACE_FAULT)) {
+		return -1;
+	}
 
 	regs = (savearea_t *) find_user_regs(thread);
-	if (regs == NULL)
+	if (regs == NULL) {
 		return 0;
-	
+	}
+
 	pc = get_saved_state_pc(regs);
 	sp = get_saved_state_sp(regs);
 	fp = get_saved_state_fp(regs);
@@ -358,10 +333,10 @@ dtrace_getustackdepth(void)
 	 * traces from the sp, even in syscall/profile/fbt
 	 * providers.
 	 */
-	
+
 	n += dtrace_getustack_common(NULL, 0, pc, fp);
 
-	return (n);
+	return n;
 }
 
 void
@@ -371,39 +346,40 @@ dtrace_getufpstack(uint64_t * pcstack, uint64_t * fpstack, int pcstack_limit)
 	boolean_t       is64bit = proc_is64bit_data(current_proc());
 	savearea_t      *regs;
 	user_addr_t     pc, sp;
-	volatile        uint16_t  *flags = (volatile uint16_t *) & cpu_core[CPU->cpu_id].cpuc_dtrace_flags;
+	volatile        uint16_t  *flags = (volatile uint16_t *) &cpu_core[CPU->cpu_id].cpuc_dtrace_flags;
 
-#if 0
-	uintptr_t oldcontext;
-	size_t          s1, s2;
-#endif
 
-	if (*flags & CPU_DTRACE_FAULT)
+	if (*flags & CPU_DTRACE_FAULT) {
 		return;
+	}
 
-	if (pcstack_limit <= 0)
+	if (pcstack_limit <= 0) {
 		return;
+	}
 
-        /*
+	/*
 	 * If there's no user context we still need to zero the stack.
 	 */
-	if (thread == NULL)
+	if (thread == NULL) {
 		goto zero;
-	
+	}
+
 	regs = (savearea_t *) find_user_regs(thread);
-	if (regs == NULL)
+	if (regs == NULL) {
 		goto zero;
+	}
 
 	*pcstack++ = (uint64_t)dtrace_proc_selfpid();
 	pcstack_limit--;
 
-	if (pcstack_limit <= 0)
+	if (pcstack_limit <= 0) {
 		return;
+	}
 
 	pc = get_saved_state_pc(regs);
 	sp = get_saved_state_lr(regs);
 
-#if 0				/* XXX signal stack crawl */
+#if 0                           /* XXX signal stack crawl */
 	oldcontext = lwp->lwp_oldcontext;
 
 	if (p->p_model == DATAMODEL_NATIVE) {
@@ -419,22 +395,25 @@ dtrace_getufpstack(uint64_t * pcstack, uint64_t * fpstack, int pcstack_limit)
 		*pcstack++ = (uint64_t) pc;
 		*fpstack++ = 0;
 		pcstack_limit--;
-		if (pcstack_limit <= 0)
+		if (pcstack_limit <= 0) {
 			return;
+		}
 
-		if (is64bit)
+		if (is64bit) {
 			pc = dtrace_fuword64(sp);
-		else
+		} else {
 			pc = dtrace_fuword32(sp);
+		}
 	}
 	while (pc != 0 && sp != 0) {
 		*pcstack++ = (uint64_t) pc;
 		*fpstack++ = sp;
 		pcstack_limit--;
-		if (pcstack_limit <= 0)
+		if (pcstack_limit <= 0) {
 			break;
+		}
 
-#if 0				/* XXX signal stack crawl */
+#if 0                           /* XXX signal stack crawl */
 		if (oldcontext == sp + s1 || oldcontext == sp + s2) {
 			if (p->p_model == DATAMODEL_NATIVE) {
 				ucontext_t     *ucp = (ucontext_t *) oldcontext;
@@ -456,13 +435,8 @@ dtrace_getufpstack(uint64_t * pcstack, uint64_t * fpstack, int pcstack_limit)
 		} else
 #endif
 		{
-			if (is64bit) {
-				pc = dtrace_fuword64((sp + RETURN_OFFSET64));
-				sp = dtrace_fuword64(sp);
-			} else {
-				pc = dtrace_fuword32((sp + RETURN_OFFSET));
-				sp = dtrace_fuword32(sp);
-			}
+			pc = dtrace_fuword64((sp + RETURN_OFFSET64));
+			sp = dtrace_fuword64(sp);
 		}
 
 #if 0
@@ -479,35 +453,55 @@ dtrace_getufpstack(uint64_t * pcstack, uint64_t * fpstack, int pcstack_limit)
 #endif
 	}
 
-zero:	
-	while (pcstack_limit-- > 0)
+zero:
+	while (pcstack_limit-- > 0) {
 		*pcstack++ = 0ULL;
+	}
 }
 
+#if XNU_MONITOR
+static inline boolean_t
+dtrace_frame_in_ppl_stack(struct frame * fp)
+{
+	return ((void *)fp >= pmap_stacks_start) &&
+	       ((void *)fp < pmap_stacks_end);
+}
+#endif
 
 void
 dtrace_getpcstack(pc_t * pcstack, int pcstack_limit, int aframes,
-		  uint32_t * intrpc)
+    uint32_t * intrpc)
 {
 	struct frame   *fp = (struct frame *) __builtin_frame_address(0);
 	struct frame   *nextfp, *minfp, *stacktop;
 	int             depth = 0;
 	int             on_intr;
+#if XNU_MONITOR
+	int             on_ppl_stack;
+#endif
 	int             last = 0;
 	uintptr_t       pc;
 	uintptr_t       caller = CPU->cpu_dtrace_caller;
 
-	if ((on_intr = CPU_ON_INTR(CPU)) != 0)
+	if ((on_intr = CPU_ON_INTR(CPU)) != 0) {
 		stacktop = (struct frame *) dtrace_get_cpu_int_stack_top();
-	else
+	}
+#if XNU_MONITOR
+	else if ((on_ppl_stack = dtrace_frame_in_ppl_stack(fp))) {
+		stacktop = (struct frame *) pmap_stacks_end;
+	}
+#endif
+	else {
 		stacktop = (struct frame *) (dtrace_get_kernel_stack(current_thread()) + kernel_stack_size);
+	}
 
 	minfp = fp;
 
 	aframes++;
 
-	if (intrpc != NULL && depth < pcstack_limit)
+	if (intrpc != NULL && depth < pcstack_limit) {
 		pcstack[depth++] = (pc_t) intrpc;
+	}
 
 	while (depth < pcstack_limit) {
 		nextfp = *(struct frame **) fp;
@@ -522,6 +516,14 @@ dtrace_getpcstack(pc_t * pcstack, int pcstack_limit, int aframes,
 				if (arm_kern_regs) {
 					nextfp = (struct frame *)(saved_state64(arm_kern_regs)->fp);
 
+#if XNU_MONITOR
+					on_ppl_stack = dtrace_frame_in_ppl_stack(nextfp);
+
+					if (on_ppl_stack) {
+						minfp = pmap_stacks_start;
+						stacktop = pmap_stacks_end;
+					} else
+#endif
 					{
 						vm_offset_t kstack_base = dtrace_get_kernel_stack(current_thread());
 
@@ -543,6 +545,30 @@ dtrace_getpcstack(pc_t * pcstack, int pcstack_limit, int aframes,
 					last = 1;
 				}
 			} else {
+#if XNU_MONITOR
+				if ((!on_ppl_stack) && dtrace_frame_in_ppl_stack(nextfp)) {
+					/*
+					 * We are switching from the kernel stack
+					 * to the PPL stack.
+					 */
+					on_ppl_stack = 1;
+					minfp = pmap_stacks_start;
+					stacktop = pmap_stacks_end;
+				} else if (on_ppl_stack) {
+					/*
+					 * We could be going from the PPL stack
+					 * to the kernel stack.
+					 */
+					vm_offset_t kstack_base = dtrace_get_kernel_stack(current_thread());
+
+					minfp = (struct frame *)kstack_base;
+					stacktop = (struct frame *)(kstack_base + kernel_stack_size);
+
+					if (nextfp <= minfp || nextfp >= stacktop) {
+						last = 1;
+					}
+				} else
+#endif
 				{
 					/*
 					 * This is the last frame we can process; indicate
@@ -564,38 +590,19 @@ dtrace_getpcstack(pc_t * pcstack, int pcstack_limit, int aframes,
 				caller = (uintptr_t)NULL;
 			}
 		} else {
-			if (depth < pcstack_limit)
+			if (depth < pcstack_limit) {
 				pcstack[depth++] = (pc_t) pc;
+			}
 		}
 
 		if (last) {
-			while (depth < pcstack_limit)
+			while (depth < pcstack_limit) {
 				pcstack[depth++] = (pc_t) NULL;
+			}
 			return;
 		}
 		fp = nextfp;
 		minfp = fp;
-	}
-}
-
-/*
- * On arm64, we support both 32bit and 64bit user processes.
- * This routine is only called when handling 32bit processes
- * where thumb_mode is pertinent.
- * If this routine is called when handling 64bit processes
- * thumb_mode should always be zero.
- */
-int
-dtrace_instr_size(uint32_t instr, int thumb_mode)
-{
-	if (thumb_mode) {
-		uint16_t instr16 = *(uint16_t*) &instr;
-		if (((instr16 >> 11) & 0x1F) > 0x1C)
-			return 4;
-		else
-			return 2;
-	} else {
-		return 4;
 	}
 }
 
@@ -624,16 +631,15 @@ dtrace_getarg(int arg, int aframes, dtrace_mstate_t *mstate, dtrace_vstate_t *vs
 #endif
 
 		if (dtrace_invop_callsite_pre != NULL
-		    && pc >  (uintptr_t) dtrace_invop_callsite_pre
-		    && pc <= (uintptr_t) dtrace_invop_callsite_post)
-		{
+		    && pc > (uintptr_t) dtrace_invop_callsite_pre
+		    && pc <= (uintptr_t) dtrace_invop_callsite_post) {
 			/* fp points to frame of dtrace_invop() activation */
 			fp = fp->backchain; /* to fbt_perfCallback activation */
 			fp = fp->backchain; /* to sleh_synchronous activation */
 			fp = fp->backchain; /* to fleh_synchronous activation */
 
-			arm_saved_state_t	*tagged_regs = (arm_saved_state_t*) ((void*) &fp[1]);
-			arm_saved_state64_t	*saved_state = saved_state64(tagged_regs);
+			arm_saved_state_t       *tagged_regs = (arm_saved_state_t*) ((void*) &fp[1]);
+			arm_saved_state64_t     *saved_state = saved_state64(tagged_regs);
 
 			if (arg <= inreg) {
 				/* the argument will be found in a register */
@@ -665,7 +671,7 @@ dtrace_getarg(int arg, int aframes, dtrace_mstate_t *mstate, dtrace_vstate_t *vs
 		 * register...
 		 */
 		DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
-		return (0);
+		return 0;
 	}
 
 	arg -= (inreg + 1);
@@ -673,17 +679,17 @@ dtrace_getarg(int arg, int aframes, dtrace_mstate_t *mstate, dtrace_vstate_t *vs
 
 load:
 	if (dtrace_canload((uint64_t)(stack + arg), sizeof(uint64_t),
-		mstate, vstate)) {
+	    mstate, vstate)) {
 		/* dtrace_probe arguments arg0 ... arg4 are 64bits wide */
 		val = dtrace_load64((uint64_t)(stack + arg));
 	}
 
-	return (val);
+	return val;
 }
 
 void
 dtrace_probe_error(dtrace_state_t *state, dtrace_epid_t epid, int which,
-		int fltoffs, int fault, uint64_t illval)
+    int fltoffs, int fault, uint64_t illval)
 {
 	/* XXX ARMTODO */
 	/*
@@ -698,16 +704,18 @@ void
 dtrace_toxic_ranges(void (*func)(uintptr_t base, uintptr_t limit))
 {
 	/* XXX ARMTODO check copied from ppc/x86*/
- 	/*
+	/*
 	 * "base" is the smallest toxic address in the range, "limit" is the first
 	 * VALID address greater than "base".
-	 */ 
+	 */
 	func(0x0, VM_MIN_KERNEL_ADDRESS);
-	if (VM_MAX_KERNEL_ADDRESS < ~(uintptr_t)0)
-			func(VM_MAX_KERNEL_ADDRESS + 1, ~(uintptr_t)0);
+	if (VM_MAX_KERNEL_ADDRESS < ~(uintptr_t)0) {
+		func(VM_MAX_KERNEL_ADDRESS + 1, ~(uintptr_t)0);
+	}
 }
 
-void dtrace_flush_caches(void)
+void
+dtrace_flush_caches(void)
 {
 	/* TODO There were some problems with flushing just the cache line that had been modified.
 	 * For now, we'll flush the entire cache, until we figure out how to flush just the patched block.
@@ -715,4 +723,3 @@ void dtrace_flush_caches(void)
 	FlushPoU_Dcache();
 	InvalidatePoU_Icache();
 }
-

@@ -1620,7 +1620,6 @@ dummynet_io(struct mbuf *m, int pipe_nr, int dir, struct ip_fw_args *fwa, int cl
 		}
 		pkt->dn_origifp = fwa->fwa_origifp;
 		pkt->dn_mtu = fwa->fwa_mtu;
-		pkt->dn_alwaysfrag = fwa->fwa_alwaysfrag;
 		pkt->dn_unfragpartlen = fwa->fwa_unfragpartlen;
 		if (fwa->fwa_exthdrs) {
 			bcopy (fwa->fwa_exthdrs, &pkt->dn_exthdrs, sizeof(pkt->dn_exthdrs));

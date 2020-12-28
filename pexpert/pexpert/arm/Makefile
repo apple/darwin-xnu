@@ -11,6 +11,7 @@ DATAFILES = \
 	board_config.h \
 	boot.h \
 	consistent_debug.h \
+	dockchannel.h \
 	PL192_VIC.h \
 	protos.h \
 	S3cUART.h \

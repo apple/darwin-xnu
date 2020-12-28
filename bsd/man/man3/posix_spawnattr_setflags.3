@@ -125,7 +125,7 @@ To resume the child process, it must be sent a
 signal.
 .It Dv POSIX_SPAWN_CLOEXEC_DEFAULT
 .Em Apple Extension :
-If this bit is set, then only file descriptors explicitly described by the
+If this bit is set, then only file descriptors explicitly created by the
 .Fa file_actions
 argument are available in the spawned process; all of the other file descriptors
 are automatically closed in the spawned process.

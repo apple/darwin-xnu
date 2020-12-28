@@ -45,9 +45,10 @@ static kern_return_t kcdata_get_memory_addr_with_flavor(kcdata_descriptor_t data
  * num_items items of known types with overall length payload_size.
  *
  * NOTE: This function will not give an accurate estimate for buffers that will
- * 	 contain unknown types (those with string descriptions).
+ *       contain unknown types (those with string descriptions).
  */
-uint32_t kcdata_estimate_required_buffer_size(uint32_t num_items, uint32_t payload_size)
+uint32_t
+kcdata_estimate_required_buffer_size(uint32_t num_items, uint32_t payload_size)
 {
 	/*
 	 * In the worst case each item will need (KCDATA_ALIGNMENT_SIZE - 1) padding
@@ -59,7 +60,8 @@ uint32_t kcdata_estimate_required_buffer_size(uint32_t num_items, uint32_t paylo
 	return max_padding_bytes + item_description_bytes + begin_and_end_marker_bytes + payload_size;
 }
 
-kcdata_descriptor_t kcdata_memory_alloc_init(mach_vm_address_t buffer_addr_p, unsigned data_type, unsigned size, unsigned flags)
+kcdata_descriptor_t
+kcdata_memory_alloc_init(mach_vm_address_t buffer_addr_p, unsigned data_type, unsigned size, unsigned flags)
 {
 	kcdata_descriptor_t data = NULL;
 	mach_vm_address_t user_addr = 0;
@@ -75,7 +77,7 @@ kcdata_descriptor_t kcdata_memory_alloc_init(mach_vm_address_t buffer_addr_p, un
 	data->kcd_length = size;
 
 	/* Initialize the BEGIN header */
-	if (KERN_SUCCESS != kcdata_get_memory_addr(data, data_type, 0, &user_addr)){
+	if (KERN_SUCCESS != kcdata_get_memory_addr(data, data_type, 0, &user_addr)) {
 		kcdata_memory_destroy(data);
 		return NULL;
 	}
@@ -83,7 +85,8 @@ kcdata_descriptor_t kcdata_memory_alloc_init(mach_vm_address_t buffer_addr_p, un
 	return data;
 }
 
-kern_return_t kcdata_memory_static_init(kcdata_descriptor_t data, mach_vm_address_t buffer_addr_p, unsigned data_type, unsigned size, unsigned flags)
+kern_return_t
+kcdata_memory_static_init(kcdata_descriptor_t data, mach_vm_address_t buffer_addr_p, unsigned data_type, unsigned size, unsigned flags)
 {
 	mach_vm_address_t user_addr = 0;
 
@@ -100,7 +103,8 @@ kern_return_t kcdata_memory_static_init(kcdata_descriptor_t data, mach_vm_addres
 	return kcdata_get_memory_addr(data, data_type, 0, &user_addr);
 }
 
-void *kcdata_memory_get_begin_addr(kcdata_descriptor_t data)
+void *
+kcdata_memory_get_begin_addr(kcdata_descriptor_t data)
 {
 	if (data == NULL) {
 		return NULL;
@@ -109,7 +113,8 @@ void *kcdata_memory_get_begin_addr(kcdata_descriptor_t data)
 	return (void *)data->kcd_addr_begin;
 }
 
-uint64_t kcdata_memory_get_used_bytes(kcdata_descriptor_t kcd)
+uint64_t
+kcdata_memory_get_used_bytes(kcdata_descriptor_t kcd)
 {
 	assert(kcd != NULL);
 	return ((uint64_t)kcd->kcd_addr_end - (uint64_t)kcd->kcd_addr_begin) + sizeof(struct kcdata_item);
@@ -118,7 +123,8 @@ uint64_t kcdata_memory_get_used_bytes(kcdata_descriptor_t kcd)
 /*
  * Free up the memory associated with kcdata
  */
-kern_return_t kcdata_memory_destroy(kcdata_descriptor_t data)
+kern_return_t
+kcdata_memory_destroy(kcdata_descriptor_t data)
 {
 	if (!data) {
 		return KERN_INVALID_ARGUMENT;
@@ -178,12 +184,13 @@ kcdata_write_buffer_end(kcdata_descriptor_t data)
  * Desc: internal function with flags field. See documentation for kcdata_get_memory_addr for details
  */
 
-static kern_return_t kcdata_get_memory_addr_with_flavor(
-		kcdata_descriptor_t data,
-		uint32_t type,
-		uint32_t size,
-		uint64_t flags,
-		mach_vm_address_t *user_addr)
+static kern_return_t
+kcdata_get_memory_addr_with_flavor(
+	kcdata_descriptor_t data,
+	uint32_t type,
+	uint32_t size,
+	uint64_t flags,
+	mach_vm_address_t *user_addr)
 {
 	kern_return_t kr;
 	struct kcdata_item info;
@@ -205,20 +212,22 @@ static kern_return_t kcdata_get_memory_addr_with_flavor(
 
 	/* check available memory, including trailer size for KCDATA_TYPE_BUFFER_END */
 	if (total_size + sizeof(info) > data->kcd_length ||
-		data->kcd_length - (total_size + sizeof(info)) < data->kcd_addr_end - data->kcd_addr_begin) {
+	    data->kcd_length - (total_size + sizeof(info)) < data->kcd_addr_end - data->kcd_addr_begin) {
 		return KERN_RESOURCE_SHORTAGE;
 	}
 
 	kr = kcdata_memcpy(data, data->kcd_addr_end, &info, sizeof(info));
-	if (kr)
+	if (kr) {
 		return kr;
+	}
 
 	data->kcd_addr_end += sizeof(info);
 
 	if (padding) {
 		kr = kcdata_bzero(data, data->kcd_addr_end + size - padding, padding);
-		if (kr)
+		if (kr) {
 			return kr;
+		}
 	}
 
 	*user_addr = data->kcd_addr_end;
@@ -245,12 +254,13 @@ static kern_return_t kcdata_get_memory_addr_with_flavor(
  * returns: mach_vm_address_t address in user memory for copyout().
  */
 
-kern_return_t kcdata_get_memory_addr_for_array(
-		kcdata_descriptor_t data,
-		uint32_t type_of_element,
-		uint32_t size_of_element,
-		uint32_t count,
-		mach_vm_address_t *user_addr)
+kern_return_t
+kcdata_get_memory_addr_for_array(
+	kcdata_descriptor_t data,
+	uint32_t type_of_element,
+	uint32_t size_of_element,
+	uint32_t count,
+	mach_vm_address_t *user_addr)
 {
 	/* for arrays we record the number of padding bytes as the low-order 4 bits
 	 * of the type field.  KCDATA_TYPE_ARRAY_PAD{x} means x bytes of pad. */
@@ -272,22 +282,25 @@ kern_return_t kcdata_get_memory_addr_for_array(
  * returns: return value of kcdata_get_memory_addr()
  */
 
-kern_return_t kcdata_add_container_marker(
-		kcdata_descriptor_t data,
-		uint32_t header_type,
-		uint32_t container_type,
-		uint64_t identifier)
+kern_return_t
+kcdata_add_container_marker(
+	kcdata_descriptor_t data,
+	uint32_t header_type,
+	uint32_t container_type,
+	uint64_t identifier)
 {
 	mach_vm_address_t user_addr;
 	kern_return_t kr;
 	assert(header_type == KCDATA_TYPE_CONTAINER_END || header_type == KCDATA_TYPE_CONTAINER_BEGIN);
 	uint32_t data_size = (header_type == KCDATA_TYPE_CONTAINER_BEGIN)? sizeof(uint32_t): 0;
 	kr = kcdata_get_memory_addr_with_flavor(data, header_type, data_size, identifier, &user_addr);
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
 		return kr;
+	}
 
-	if (data_size)
+	if (data_size) {
 		kr = kcdata_memcpy(data, user_addr, &container_type, data_size);
+	}
 	return kr;
 }
 
@@ -323,11 +336,13 @@ kcdata_undo_add_container_begin(kcdata_descriptor_t data)
  * returns: KERN_NO_ACCESS if copyout fails.
  */
 
-kern_return_t kcdata_memcpy(kcdata_descriptor_t data, mach_vm_address_t dst_addr, const void *src_addr, uint32_t size)
+kern_return_t
+kcdata_memcpy(kcdata_descriptor_t data, mach_vm_address_t dst_addr, const void *src_addr, uint32_t size)
 {
 	if (data->kcd_flags & KCFLAG_USE_COPYOUT) {
-		if (copyout(src_addr, dst_addr, size))
+		if (copyout(src_addr, dst_addr, size)) {
 			return KERN_NO_ACCESS;
+		}
 	} else {
 		memcpy((void *)dst_addr, src_addr, size);
 	}
@@ -347,8 +362,9 @@ kcdata_bzero(kcdata_descriptor_t data, mach_vm_address_t dst_addr, uint32_t size
 		while (size) {
 			uint32_t block_size = MIN(size, 16);
 			kr = copyout(&zeros, dst_addr, block_size);
-			if (kr)
+			if (kr) {
 				return KERN_NO_ACCESS;
+			}
 			size -= block_size;
 		}
 		return KERN_SUCCESS;
@@ -370,12 +386,13 @@ kcdata_bzero(kcdata_descriptor_t data, mach_vm_address_t dst_addr, uint32_t size
  * returns: return code from kcdata_get_memory_addr in case of failure.
  */
 
-kern_return_t kcdata_add_type_definition(
-		kcdata_descriptor_t data,
-		uint32_t type_id,
-		char *type_name,
-		struct kcdata_subtype_descriptor *elements_array_addr,
-		uint32_t elements_count)
+kern_return_t
+kcdata_add_type_definition(
+	kcdata_descriptor_t data,
+	uint32_t type_id,
+	char *type_name,
+	struct kcdata_subtype_descriptor *elements_array_addr,
+	uint32_t elements_count)
 {
 	kern_return_t kr = KERN_SUCCESS;
 	struct kcdata_type_definition kc_type_definition;
@@ -383,8 +400,9 @@ kern_return_t kcdata_add_type_definition(
 	uint32_t total_size = sizeof(struct kcdata_type_definition);
 	bzero(&kc_type_definition, sizeof(kc_type_definition));
 
-	if (strlen(type_name) >= KCDATA_DESC_MAXLEN)
+	if (strlen(type_name) >= KCDATA_DESC_MAXLEN) {
 		return KERN_INVALID_ARGUMENT;
+	}
 	strlcpy(&kc_type_definition.kct_name[0], type_name, KCDATA_DESC_MAXLEN);
 	kc_type_definition.kct_num_elements = elements_count;
 	kc_type_definition.kct_type_identifier = type_id;
@@ -392,13 +410,16 @@ kern_return_t kcdata_add_type_definition(
 	total_size += elements_count * sizeof(struct kcdata_subtype_descriptor);
 	/* record number of padding bytes as lower 4 bits of flags */
 	if (KERN_SUCCESS != (kr = kcdata_get_memory_addr_with_flavor(data, KCDATA_TYPE_TYPEDEFINTION, total_size,
-	                                                             kcdata_calc_padding(total_size), &user_addr)))
+	    kcdata_calc_padding(total_size), &user_addr))) {
 		return kr;
-	if (KERN_SUCCESS != (kr = kcdata_memcpy(data, user_addr, (void *)&kc_type_definition, sizeof(struct kcdata_type_definition))))
+	}
+	if (KERN_SUCCESS != (kr = kcdata_memcpy(data, user_addr, (void *)&kc_type_definition, sizeof(struct kcdata_type_definition)))) {
 		return kr;
+	}
 	user_addr += sizeof(struct kcdata_type_definition);
-	if (KERN_SUCCESS != (kr = kcdata_memcpy(data, user_addr, (void *)elements_array_addr, elements_count * sizeof(struct kcdata_subtype_descriptor))))
+	if (KERN_SUCCESS != (kr = kcdata_memcpy(data, user_addr, (void *)elements_array_addr, elements_count * sizeof(struct kcdata_subtype_descriptor)))) {
 		return kr;
+	}
 	return kr;
 }
 
@@ -420,8 +441,9 @@ struct _uint32_with_description_data {
 kern_return_t
 kcdata_add_uint64_with_description(kcdata_descriptor_t data_desc, uint64_t data, const char * description)
 {
-	if (strlen(description) >= KCDATA_DESC_MAXLEN)
+	if (strlen(description) >= KCDATA_DESC_MAXLEN) {
 		return KERN_INVALID_ARGUMENT;
+	}
 
 	kern_return_t kr = 0;
 	mach_vm_address_t user_addr;
@@ -433,26 +455,30 @@ kcdata_add_uint64_with_description(kcdata_descriptor_t data_desc, uint64_t data,
 	save_data.data = data;
 
 	kr = kcdata_get_memory_addr(data_desc, KCDATA_TYPE_UINT64_DESC, size_req, &user_addr);
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
 		return kr;
+	}
 
 	if (data_desc->kcd_flags & KCFLAG_USE_COPYOUT) {
-		if (copyout(&save_data, user_addr, size_req))
+		if (copyout(&save_data, user_addr, size_req)) {
 			return KERN_NO_ACCESS;
+		}
 	} else {
 		memcpy((void *)user_addr, &save_data, size_req);
 	}
 	return KERN_SUCCESS;
 }
 
-kern_return_t kcdata_add_uint32_with_description(
-				kcdata_descriptor_t data_desc,
-				uint32_t data,
-				const char *description)
+kern_return_t
+kcdata_add_uint32_with_description(
+	kcdata_descriptor_t data_desc,
+	uint32_t data,
+	const char *description)
 {
 	assert(strlen(description) < KCDATA_DESC_MAXLEN);
-	if (strlen(description) >= KCDATA_DESC_MAXLEN)
+	if (strlen(description) >= KCDATA_DESC_MAXLEN) {
 		return KERN_INVALID_ARGUMENT;
+	}
 	kern_return_t kr = 0;
 	mach_vm_address_t user_addr;
 	struct _uint32_with_description_data save_data;
@@ -463,11 +489,13 @@ kern_return_t kcdata_add_uint32_with_description(
 	save_data.data = data;
 
 	kr = kcdata_get_memory_addr(data_desc, KCDATA_TYPE_UINT32_DESC, size_req, &user_addr);
-	if (kr != KERN_SUCCESS)
+	if (kr != KERN_SUCCESS) {
 		return kr;
+	}
 	if (data_desc->kcd_flags & KCFLAG_USE_COPYOUT) {
-		if (copyout(&save_data, user_addr, size_req))
+		if (copyout(&save_data, user_addr, size_req)) {
 			return KERN_NO_ACCESS;
+		}
 	} else {
 		memcpy((void *)user_addr, &save_data, size_req);
 	}

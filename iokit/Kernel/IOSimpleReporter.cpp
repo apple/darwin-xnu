@@ -1,8 +1,8 @@
 /*
  * Copyright (c) 2012-2013 Apple Computer, Inc.  All Rights Reserved.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -36,126 +36,127 @@ OSDefineMetaClassAndStructors(IOSimpleReporter, IOReporter);
 /* static */
 IOSimpleReporter*
 IOSimpleReporter::with(IOService *reportingService,
-                       IOReportCategories categories,
-                       IOReportUnit unit)
+    IOReportCategories categories,
+    IOReportUnit unit)
 {
-    IOSimpleReporter *reporter, *rval = NULL;
+	IOSimpleReporter *reporter, *rval = NULL;
 
-    // kprintf("%s\n", __func__);      // can't IORLOG() from static
+	// kprintf("%s\n", __func__);      // can't IORLOG() from static
 
-    reporter = new IOSimpleReporter;
-    if (!reporter)      goto finish;
+	reporter = new IOSimpleReporter;
+	if (!reporter) {
+		goto finish;
+	}
 
 
-    if (!reporter->initWith(reportingService, categories, unit)) {
-        goto finish;
-    }
-    
-    // success
-    rval = reporter;
-    
+	if (!reporter->initWith(reportingService, categories, unit)) {
+		goto finish;
+	}
+
+	// success
+	rval = reporter;
+
 finish:
-    if (!rval) {
-        OSSafeReleaseNULL(reporter);
-    }
-    
-    return rval;
+	if (!rval) {
+		OSSafeReleaseNULL(reporter);
+	}
+
+	return rval;
 }
 
 bool
 IOSimpleReporter::initWith(IOService *reportingService,
-                           IOReportCategories categories,
-                           IOReportUnit unit)
+    IOReportCategories categories,
+    IOReportUnit unit)
 {
-    // fully specify the channel type for the superclass
-    IOReportChannelType channelType = {
-        .categories = categories,
-        .report_format = kIOReportFormatSimple,
-        .nelements = 1,
-        .element_idx = 0
-    };
-    
-    return super::init(reportingService, channelType, unit);
+	// fully specify the channel type for the superclass
+	IOReportChannelType channelType = {
+		.categories = categories,
+		.report_format = kIOReportFormatSimple,
+		.nelements = 1,
+		.element_idx = 0
+	};
+
+	return super::init(reportingService, channelType, unit);
 }
 
 
 IOReturn
 IOSimpleReporter::setValue(uint64_t channel_id,
-                           int64_t value)
+    int64_t value)
 {
-    IOReturn res = kIOReturnError;
-    IOSimpleReportValues simple_values;
-    int element_index = 0;
-    
-    lockReporter();
-    
-    if (getFirstElementIndex(channel_id, &element_index) != kIOReturnSuccess) {
-        res = kIOReturnBadArgument;
-        goto finish;
-    }
+	IOReturn res = kIOReturnError;
+	IOSimpleReportValues simple_values;
+	int element_index = 0;
+
+	lockReporter();
+
+	if (getFirstElementIndex(channel_id, &element_index) != kIOReturnSuccess) {
+		res = kIOReturnBadArgument;
+		goto finish;
+	}
 
 
-    if (copyElementValues(element_index, (IOReportElementValues *)&simple_values) != kIOReturnSuccess) {
-        res = kIOReturnBadArgument;
-        goto finish;
-    }
-    
-    simple_values.simple_value = value;
-    res = setElementValues(element_index, (IOReportElementValues *)&simple_values);
-    
+	if (copyElementValues(element_index, (IOReportElementValues *)&simple_values) != kIOReturnSuccess) {
+		res = kIOReturnBadArgument;
+		goto finish;
+	}
+
+	simple_values.simple_value = value;
+	res = setElementValues(element_index, (IOReportElementValues *)&simple_values);
+
 finish:
-    unlockReporter();
-    return res;
+	unlockReporter();
+	return res;
 }
 
 
 IOReturn
 IOSimpleReporter::incrementValue(uint64_t channel_id,
-                                 int64_t increment)
+    int64_t increment)
 {
-    IOReturn res = kIOReturnError;
-    IOSimpleReportValues simple_values;
-    int element_index = 0;
-    
-    lockReporter();
-    
-    if (getFirstElementIndex(channel_id, &element_index) != kIOReturnSuccess) {
-        res = kIOReturnBadArgument;
-        goto finish;
-    }
+	IOReturn res = kIOReturnError;
+	IOSimpleReportValues simple_values;
+	int element_index = 0;
 
-    if (copyElementValues(element_index, (IOReportElementValues *)&simple_values) != kIOReturnSuccess){
-        res = kIOReturnBadArgument;
-        goto finish;
-    }
-    
-    simple_values.simple_value += increment;
-    
-    res = setElementValues(element_index, (IOReportElementValues *)&simple_values);
-    
+	lockReporter();
+
+	if (getFirstElementIndex(channel_id, &element_index) != kIOReturnSuccess) {
+		res = kIOReturnBadArgument;
+		goto finish;
+	}
+
+	if (copyElementValues(element_index, (IOReportElementValues *)&simple_values) != kIOReturnSuccess) {
+		res = kIOReturnBadArgument;
+		goto finish;
+	}
+
+	simple_values.simple_value += increment;
+
+	res = setElementValues(element_index, (IOReportElementValues *)&simple_values);
+
 finish:
-    unlockReporter();
-    return res;
+	unlockReporter();
+	return res;
 }
 
 int64_t
 IOSimpleReporter::getValue(uint64_t channel_id)
 {
-    IOSimpleReportValues *values = NULL;
-    int64_t simple_value = (int64_t)kIOReportInvalidValue;
-    int index = 0;
-    
-    lockReporter();
-    
-    if (getFirstElementIndex(channel_id, &index) == kIOReturnSuccess) {
-        
-        values = (IOSimpleReportValues *)getElementValues(index);
-        
-        if (values != NULL)
-            simple_value = values->simple_value;
-    }
-    
-    unlockReporter();
-    return simple_value;
-}
+	IOSimpleReportValues *values = NULL;
+	int64_t simple_value = (int64_t)kIOReportInvalidValue;
+	int index = 0;
 
+	lockReporter();
+
+	if (getFirstElementIndex(channel_id, &index) == kIOReturnSuccess) {
+		values = (IOSimpleReportValues *)getElementValues(index);
+
+		if (values != NULL) {
+			simple_value = values->simple_value;
+		}
+	}
+
+	unlockReporter();
+	return simple_value;
+}

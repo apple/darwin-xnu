@@ -43,7 +43,7 @@
 static int mt_cdev_open(dev_t dev, int flags, int devtype, proc_t p);
 static int mt_cdev_close(dev_t dev, int flags, int devtype, proc_t p);
 static int mt_cdev_ioctl(dev_t dev, unsigned long cmd, char *uptr, int fflag,
-		proc_t p);
+    proc_t p);
 
 #define MT_NODE "monotonic"
 
@@ -116,10 +116,10 @@ mt_dev_init(void)
 		char name[128];
 		snprintf(name, sizeof(name), MT_NODE "/%s", mt_devices[i].mtd_name);
 		void *node = devfs_make_node(dev, DEVFS_CHAR, UID_ROOT,
-				GID_WINDOWSERVER, 0666, name);
+		    GID_WINDOWSERVER, 0666, name);
 		if (!node) {
 			panic("monotonic: devfs_make_node failed for '%s'",
-					mt_devices[i].mtd_name);
+			    mt_devices[i].mtd_name);
 			__builtin_unreachable();
 		}
 
@@ -131,7 +131,7 @@ mt_dev_init(void)
 
 static int
 mt_cdev_open(dev_t devnum, __unused int flags, __unused int devtype,
-		__unused proc_t p)
+    __unused proc_t p)
 {
 	int error = 0;
 
@@ -149,7 +149,7 @@ mt_cdev_open(dev_t devnum, __unused int flags, __unused int devtype,
 
 static int
 mt_cdev_close(dev_t devnum, __unused int flags, __unused int devtype,
-		__unused struct proc *p)
+    __unused struct proc *p)
 {
 	mt_device_t dev = mt_get_device(devnum);
 
@@ -211,7 +211,7 @@ mt_ctl_counts(mt_device_t dev, user_addr_t uptr)
 	{
 		uint64_t counts[dev->mtd_nmonitors][dev->mtd_ncounters];
 		memset(counts, 0,
-				dev->mtd_ncounters * dev->mtd_nmonitors * sizeof(counts[0][0]));
+		    dev->mtd_ncounters * dev->mtd_nmonitors * sizeof(counts[0][0]));
 		error = dev->mtd_read(ctl.in.ctr_mask, (uint64_t *)counts);
 		if (error) {
 			return error;
@@ -254,7 +254,7 @@ mt_ctl_reset(mt_device_t dev)
 
 static int
 mt_cdev_ioctl(dev_t devnum, unsigned long cmd, char *arg, __unused int flags,
-		__unused proc_t p)
+    __unused proc_t p)
 {
 	int error = ENODEV;
 	user_addr_t uptr = *(user_addr_t *)(void *)arg;
@@ -300,13 +300,14 @@ mt_cdev_ioctl(dev_t devnum, unsigned long cmd, char *arg, __unused int flags,
 	return error;
 }
 
-int thread_selfcounts(__unused struct proc *p,
-		struct thread_selfcounts_args *uap, __unused int *ret_out)
+int
+thread_selfcounts(__unused struct proc *p,
+    struct thread_selfcounts_args *uap, __unused int *ret_out)
 {
 	switch (uap->type) {
 	case 1: {
-		uint64_t counts[2] = {};
-		uint64_t thread_counts[MT_CORE_NFIXED];
+		uint64_t counts[2] = { 0 };
+		uint64_t thread_counts[MT_CORE_NFIXED] = { 0 };
 
 		mt_cur_thread_fixed_counts(thread_counts);
 
@@ -338,16 +339,18 @@ static int
 mt_sysctl SYSCTL_HANDLER_ARGS
 {
 #pragma unused(oidp, arg2)
-	uint64_t start[MT_CORE_NFIXED], end[MT_CORE_NFIXED];
-	uint64_t counts[2] = {};
+	uint64_t start[MT_CORE_NFIXED] = { 0 }, end[MT_CORE_NFIXED] = { 0 };
+	uint64_t counts[2] = { 0 };
 
 	switch ((enum mt_sysctl)arg1) {
 	case MT_SUPPORTED:
 		return sysctl_io_number(req, (int)mt_core_supported, sizeof(int), NULL, NULL);
 	case MT_PMIS:
-		return sysctl_io_number(req, mt_pmis, sizeof(mt_pmis), NULL, NULL);
-	case MT_RETROGRADE:
-		return sysctl_io_number(req, mt_retrograde, sizeof(mt_retrograde), NULL, NULL);
+		return sysctl_io_number(req, mt_count_pmis(), sizeof(uint64_t), NULL, NULL);
+	case MT_RETROGRADE: {
+		uint64_t value = os_atomic_load_wide(&mt_retrograde, relaxed);
+		return sysctl_io_number(req, value, sizeof(mt_retrograde), NULL, NULL);
+	}
 	case MT_TASK_THREAD:
 		return sysctl_io_number(req, (int)mt_core_supported, sizeof(int), NULL, NULL);
 	case MT_DEBUG: {
@@ -416,28 +419,31 @@ copyout_counts:
 
 SYSCTL_DECL(_kern_monotonic);
 SYSCTL_NODE(_kern, OID_AUTO, monotonic, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
-		"monotonic");
+    "monotonic");
 
-#define MT_SYSCTL(NAME, ARG, SIZE, SIZESTR, DESC) \
-		SYSCTL_PROC(_kern_monotonic, OID_AUTO, NAME, \
-		CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MASKED | CTLFLAG_LOCKED, \
-		(void *)(ARG), SIZE, mt_sysctl, SIZESTR, DESC)
+#define MT_SYSCTL(NAME, ARG, FLAGS, SIZE, SIZESTR, DESC) \
+    SYSCTL_PROC(_kern_monotonic, OID_AUTO, NAME, \
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED | (FLAGS), \
+    (void *)(ARG), SIZE, mt_sysctl, SIZESTR, DESC)
 
-MT_SYSCTL(supported, MT_SUPPORTED, sizeof(int), "I",
-		"whether monotonic is supported");
-MT_SYSCTL(debug, MT_DEBUG, sizeof(int), "I",
-		"whether monotonic is printing debug messages");
-MT_SYSCTL(pmis, MT_PMIS, sizeof(uint64_t), "Q",
-		"number of PMIs seen");
-MT_SYSCTL(retrograde_updates, MT_RETROGRADE, sizeof(uint64_t), "Q",
-		"number of times a counter appeared to go backwards");
-MT_SYSCTL(task_thread_counting, MT_TASK_THREAD, sizeof(int), "I",
-		"whether task and thread counting is enabled");
-MT_SYSCTL(kdebug_test, MT_KDBG_TEST, sizeof(int), "O",
-		"whether task and thread counting is enabled");
-MT_SYSCTL(fixed_cpu_perf, MT_FIX_CPU_PERF, sizeof(uint64_t) * 2, "O",
-		"overhead of accessing the current CPU's counters");
-MT_SYSCTL(fixed_thread_perf, MT_FIX_THREAD_PERF, sizeof(uint64_t) * 2, "O",
-		"overhead of accessing the current thread's counters");
-MT_SYSCTL(fixed_task_perf, MT_FIX_TASK_PERF, sizeof(uint64_t) * 2, "O",
-		"overhead of accessing the current task's counters");
+MT_SYSCTL(supported, MT_SUPPORTED, 0, sizeof(int), "I",
+    "whether monotonic is supported");
+MT_SYSCTL(debug, MT_DEBUG, CTLFLAG_MASKED, sizeof(int), "I",
+    "whether monotonic is printing debug messages");
+MT_SYSCTL(pmis, MT_PMIS, 0, sizeof(uint64_t), "Q",
+    "number of PMIs seen");
+MT_SYSCTL(retrograde_updates, MT_RETROGRADE, 0, sizeof(uint64_t), "Q",
+    "number of times a counter appeared to go backwards");
+MT_SYSCTL(task_thread_counting, MT_TASK_THREAD, 0, sizeof(int), "I",
+    "whether task and thread counting is enabled");
+MT_SYSCTL(kdebug_test, MT_KDBG_TEST, CTLFLAG_MASKED, sizeof(int), "O",
+    "whether task and thread counting is enabled");
+MT_SYSCTL(fixed_cpu_perf, MT_FIX_CPU_PERF, CTLFLAG_MASKED,
+    sizeof(uint64_t) * 2, "O",
+    "overhead of accessing the current CPU's counters");
+MT_SYSCTL(fixed_thread_perf, MT_FIX_THREAD_PERF, CTLFLAG_MASKED,
+    sizeof(uint64_t) * 2, "O",
+    "overhead of accessing the current thread's counters");
+MT_SYSCTL(fixed_task_perf, MT_FIX_TASK_PERF, CTLFLAG_MASKED,
+    sizeof(uint64_t) * 2, "O",
+    "overhead of accessing the current task's counters");

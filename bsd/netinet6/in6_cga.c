@@ -41,9 +41,9 @@
 #include <netinet6/ip6_var.h>
 #include <netinet6/nd6.h>
 
-#define IN6_CGA_HASH1_LENGTH	8
-#define IN6_CGA_HASH2_LENGTH	14
-#define IN6_CGA_PREPARE_ZEROES	9
+#define IN6_CGA_HASH1_LENGTH    8
+#define IN6_CGA_HASH2_LENGTH    14
+#define IN6_CGA_PREPARE_ZEROES  9
 
 struct in6_cga_hash1 {
 	u_int8_t octets[IN6_CGA_HASH1_LENGTH];
@@ -100,11 +100,13 @@ in6_cga_is_prepare_valid(const struct in6_cga_prepare *prepare,
 	VERIFY(prepare != NULL);
 	VERIFY(pubkey != NULL && pubkey->iov_base != NULL);
 
-	if (prepare->cga_security_level == 0)
-		return (TRUE);
+	if (prepare->cga_security_level == 0) {
+		return TRUE;
+	}
 
-	if (prepare->cga_security_level > 7)
-		return (FALSE);
+	if (prepare->cga_security_level > 7) {
+		return FALSE;
+	}
 
 	SHA1Init(&ctx);
 	SHA1Update(&ctx, &prepare->cga_modifier.octets,
@@ -116,34 +118,36 @@ in6_cga_is_prepare_valid(const struct in6_cga_prepare *prepare,
 
 	n = 2 * (u_int) prepare->cga_security_level;
 	VERIFY(n < SHA1_RESULTLEN);
-	for (i = 0; i < n; ++i)
-		if (sha1[i] != 0)
-			return (FALSE);
+	for (i = 0; i < n; ++i) {
+		if (sha1[i] != 0) {
+			return FALSE;
+		}
+	}
 
-	return (TRUE);
+	return TRUE;
 }
 
 /*
  * @brief Generate interface identifier for CGA
- * 	XXX You may notice that following does not really
- * 	mirror what is decribed in:
- * 	https://tools.ietf.org/html/rfc3972#section-4
- * 	By design kernel here will assume that that
- * 	modifier has been converged on by userspace
- * 	for first part of the algorithm for the given
- * 	security level.
- * 	We are not doing that yet but that's how the code
- * 	below is written. So really we are starting
- * 	from bullet 4 of the algorithm.
+ *      XXX You may notice that following does not really
+ *      mirror what is decribed in:
+ *      https://tools.ietf.org/html/rfc3972#section-4
+ *      By design kernel here will assume that that
+ *      modifier has been converged on by userspace
+ *      for first part of the algorithm for the given
+ *      security level.
+ *      We are not doing that yet but that's how the code
+ *      below is written. So really we are starting
+ *      from bullet 4 of the algorithm.
  *
  * @param prepare Pointer to object containing modifier,
- * 	security level & externsion to be used.
+ *      security level & externsion to be used.
  * @param pubkey Public key used for IID generation
  * @param collisions Collission count on DAD failure
- * 	XXX We are not really re-generating IID on DAD
- * 	failures for now.
+ *      XXX We are not really re-generating IID on DAD
+ *      failures for now.
  * @param in6 Pointer to the address containing
- * 	the prefix.
+ *      the prefix.
  *
  * @return void
  */
@@ -221,43 +225,50 @@ in6_cga_start(const struct in6_cga_nodecfg *cfg)
 
 	privkey = cfg->cga_privkey;
 	if (privkey.iov_base == NULL || privkey.iov_len == 0 ||
-	    privkey.iov_len >= IN6_CGA_KEY_MAXSIZE)
-		return (EINVAL);
+	    privkey.iov_len >= IN6_CGA_KEY_MAXSIZE) {
+		return EINVAL;
+	}
 	pubkey = cfg->cga_pubkey;
 	if (pubkey.iov_base == NULL || pubkey.iov_len == 0 ||
-	    pubkey.iov_len >= IN6_CGA_KEY_MAXSIZE)
-		return (EINVAL);
+	    pubkey.iov_len >= IN6_CGA_KEY_MAXSIZE) {
+		return EINVAL;
+	}
 	prepare = &cfg->cga_prepare;
 
-	if (!in6_cga_is_prepare_valid(prepare, &pubkey))
-		return (EINVAL);
+	if (!in6_cga_is_prepare_valid(prepare, &pubkey)) {
+		return EINVAL;
+	}
 
 	in6_cga.cga_prepare = *prepare;
 
 	MALLOC(privkeycopy, caddr_t, privkey.iov_len, M_IP6CGA, M_WAITOK);
-	if (privkeycopy == NULL)
-		return (ENOMEM);
+	if (privkeycopy == NULL) {
+		return ENOMEM;
+	}
 
 	MALLOC(pubkeycopy, caddr_t, pubkey.iov_len, M_IP6CGA, M_WAITOK);
 	if (pubkeycopy == NULL) {
-		if (privkeycopy != NULL)
+		if (privkeycopy != NULL) {
 			FREE(privkeycopy, M_IP6CGA);
-		return (ENOMEM);
+		}
+		return ENOMEM;
 	}
 
 	bcopy(privkey.iov_base, privkeycopy, privkey.iov_len);
 	privkey.iov_base = privkeycopy;
-	if (in6_cga.cga_privkey.iov_base != NULL)
+	if (in6_cga.cga_privkey.iov_base != NULL) {
 		FREE(in6_cga.cga_privkey.iov_base, M_IP6CGA);
+	}
 	in6_cga.cga_privkey = privkey;
 
 	bcopy(pubkey.iov_base, pubkeycopy, pubkey.iov_len);
 	pubkey.iov_base = pubkeycopy;
-	if (in6_cga.cga_pubkey.iov_base != NULL)
+	if (in6_cga.cga_pubkey.iov_base != NULL) {
 		FREE(in6_cga.cga_pubkey.iov_base, M_IP6CGA);
+	}
 	in6_cga.cga_pubkey = pubkey;
 
-	return (0);
+	return 0;
 }
 
 int
@@ -277,7 +288,7 @@ in6_cga_stop(void)
 		in6_cga.cga_pubkey.iov_len = 0;
 	}
 
-	return (0);
+	return 0;
 }
 
 ssize_t
@@ -291,24 +302,26 @@ in6_cga_parameters_prepare(void *output, size_t max,
 
 	if (in6_cga.cga_pubkey.iov_len == 0) {
 		/* No public key */
-		return (EINVAL);
+		return EINVAL;
 	}
 
 	if (output == NULL ||
-	    max < in6_cga.cga_pubkey.iov_len + sizeof (modifier->octets) + 9) {
+	    max < in6_cga.cga_pubkey.iov_len + sizeof(modifier->octets) + 9) {
 		/* Output buffer error */
-		return (EINVAL);
+		return EINVAL;
 	}
 
 	cursor = output;
-	if (modifier == NULL) modifier = &in6_cga.cga_prepare.cga_modifier;
+	if (modifier == NULL) {
+		modifier = &in6_cga.cga_prepare.cga_modifier;
+	}
 	if (prefix == NULL) {
 		static const struct in6_addr llprefix = {{{ 0xfe, 0x80 }}};
 		prefix = &llprefix;
 	}
 
-	bcopy(&modifier->octets, cursor, sizeof (modifier->octets));
-	cursor += sizeof (modifier->octets);
+	bcopy(&modifier->octets, cursor, sizeof(modifier->octets));
+	cursor += sizeof(modifier->octets);
 
 	*cursor++ = (char) collisions;
 
@@ -320,7 +333,7 @@ in6_cga_parameters_prepare(void *output, size_t max,
 
 	/* FUTURE: Extension fields */
 
-	return ((ssize_t)(cursor - (caddr_t)output));
+	return (ssize_t)(cursor - (caddr_t)output);
 }
 
 int
@@ -333,22 +346,23 @@ in6_cga_generate(struct in6_cga_prepare *prepare, u_int8_t collisions,
 	in6_cga_node_lock_assert(LCK_MTX_ASSERT_OWNED);
 	VERIFY(in6 != NULL);
 
-	if (prepare == NULL)
+	if (prepare == NULL) {
 		prepare = &in6_cga.cga_prepare;
-	else
+	} else {
 		prepare->cga_security_level =
 		    in6_cga.cga_prepare.cga_security_level;
+	}
 
 	pubkey = &in6_cga.cga_pubkey;
 
 	if (pubkey->iov_base != NULL) {
 		in6_cga_generate_iid(prepare, pubkey, collisions, in6);
 		error = 0;
-	}
-	else
+	} else {
 		error = EADDRNOTAVAIL;
+	}
 
-	return (error);
+	return error;
 }
 
 /* End of file */

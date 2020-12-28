@@ -61,25 +61,45 @@
 #include <i386/proc_reg.h>
 #include <assym.s>
 
+/*
+ * void Load_context(
+ *                   thread_t thread)    // %rdi
+ *
+ * Loads the first thread context to run on a CPU,
+ * i.e. without switching from a previous thread.
+ *
+ * returns 'old' thread in %rax (which is always NULL)
+ */
 Entry(Load_context)
-	movq	TH_KERNEL_STACK(%rdi),%rcx	/* get kernel stack */
-	leaq	-IKS_SIZE(%rcx),%rdx
-	addq	EXT(kernel_stack_size)(%rip),%rdx /* point to stack top */
-	movq	%rcx,%gs:CPU_ACTIVE_STACK	/* store stack address */
-	movq	%rdx,%gs:CPU_KERNEL_STACK	/* store stack top */
+	movq    %rdi, %rdx                      /* move thread arg to rdx */
 
-	movq	%rdx,%rsp
-	xorl	%ebp, %ebp
+	movq    %rdx,%gs:CPU_ACTIVE_THREAD      /* new thread is active */
+	movq    TH_KERNEL_STACK(%rdx),%rdx      /* get its kernel stack */
+	lea     -IKS_SIZE(%rdx),%rcx
+	add     EXT(kernel_stack_size)(%rip),%rcx /* point to stack top */
 
-	xorl	%edi,%edi			/* return zero (no old thread) */
-	call	EXT(thread_continue)
+	movq    %rdx,%gs:CPU_ACTIVE_STACK       /* set current stack */
+	movq    %rcx,%gs:CPU_KERNEL_STACK       /* set stack top */
 
+	movq    KSS_RSP(%rcx),%rsp              /* switch stacks */
+	movq    KSS_RBX(%rcx),%rbx              /* restore registers */
+	movq    KSS_RBP(%rcx),%rbp
+	movq    KSS_R12(%rcx),%r12
+	movq    KSS_R13(%rcx),%r13
+	movq    KSS_R14(%rcx),%r14
+	movq    KSS_R15(%rcx),%r15
+
+	xorl    %eax, %eax                      /* set return value to zero (no old thread) */
+
+	jmp    *KSS_RIP(%rcx)                   /* return old thread */
 
 /*
  * thread_t Switch_context(
- *		thread_t old,				// %rsi
- *		thread_continue_t continuation,		// %rdi
+ *		thread_t old,				// %rdi
+ *		thread_continue_t continuation,		// %rsi
  *		thread_t new)				// %rdx
+ *
+ * returns 'old' thread in %rax
  */
 Entry(Switch_context)
 	popq	%rax				/* pop return PC */
@@ -114,14 +134,21 @@ Entry(Switch_context)
 	movq	KSS_R13(%rcx),%r13
 	movq	KSS_R14(%rcx),%r14
 	movq	KSS_R15(%rcx),%r15
-	jmp	*KSS_RIP(%rcx)			/* return old thread */
+	jmp	*KSS_RIP(%rcx)			/* return old thread in %rax */
 
-
+/*
+ * machine_stack_attach sets this as the RIP of newly-attached stacks
+ * %rbx is the C routine to call
+ * %rax is the parameter to pass to the C routine
+ *
+ * This stub is needed to convert the return value of the old thread from Switch_context
+ * in %rax into a parameter to thread_continue passed in %rdi, because using the
+ * same register for the first argument and first retval makes too much sense for the SysV ABI.
+ */
 Entry(Thread_continue)
 	movq	%rax, %rdi			/* this is the old thread from Switch_context */
-	xorq	%rbp,%rbp			/* zero frame pointer */
 	call	*%rbx				/* call real continuation */
-
+	int3					/* (should never return) */
 
 /*
  * thread_t Shutdown_context(
@@ -131,9 +158,7 @@ Entry(Thread_continue)
  *
  * saves the kernel context of the thread,
  * switches to the interrupt stack,
- * continues the thread (with thread_continue),
  * then runs routine on the interrupt stack.
- *
  */
 Entry(Shutdown_context)
 	movq	%gs:CPU_KERNEL_STACK,%rcx	/* get old kernel stack top */
@@ -143,7 +168,8 @@ Entry(Shutdown_context)
 	movq	%r13,KSS_R13(%rcx)
 	movq	%r14,KSS_R14(%rcx)
 	movq	%r15,KSS_R15(%rcx)
-	popq	KSS_RIP(%rcx)			/* save return PC */
+	popq	%r8				/* extract return PC */
+	movq	%r8,KSS_RIP(%rcx)		/* save return PC */
 	movq	%rsp,KSS_RSP(%rcx)		/* save SP */
 
 	movq	%gs:CPU_ACTIVE_STACK,%rcx	/* get old kernel stack */
@@ -155,7 +181,12 @@ Entry(Shutdown_context)
 	movq	%rsp, %gs:CPU_ACTIVE_STACK
 	movq	EXT(kernel_stack_size)(%rip),%rcx /* point to stack top */
 	subq	%rcx, %gs:CPU_ACTIVE_STACK
+
+	pushq   %r8                             /* set up a call frame on new stack */
+	pushq   %rbp
+	movq    %rsp, %rbp
+
 	movq	%rdx,%rdi			/* processor arg to routine */
 	call	*%rsi				/* call routine to run */
-	hlt					/* (should never return) */
+	int3					/* (should never return) */
 

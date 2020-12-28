@@ -54,12 +54,12 @@ static inline u_int64_t getblock64(const u_int64_t *, int);
 static inline u_int32_t mh3_fmix32(u_int32_t);
 static inline u_int64_t mh3_fmix64(u_int64_t);
 
-#define	ALIGNED16(v)	((((uintptr_t)(v)) & 1) == 0)
-#define	ALIGNED32(v)	((((uintptr_t)(v)) & 3) == 0)
-#define	ALIGNED64(v)	((((uintptr_t)(v)) & 7) == 0)
+#define ALIGNED16(v)    ((((uintptr_t)(v)) & 1) == 0)
+#define ALIGNED32(v)    ((((uintptr_t)(v)) & 3) == 0)
+#define ALIGNED64(v)    ((((uintptr_t)(v)) & 7) == 0)
 
-#define	ROTL32(x, r)	(((x) << (r)) | ((x) >> (32 - (r))))
-#define	ROTL64(x, r)	(((x) << (r)) | ((x) >> (64 - (r))))
+#define ROTL32(x, r)    (((x) << (r)) | ((x) >> (32 - (r))))
+#define ROTL64(x, r)    (((x) << (r)) | ((x) >> (64 - (r))))
 
 /*
  * The following hash algorithms are selected based on performance:
@@ -77,13 +77,13 @@ net_flowhash_fn_t *net_flowhash = net_flowhash_jhash;
 static inline u_int32_t
 getblock32(const u_int32_t *p, int i)
 {
-	return (p[i]);
+	return p[i];
 }
 
 static inline u_int64_t
 getblock64(const u_int64_t *p, int i)
 {
-	return (p[i]);
+	return p[i];
 }
 #else /* !__i386__ && !__x86_64__ && !__arm64__*/
 static inline u_int32_t
@@ -109,7 +109,7 @@ getblock32(const u_int32_t *p, int i)
 		    ((u_int32_t)bytes[0]);
 #endif /* LITTLE_ENDIAN */
 	}
-	return (value);
+	return value;
 }
 
 static inline u_int64_t
@@ -143,7 +143,7 @@ getblock64(const u_int64_t *p, int i)
 		    ((u_int64_t)bytes[0]);
 #endif /* LITTLE_ENDIAN */
 	}
-	return (value);
+	return value;
 }
 #endif /* !__i386__ && !__x86_64 && !__arm64__ */
 
@@ -156,7 +156,7 @@ mh3_fmix32(u_int32_t h)
 	h *= 0xc2b2ae35;
 	h ^= h >> 16;
 
-	return (h);
+	return h;
 }
 
 static inline u_int64_t
@@ -168,14 +168,14 @@ mh3_fmix64(u_int64_t k)
 	k *= 0xc4ceb9fe1a85ec53LLU;
 	k ^= k >> 33;
 
-	return (k);
+	return k;
 }
 
 /*
  * MurmurHash3_x86_32
  */
-#define	MH3_X86_32_C1	0xcc9e2d51
-#define	MH3_X86_32_C2	0x1b873593
+#define MH3_X86_32_C1   0xcc9e2d51
+#define MH3_X86_32_C2   0x1b873593
 
 u_int32_t
 net_flowhash_mh3_x86_32(const void *key, u_int32_t len, const u_int32_t seed)
@@ -209,31 +209,32 @@ net_flowhash_mh3_x86_32(const void *key, u_int32_t len, const u_int32_t seed)
 	switch (len & 3) {
 	case 3:
 		k1 ^= tail[2] << 16;
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 2:
 		k1 ^= tail[1] << 8;
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 1:
 		k1 ^= tail[0];
 		k1 *= MH3_X86_32_C1;
 		k1 = ROTL32(k1, 15);
 		k1 *= MH3_X86_32_C2;
 		h1 ^= k1;
-	};
+	}
+	;
 
 	/* finalization */
 	h1 ^= len;
 
 	h1 = mh3_fmix32(h1);
 
-	return (h1);
+	return h1;
 }
 
 /*
  * MurmurHash3_x64_128
  */
-#define	MH3_X64_128_C1	0x87c37b91114253d5LLU
-#define	MH3_X64_128_C2	0x4cf5ad432745937fLLU
+#define MH3_X64_128_C1  0x87c37b91114253d5LLU
+#define MH3_X64_128_C2  0x4cf5ad432745937fLLU
 
 u_int32_t
 net_flowhash_mh3_x64_128(const void *key, u_int32_t len, const u_int32_t seed)
@@ -255,9 +256,9 @@ net_flowhash_mh3_x64_128(const void *key, u_int32_t len, const u_int32_t seed)
 
 		k1 *= MH3_X64_128_C1;
 #if defined(__x86_64__)
-        __asm__ ( "rol   $31, %[k1]\n\t" :[k1] "+r" (k1) : :);
+		__asm__ ( "rol   $31, %[k1]\n\t" :[k1] "+r" (k1) : :);
 #elif defined(__arm64__)
-        __asm__ ( "ror   %[k1], %[k1], #(64-31)\n\t" :[k1] "+r" (k1) : :);
+		__asm__ ( "ror   %[k1], %[k1], #(64-31)\n\t" :[k1] "+r" (k1) : :);
 #else /* !__x86_64__ && !__arm64__ */
 		k1 = ROTL64(k1, 31);
 #endif /* !__x86_64__ && !__arm64__ */
@@ -265,35 +266,35 @@ net_flowhash_mh3_x64_128(const void *key, u_int32_t len, const u_int32_t seed)
 		h1 ^= k1;
 
 #if defined(__x86_64__)
-        __asm__ ( "rol   $27, %[h1]\n\t" :[h1] "+r" (h1) : :);
+		__asm__ ( "rol   $27, %[h1]\n\t" :[h1] "+r" (h1) : :);
 #elif defined(__arm64__)
-        __asm__ ( "ror   %[h1], %[h1], #(64-27)\n\t" :[h1] "+r" (h1) : :);
+		__asm__ ( "ror   %[h1], %[h1], #(64-27)\n\t" :[h1] "+r" (h1) : :);
 #else /* !__x86_64__ && !__arm64__ */
-        h1 = ROTL64(h1, 27);
+		h1 = ROTL64(h1, 27);
 #endif /* !__x86_64__ && !__arm64__ */
 		h1 += h2;
 		h1 = h1 * 5 + 0x52dce729;
 
 		k2 *= MH3_X64_128_C2;
 #if defined(__x86_64__)
-        __asm__ ( "rol   $33, %[k2]\n\t" :[k2] "+r" (k2) : :);
+		__asm__ ( "rol   $33, %[k2]\n\t" :[k2] "+r" (k2) : :);
 #elif defined(__arm64__)
-        __asm__ ( "ror   %[k2], %[k2], #(64-33)\n\t" :[k2] "+r" (k2) : :);
+		__asm__ ( "ror   %[k2], %[k2], #(64-33)\n\t" :[k2] "+r" (k2) : :);
 #else /* !__x86_64__ && !__arm64__ */
-        k2 = ROTL64(k2, 33);
+		k2 = ROTL64(k2, 33);
 #endif /* !__x86_64__ && !__arm64__ */
 		k2 *= MH3_X64_128_C1;
 		h2 ^= k2;
 
 #if defined(__x86_64__)
-        __asm__ ( "rol   $31, %[h2]\n\t" :[h2] "+r" (h2) : :);
+		__asm__ ( "rol   $31, %[h2]\n\t" :[h2] "+r" (h2) : :);
 #elif defined(__arm64__)
-        __asm__ ( "ror   %[h2], %[h2], #(64-31)\n\t" :[h2] "+r" (h2) : :);
+		__asm__ ( "ror   %[h2], %[h2], #(64-31)\n\t" :[h2] "+r" (h2) : :);
 #else /* !__x86_64__ && !__arm64__ */
-        h2 = ROTL64(h2, 31);
+		h2 = ROTL64(h2, 31);
 #endif /* !__x86_64__ && !__arm64__ */
 		h2 += h1;
-		h2 = h2 * 5+ 0x38495ab5;
+		h2 = h2 * 5 + 0x38495ab5;
 	}
 
 	/* tail */
@@ -304,69 +305,70 @@ net_flowhash_mh3_x64_128(const void *key, u_int32_t len, const u_int32_t seed)
 	switch (len & 15) {
 	case 15:
 		k2 ^= ((u_int64_t)tail[14]) << 48;
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 14:
 		k2 ^= ((u_int64_t)tail[13]) << 40;
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 13:
 		k2 ^= ((u_int64_t)tail[12]) << 32;
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 12:
 		k2 ^= ((u_int64_t)tail[11]) << 24;
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 11:
 		k2 ^= ((u_int64_t)tail[10]) << 16;
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 10:
 		k2 ^= ((u_int64_t)tail[9]) << 8;
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 9:
 		k2 ^= ((u_int64_t)tail[8]) << 0;
 		k2 *= MH3_X64_128_C2;
 #if defined(__x86_64__)
-        __asm__ ( "rol   $33, %[k2]\n\t" :[k2] "+r" (k2) : :);
+		__asm__ ( "rol   $33, %[k2]\n\t" :[k2] "+r" (k2) : :);
 #elif defined(__arm64__)
-        __asm__ ( "ror   %[k2], %[k2], #(64-33)\n\t" :[k2] "+r" (k2) : :);
+		__asm__ ( "ror   %[k2], %[k2], #(64-33)\n\t" :[k2] "+r" (k2) : :);
 #else /* !__x86_64__ && !__arm64__ */
-        k2 = ROTL64(k2, 33);
+		k2 = ROTL64(k2, 33);
 #endif /* !__x86_64__ && !__arm64__ */
 		k2 *= MH3_X64_128_C1;
 		h2 ^= k2;
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 8:
 		k1 ^= ((u_int64_t)tail[7]) << 56;
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 7:
 		k1 ^= ((u_int64_t)tail[6]) << 48;
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 6:
 		k1 ^= ((u_int64_t)tail[5]) << 40;
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 5:
 		k1 ^= ((u_int64_t)tail[4]) << 32;
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 4:
 		k1 ^= ((u_int64_t)tail[3]) << 24;
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 3:
 		k1 ^= ((u_int64_t)tail[2]) << 16;
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 2:
 		k1 ^= ((u_int64_t)tail[1]) << 8;
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 1:
 		k1 ^= ((u_int64_t)tail[0]) << 0;
 		k1 *= MH3_X64_128_C1;
 #if defined(__x86_64__)
-        __asm__ ( "rol   $31, %[k1]\n\t" :[k1] "+r" (k1) : :);
+		__asm__ ( "rol   $31, %[k1]\n\t" :[k1] "+r" (k1) : :);
 #elif defined(__arm64__)
-        __asm__ ( "ror   %[k1], %[k1], #(64-31)\n\t" :[k1] "+r" (k1) : :);
+		__asm__ ( "ror   %[k1], %[k1], #(64-31)\n\t" :[k1] "+r" (k1) : :);
 #else /* !__x86_64__ && !__arm64__ */
-        k1 = ROTL64(k1, 31);
+		k1 = ROTL64(k1, 31);
 #endif /* !__x86_64__ && !__arm64__ */
 		k1 *= MH3_X64_128_C2;
 		h1 ^= k1;
-	};
+	}
+	;
 
 	/* finalization */
 	h1 ^= len;
@@ -382,28 +384,28 @@ net_flowhash_mh3_x64_128(const void *key, u_int32_t len, const u_int32_t seed)
 	h2 += h1;
 
 	/* throw all but lowest 32-bit */
-	return (h1 & 0xffffffff);
+	return h1 & 0xffffffff;
 }
 
-#define	JHASH_INIT	0xdeadbeef
+#define JHASH_INIT      0xdeadbeef
 
-#define	JHASH_MIX(a, b, c) {			\
-	a -= c;  a ^= ROTL32(c, 4);   c += b;	\
-	b -= a;  b ^= ROTL32(a, 6);   a += c;	\
-	c -= b;  c ^= ROTL32(b, 8);   b += a;	\
-	a -= c;  a ^= ROTL32(c, 16);  c += b;	\
-	b -= a;  b ^= ROTL32(a, 19);  a += c;	\
-	c -= b;  c ^= ROTL32(b, 4);   b += a;	\
+#define JHASH_MIX(a, b, c) {                    \
+	a -= c;  a ^= ROTL32(c, 4);   c += b;   \
+	b -= a;  b ^= ROTL32(a, 6);   a += c;   \
+	c -= b;  c ^= ROTL32(b, 8);   b += a;   \
+	a -= c;  a ^= ROTL32(c, 16);  c += b;   \
+	b -= a;  b ^= ROTL32(a, 19);  a += c;   \
+	c -= b;  c ^= ROTL32(b, 4);   b += a;   \
 }
 
-#define	JHASH_FINAL(a, b, c) {			\
-	c ^= b;  c -= ROTL32(b, 14);		\
-	a ^= c;  a -= ROTL32(c, 11);		\
-	b ^= a;  b -= ROTL32(a, 25);		\
-	c ^= b;  c -= ROTL32(b, 16);		\
-	a ^= c;  a -= ROTL32(c, 4);		\
-	b ^= a;  b -= ROTL32(a, 14);		\
-	c ^= b;  c -= ROTL32(b, 24);		\
+#define JHASH_FINAL(a, b, c) {                  \
+	c ^= b;  c -= ROTL32(b, 14);            \
+	a ^= c;  a -= ROTL32(c, 11);            \
+	b ^= a;  b -= ROTL32(a, 25);            \
+	c ^= b;  c -= ROTL32(b, 16);            \
+	a ^= c;  a -= ROTL32(c, 4);             \
+	b ^= a;  b -= ROTL32(a, 14);            \
+	c ^= b;  c -= ROTL32(b, 24);            \
 }
 
 #if BYTE_ORDER == BIG_ENDIAN
@@ -508,12 +510,12 @@ net_flowhash_jhash(const void *key, u_int32_t len, const u_int32_t seed)
 
 		case 0:
 			/* zero length requires no mixing */
-			return (c);
+			return c;
 		}
 
 		JHASH_FINAL(a, b, c);
 
-		return (c);
+		return c;
 	}
 
 	/* need to read the key one byte at a time */
@@ -542,49 +544,49 @@ net_flowhash_jhash(const void *key, u_int32_t len, const u_int32_t seed)
 	switch (len) {
 	case 12:
 		c += k[11];
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 11:
 		c += ((u_int32_t)k[10]) << 8;
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 10:
 		c += ((u_int32_t)k[9]) << 16;
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 9:
 		c += ((u_int32_t)k[8]) << 24;
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 8:
 		b += k[7];
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 7:
 		b += ((u_int32_t)k[6]) << 8;
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 6:
 		b += ((u_int32_t)k[5]) << 16;
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 5:
 		b += ((u_int32_t)k[4]) << 24;
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 4:
 		a += k[3];
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 3:
 		a += ((u_int32_t)k[2]) << 8;
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 2:
 		a += ((u_int32_t)k[1]) << 16;
-		/* FALLTHRU */
+	/* FALLTHRU */
 	case 1:
 		a += ((u_int32_t)k[0]) << 24;
 		break;
 
 	case 0:
 		/* zero length requires no mixing */
-		return (c);
+		return c;
 	}
 
 	JHASH_FINAL(a, b, c);
 
-	return (c);
+	return c;
 }
 #else /* LITTLE_ENDIAN */
 /*
@@ -697,162 +699,162 @@ net_flowhash_jhash(const void *key, u_int32_t len, const u_int32_t seed)
 
 		case 0:
 			/* zero length requires no mixing */
-			return (c);
+			return c;
 		}
 
 		JHASH_FINAL(a, b, c);
 
-		return (c);
+		return c;
 	}
 #if !defined(__i386__) && !defined(__x86_64__)
 	else if (ALIGNED16(key)) {
 #endif /* !defined(__i386__) && !defined(__x86_64__) */
-		/* read 16-bit chunks */
-		const u_int16_t *k = (const u_int16_t *)key;
-		const u_int8_t *k8;
+	/* read 16-bit chunks */
+	const u_int16_t *k = (const u_int16_t *)key;
+	const u_int8_t *k8;
 
-		/* all but last block: aligned reads and different mixing */
-		while (len > 12) {
-			a += k[0] + (((u_int32_t)k[1]) << 16);
-			b += k[2] + (((u_int32_t)k[3]) << 16);
-			c += k[4] + (((u_int32_t)k[5]) << 16);
-			JHASH_MIX(a, b, c);
-			len -= 12;
-			k += 6;
-		}
-
-		/* handle the last (probably partial) block */
-		k8 = (const u_int8_t *)k;
-		switch (len) {
-		case 12:
-			c += k[4] + (((u_int32_t)k[5]) << 16);
-			b += k[2] + (((u_int32_t)k[3]) << 16);
-			a += k[0] + (((u_int32_t)k[1]) << 16);
-			break;
-
-		case 11:
-			c += ((u_int32_t)k8[10]) << 16;
-			/* FALLTHRU */
-		case 10:
-			c += k[4];
-			b += k[2] + (((u_int32_t)k[3]) << 16);
-			a += k[0] + (((u_int32_t)k[1]) << 16);
-			break;
-
-		case 9:
-			c += k8[8];
-			/* FALLTHRU */
-		case 8:
-			b += k[2] + (((u_int32_t)k[3]) << 16);
-			a += k[0] + (((u_int32_t)k[1]) << 16);
-			break;
-
-		case 7:
-			b += ((u_int32_t)k8[6]) << 16;
-			/* FALLTHRU */
-		case 6:
-			b += k[2];
-			a += k[0] + (((u_int32_t)k[1]) << 16);
-			break;
-
-		case 5:
-			b += k8[4];
-			/* FALLTHRU */
-		case 4:
-			a += k[0] + (((u_int32_t)k[1]) << 16);
-			break;
-
-		case 3:
-			a += ((u_int32_t)k8[2]) << 16;
-			/* FALLTHRU */
-		case 2:
-			a += k[0];
-			break;
-
-		case 1:
-			a += k8[0];
-			break;
-
-		case 0:
-			/* zero length requires no mixing */
-			return (c);
-		}
-
-		JHASH_FINAL(a, b, c);
-
-		return (c);
-#if !defined(__i386__) && !defined(__x86_64__)
-	}
-
-	/* need to read the key one byte at a time */
-	const u_int8_t *k = (const u_int8_t *)key;
-
-	/* all but the last block: affect some 32 bits of (a,b,c) */
+	/* all but last block: aligned reads and different mixing */
 	while (len > 12) {
-		a += k[0];
-		a += ((u_int32_t)k[1]) << 8;
-		a += ((u_int32_t)k[2]) << 16;
-		a += ((u_int32_t)k[3]) << 24;
-		b += k[4];
-		b += ((u_int32_t)k[5]) << 8;
-		b += ((u_int32_t)k[6]) << 16;
-		b += ((u_int32_t)k[7]) << 24;
-		c += k[8];
-		c += ((u_int32_t)k[9]) << 8;
-		c += ((u_int32_t)k[10]) << 16;
-		c += ((u_int32_t)k[11]) << 24;
+		a += k[0] + (((u_int32_t)k[1]) << 16);
+		b += k[2] + (((u_int32_t)k[3]) << 16);
+		c += k[4] + (((u_int32_t)k[5]) << 16);
 		JHASH_MIX(a, b, c);
 		len -= 12;
-		k += 12;
+		k += 6;
 	}
 
-	/* last block: affect all 32 bits of (c) */
+	/* handle the last (probably partial) block */
+	k8 = (const u_int8_t *)k;
 	switch (len) {
 	case 12:
-		c += ((u_int32_t)k[11]) << 24;
-		/* FALLTHRU */
+		c += k[4] + (((u_int32_t)k[5]) << 16);
+		b += k[2] + (((u_int32_t)k[3]) << 16);
+		a += k[0] + (((u_int32_t)k[1]) << 16);
+		break;
+
 	case 11:
-		c += ((u_int32_t)k[10]) << 16;
-		/* FALLTHRU */
+		c += ((u_int32_t)k8[10]) << 16;
+	/* FALLTHRU */
 	case 10:
-		c += ((u_int32_t)k[9]) << 8;
-		/* FALLTHRU */
+		c += k[4];
+		b += k[2] + (((u_int32_t)k[3]) << 16);
+		a += k[0] + (((u_int32_t)k[1]) << 16);
+		break;
+
 	case 9:
-		c += k[8];
-		/* FALLTHRU */
+		c += k8[8];
+	/* FALLTHRU */
 	case 8:
-		b += ((u_int32_t)k[7]) << 24;
-		/* FALLTHRU */
+		b += k[2] + (((u_int32_t)k[3]) << 16);
+		a += k[0] + (((u_int32_t)k[1]) << 16);
+		break;
+
 	case 7:
-		b += ((u_int32_t)k[6]) << 16;
-		/* FALLTHRU */
+		b += ((u_int32_t)k8[6]) << 16;
+	/* FALLTHRU */
 	case 6:
-		b += ((u_int32_t)k[5]) << 8;
-		/* FALLTHRU */
+		b += k[2];
+		a += k[0] + (((u_int32_t)k[1]) << 16);
+		break;
+
 	case 5:
-		b += k[4];
-		/* FALLTHRU */
+		b += k8[4];
+	/* FALLTHRU */
 	case 4:
-		a += ((u_int32_t)k[3]) << 24;
-		/* FALLTHRU */
+		a += k[0] + (((u_int32_t)k[1]) << 16);
+		break;
+
 	case 3:
-		a += ((u_int32_t)k[2]) << 16;
-		/* FALLTHRU */
+		a += ((u_int32_t)k8[2]) << 16;
+	/* FALLTHRU */
 	case 2:
-		a += ((u_int32_t)k[1]) << 8;
-		/* FALLTHRU */
-	case 1:
 		a += k[0];
+		break;
+
+	case 1:
+		a += k8[0];
 		break;
 
 	case 0:
 		/* zero length requires no mixing */
-		return (c);
+		return c;
 	}
 
 	JHASH_FINAL(a, b, c);
 
-	return (c);
+	return c;
+#if !defined(__i386__) && !defined(__x86_64__)
+}
+
+/* need to read the key one byte at a time */
+const u_int8_t *k = (const u_int8_t *)key;
+
+/* all but the last block: affect some 32 bits of (a,b,c) */
+while (len > 12) {
+	a += k[0];
+	a += ((u_int32_t)k[1]) << 8;
+	a += ((u_int32_t)k[2]) << 16;
+	a += ((u_int32_t)k[3]) << 24;
+	b += k[4];
+	b += ((u_int32_t)k[5]) << 8;
+	b += ((u_int32_t)k[6]) << 16;
+	b += ((u_int32_t)k[7]) << 24;
+	c += k[8];
+	c += ((u_int32_t)k[9]) << 8;
+	c += ((u_int32_t)k[10]) << 16;
+	c += ((u_int32_t)k[11]) << 24;
+	JHASH_MIX(a, b, c);
+	len -= 12;
+	k += 12;
+}
+
+/* last block: affect all 32 bits of (c) */
+switch (len) {
+case 12:
+	c += ((u_int32_t)k[11]) << 24;
+/* FALLTHRU */
+case 11:
+	c += ((u_int32_t)k[10]) << 16;
+/* FALLTHRU */
+case 10:
+	c += ((u_int32_t)k[9]) << 8;
+/* FALLTHRU */
+case 9:
+	c += k[8];
+/* FALLTHRU */
+case 8:
+	b += ((u_int32_t)k[7]) << 24;
+/* FALLTHRU */
+case 7:
+	b += ((u_int32_t)k[6]) << 16;
+/* FALLTHRU */
+case 6:
+	b += ((u_int32_t)k[5]) << 8;
+/* FALLTHRU */
+case 5:
+	b += k[4];
+/* FALLTHRU */
+case 4:
+	a += ((u_int32_t)k[3]) << 24;
+/* FALLTHRU */
+case 3:
+	a += ((u_int32_t)k[2]) << 16;
+/* FALLTHRU */
+case 2:
+	a += ((u_int32_t)k[1]) << 8;
+/* FALLTHRU */
+case 1:
+	a += k[0];
+	break;
+
+case 0:
+	/* zero length requires no mixing */
+	return c;
+}
+
+JHASH_FINAL(a, b, c);
+
+return c;
 #endif /* !defined(__i386__) && !defined(__x86_64__) */
 }
 #endif /* LITTLE_ENDIAN */

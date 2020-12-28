@@ -224,7 +224,7 @@ Lvstartshim:
 	/* %edi = boot_args_start */
 	
 	leaq	_vstart(%rip), %rcx
-	movq	$0xffffff8000000000, %rax	/* adjust pointer up high */
+	movq	$(KERNEL_BASE), %rax		/* adjust pointer up high */
 	or	%rax, %rsp			/* and stack pointer up there */
 	or	%rcx, %rax
 	andq	$0xfffffffffffffff0, %rsp	/* align stack */
@@ -308,7 +308,7 @@ LEXT(hibernate_machine_entrypoint)
 	leaq	EXT(hibernate_kernel_entrypoint)(%rip),%rcx
 
 	/* adjust the pointers to be up high */
-	movq	$0xffffff8000000000, %rax
+	movq	$(KERNEL_BASE), %rax
 	orq	%rax, %rsp
 	orq	%rcx, %rax
 

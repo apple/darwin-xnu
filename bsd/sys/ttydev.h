@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1997 Apple Computer, Inc. All Rights Reserved */
@@ -64,25 +64,25 @@
 /* COMPATIBILITY HEADER FILE */
 
 #ifndef _SYS_TTYDEV_H_
-#define	_SYS_TTYDEV_H_
+#define _SYS_TTYDEV_H_
 
 #ifdef USE_OLD_TTY
-#define B0	0
-#define B50	1
-#define B75	2
-#define B110	3
-#define B134	4
-#define B150	5
-#define B200	6
-#define B300	7
-#define B600	8
-#define B1200	9
-#define	B1800	10
-#define B2400	11
-#define B4800	12
-#define B9600	13
-#define EXTA	14
-#define EXTB	15
+#define B0      0
+#define B50     1
+#define B75     2
+#define B110    3
+#define B134    4
+#define B150    5
+#define B200    6
+#define B300    7
+#define B600    8
+#define B1200   9
+#define B1800   10
+#define B2400   11
+#define B4800   12
+#define B9600   13
+#define EXTA    14
+#define EXTB    15
 #define B57600  16
 #define B115200 17
 #endif /* USE_OLD_TTY */

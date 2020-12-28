@@ -55,7 +55,7 @@ typedef uintptr_t uptr;
 #ifdef __arm64__
 /* Works out at about 25% of 512 MiB and 15% of 3GiB system */
 # define STOLEN_MEM_PERCENT  13UL
-# define STOLEN_MEM_BYTES    MiB(62)
+# define STOLEN_MEM_BYTES    MiB(40)
 # define HW_PAGE_SIZE        (ARM_PGBYTES)
 # define HW_PAGE_MASK        (ARM_PGMASK)
 #else
@@ -71,6 +71,10 @@ typedef uintptr_t uptr;
 #define KASAN_ARGS_NODYCHECKS      0x0100U
 #define KASAN_ARGS_NOPOISON_HEAP   0x0200U
 #define KASAN_ARGS_NOPOISON_GLOBAL 0x0400U
+#define KASAN_ARGS_CHECK_LEAKS     0x0800U
+
+/* uninitialized memory detection */
+#define KASAN_UNINITIALIZED_HEAP   0xbe
 
 #ifndef KASAN
 # error KASAN undefined
@@ -110,17 +114,18 @@ enum __attribute__((flag_enum)) kasan_access_types {
 	TYPE_POISON_HEAP   = BIT(14),
 	/* no TYPE_POISON_STACK, because the runtime does not control stack poisoning */
 	TYPE_TEST          = BIT(15),
+	TYPE_LEAK          = BIT(16),
 
 	/* masks */
-	TYPE_MEM     = TYPE_MEMR|TYPE_MEMW,            /* memory intrinsics */
-	TYPE_STR     = TYPE_STRR|TYPE_STRW,            /* string intrinsics */
-	TYPE_READ    = TYPE_LOAD|TYPE_MEMR|TYPE_STRR,  /* all reads */
-	TYPE_WRITE   = TYPE_STORE|TYPE_MEMW|TYPE_STRW, /* all writes */
-	TYPE_RW      = TYPE_READ|TYPE_WRITE,           /* reads and writes */
-	TYPE_FREE    = TYPE_KFREE|TYPE_ZFREE|TYPE_FSFREE,
-	TYPE_NORMAL  = TYPE_RW|TYPE_FREE,
-	TYPE_DYNAMIC = TYPE_NORMAL|TYPE_UAF,
-	TYPE_POISON  = TYPE_POISON_GLOBAL|TYPE_POISON_HEAP,
+	TYPE_MEM     = TYPE_MEMR | TYPE_MEMW,            /* memory intrinsics */
+	TYPE_STR     = TYPE_STRR | TYPE_STRW,            /* string intrinsics */
+	TYPE_READ    = TYPE_LOAD | TYPE_MEMR | TYPE_STRR,  /* all reads */
+	TYPE_WRITE   = TYPE_STORE | TYPE_MEMW | TYPE_STRW, /* all writes */
+	TYPE_RW      = TYPE_READ | TYPE_WRITE,           /* reads and writes */
+	TYPE_FREE    = TYPE_KFREE | TYPE_ZFREE | TYPE_FSFREE,
+	TYPE_NORMAL  = TYPE_RW | TYPE_FREE,
+	TYPE_DYNAMIC = TYPE_NORMAL | TYPE_UAF,
+	TYPE_POISON  = TYPE_POISON_GLOBAL | TYPE_POISON_HEAP,
 	TYPE_ALL     = ~0U,
 };
 
@@ -130,6 +135,7 @@ enum kasan_violation_types {
 	REASON_INVALID_SIZE =   2, /* free size did not match alloc size */
 	REASON_MOD_AFTER_FREE = 3, /* object modified after free */
 	REASON_MOD_OOB =        4, /* out of bounds modification of object */
+	REASON_UNINITIALIZED =  5, /* leak of uninitialized kernel memory */
 };
 
 typedef enum kasan_access_types access_t;

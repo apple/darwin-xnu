@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -74,19 +74,19 @@
 #ifdef __APPLE_API_PRIVATE
 
 struct nfs_dlmount {
-	struct sockaddr_in ndm_saddr;  		/* Address of file server */
-	char		ndm_host[MAXHOSTNAMELEN];/* Host name for mount pt */
-	char		*ndm_path; 		/* path name for mount pt */
-	char		*ndm_mntfrom; 		/* mntfromname for mount pt */
-	u_int32_t		ndm_nfsv3;		/* NFSv3 or NFSv2? */
-	u_int32_t		ndm_sotype;		/* SOCK_STREAM or SOCK_DGRAM? */
-	u_int32_t		ndm_fhlen;		/* length of file handle */
-	u_char		ndm_fh[NFSX_V3FHMAX];	/* The file's file handle */
+	struct sockaddr_in ndm_saddr;           /* Address of file server */
+	char            ndm_host[MAXHOSTNAMELEN];/* Host name for mount pt */
+	char            *ndm_path;              /* path name for mount pt */
+	char            *ndm_mntfrom;           /* mntfromname for mount pt */
+	u_int32_t               ndm_nfsv3;              /* NFSv3 or NFSv2? */
+	u_int32_t               ndm_sotype;             /* SOCK_STREAM or SOCK_DGRAM? */
+	u_int32_t               ndm_fhlen;              /* length of file handle */
+	u_char          ndm_fh[NFSX_V3FHMAX];   /* The file's file handle */
 };
 
 struct nfs_diskless {
-	struct nfs_dlmount nd_root; 	/* Mount info for root */
-	struct nfs_dlmount nd_private; 	/* Mount info for private */
+	struct nfs_dlmount nd_root;     /* Mount info for root */
+	struct nfs_dlmount nd_private;  /* Mount info for private */
 };
 
 #endif /* __APPLE_API_PRIVATE */

@@ -55,7 +55,7 @@
  */
 
 #ifndef _NET_PKTSCHED_PKTSCHED_PRIQ_H_
-#define	_NET_PKTSCHED_PKTSCHED_PRIQ_H_
+#define _NET_PKTSCHED_PKTSCHED_PRIQ_H_
 
 #ifdef PRIVATE
 #include <net/pktsched/pktsched.h>
@@ -69,53 +69,53 @@
 extern "C" {
 #endif
 
-#define	PRIQ_MAXPRI	16	/* upper limit of the number of priorities */
+#define PRIQ_MAXPRI     16      /* upper limit of the number of priorities */
 
 /* priq class flags */
-#define	PRCF_RED		0x0001	/* use RED */
-#define	PRCF_ECN		0x0002  /* use ECN with RED/BLUE/SFB */
-#define	PRCF_RIO		0x0004  /* use RIO */
-#define	PRCF_CLEARDSCP		0x0010  /* clear diffserv codepoint */
-#define	PRCF_BLUE		0x0100	/* use BLUE */
-#define	PRCF_SFB		0x0200	/* use SFB */
-#define	PRCF_FLOWCTL		0x0400	/* enable flow control advisories */
-#define	PRCF_DEFAULTCLASS	0x1000	/* default class */
+#define PRCF_RED                0x0001  /* use RED */
+#define PRCF_ECN                0x0002  /* use ECN with RED/BLUE/SFB */
+#define PRCF_RIO                0x0004  /* use RIO */
+#define PRCF_CLEARDSCP          0x0010  /* clear diffserv codepoint */
+#define PRCF_BLUE               0x0100  /* use BLUE */
+#define PRCF_SFB                0x0200  /* use SFB */
+#define PRCF_FLOWCTL            0x0400  /* enable flow control advisories */
+#define PRCF_DEFAULTCLASS       0x1000  /* default class */
 #ifdef BSD_KERNEL_PRIVATE
-#define	PRCF_LAZY		0x10000000 /* on-demand resource allocation */
+#define PRCF_LAZY               0x10000000 /* on-demand resource allocation */
 #endif /* BSD_KERNEL_PRIVATE */
 
-#define	PRCF_USERFLAGS							\
-	(PRCF_RED | PRCF_ECN | PRCF_RIO | PRCF_CLEARDSCP | PRCF_BLUE |	\
+#define PRCF_USERFLAGS                                                  \
+	(PRCF_RED | PRCF_ECN | PRCF_RIO | PRCF_CLEARDSCP | PRCF_BLUE |  \
 	PRCF_SFB | PRCF_FLOWCTL | PRCF_DEFAULTCLASS)
 
 #ifdef BSD_KERNEL_PRIVATE
-#define	PRCF_BITS \
+#define PRCF_BITS \
 	"\020\1RED\2ECN\3RIO\5CLEARDSCP\11BLUE\12SFB\13FLOWCTL\15DEFAULT" \
 	"\35LAZY"
 #else
-#define	PRCF_BITS \
+#define PRCF_BITS \
 	"\020\1RED\2ECN\3RIO\5CLEARDSCP\11BLUE\12SFB\13FLOWCTL\15DEFAULT"
 #endif /* !BSD_KERNEL_PRIVATE */
 
 struct priq_classstats {
-	u_int32_t		class_handle;
-	u_int32_t		priority;
+	u_int32_t               class_handle;
+	u_int32_t               priority;
 
-	u_int32_t		qlength;
-	u_int32_t		qlimit;
-	u_int32_t		period;
-	struct pktcntr		xmitcnt;  /* transmitted packet counter */
-	struct pktcntr		dropcnt;  /* dropped packet counter */
+	u_int32_t               qlength;
+	u_int32_t               qlimit;
+	u_int32_t               period;
+	struct pktcntr          xmitcnt;  /* transmitted packet counter */
+	struct pktcntr          dropcnt;  /* dropped packet counter */
 
 	/* RED, RIO, BLUE, SFB related info */
-	classq_type_t		qtype;
+	classq_type_t           qtype;
 	union {
 		/* RIO has 3 red stats */
-		struct red_stats	red[RIO_NDROPPREC];
-		struct blue_stats	blue;
-		struct sfb_stats	sfb;
+		struct red_stats        red[RIO_NDROPPREC];
+		struct blue_stats       blue;
+		struct sfb_stats        sfb;
 	};
-	classq_state_t		qstate;
+	classq_state_t          qstate;
 };
 
 #ifdef __cplusplus

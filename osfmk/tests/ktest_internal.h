@@ -72,11 +72,11 @@ extern ktest_temp ktest_temp1, ktest_temp2, ktest_temp3;
 extern char ktest_output_buf[KTEST_MAXLEN];
 
 extern int ktest_test_result_statetab[KTEST_NUM_TEST_STATES]
-				     [KTEST_NUM_TESTCASE_STATES]
-				     [KTEST_NUM_TESTCASE_MODES];
+[KTEST_NUM_TESTCASE_STATES]
+[KTEST_NUM_TESTCASE_MODES];
 
 extern const char * ktest_testcase_result_tokens[KTEST_NUM_TESTCASE_MODES]
-						[KTEST_NUM_TESTCASE_STATES];
+[KTEST_NUM_TESTCASE_STATES];
 
 
 void ktest_emit_start(void);
@@ -89,4 +89,3 @@ void ktest_emit_perfdata(const char * metric, const char * unit, double value, c
 void ktest_emit_testcase(void);
 
 #endif /* _TESTS_KTEST_INTERNAL_H */
-

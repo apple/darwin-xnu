@@ -152,6 +152,11 @@
 	movk $0, #((($1) >> 00) & 0x000000000000FFFF), lsl #00
 .endmacro
 
+.macro MOV32
+	movz $0, #((($1) >> 16) & 0x000000000000FFFF), lsl #16
+	movk $0, #((($1) >> 00) & 0x000000000000FFFF), lsl #00
+.endmacro
+
 .macro ARM64_STACK_PROLOG
 #if __has_feature(ptrauth_returns)
 	pacibsp
@@ -178,7 +183,7 @@
 
 #ifdef  XNU_KERNEL_PRIVATE
 .macro PANIC_UNIMPLEMENTED
-	bl _panic_unimplemented
+	bl EXT(panic_unimplemented)
 .endmacro
 #endif
 

@@ -28,12 +28,12 @@
 #include <sys/mcache.h>
 #include <kern/kern_types.h>
 #include <net/pf_pbuf.h>
+#include <net/pfvar.h>
 #include <netinet/in.h>
 
 void
 pbuf_init_mbuf(pbuf_t *pbuf, struct mbuf *m, struct ifnet *ifp)
 {
-
 	VERIFY((m->m_flags & M_PKTHDR) != 0);
 
 	pbuf->pb_type = PBUF_TYPE_MBUF;
@@ -46,7 +46,6 @@ pbuf_init_mbuf(pbuf_t *pbuf, struct mbuf *m, struct ifnet *ifp)
 void
 pbuf_init_memory(pbuf_t *pbuf, const struct pbuf_memory *mp, struct ifnet *ifp)
 {
-
 	pbuf->pb_type = PBUF_TYPE_MEMORY;
 	pbuf->pb_memory = *mp;
 	pbuf->pb_ifp = ifp;
@@ -57,14 +56,12 @@ pbuf_init_memory(pbuf_t *pbuf, const struct pbuf_memory *mp, struct ifnet *ifp)
 void
 pbuf_destroy(pbuf_t *pbuf)
 {
-
 	if (pbuf->pb_type == PBUF_TYPE_MBUF) {
 		if (pbuf->pb_mbuf) {
 			m_freem(pbuf->pb_mbuf);
 			pbuf->pb_mbuf = NULL;
 		}
-	} else
-	if (pbuf->pb_type == PBUF_TYPE_MEMORY) {
+	} else if (pbuf->pb_type == PBUF_TYPE_MEMORY) {
 		VERIFY(pbuf->pb_memory.pm_buffer != NULL);
 		(void) (pbuf->pb_memory.pm_action)(&pbuf->pb_memory,
 		    PBUF_ACTION_DESTROY);
@@ -78,7 +75,6 @@ pbuf_destroy(pbuf_t *pbuf)
 void
 pbuf_sync(pbuf_t *pbuf)
 {
-
 	if (pbuf->pb_type == PBUF_TYPE_MBUF) {
 		struct mbuf *m = pbuf->pb_mbuf;
 
@@ -95,8 +91,10 @@ pbuf_sync(pbuf_t *pbuf)
 		pbuf->pb_flowid = &m->m_pkthdr.pkt_flowid;
 		pbuf->pb_flags = &m->m_pkthdr.pkt_flags;
 		pbuf->pb_pftag = m_pftag(m);
-	} else
-	if (pbuf->pb_type == PBUF_TYPE_MEMORY) {
+		pbuf->pb_pf_fragtag = pf_find_fragment_tag(m);
+		ASSERT((pbuf->pb_pf_fragtag == NULL) ||
+		    (pbuf->pb_pftag->pftag_flags & PF_TAG_REASSEMBLED));
+	} else if (pbuf->pb_type == PBUF_TYPE_MEMORY) {
 		struct pbuf_memory *nm = &pbuf->pb_memory;
 
 		VERIFY(nm->pm_buffer != NULL);
@@ -115,8 +113,10 @@ pbuf_sync(pbuf_t *pbuf)
 		pbuf->pb_flowid = &nm->pm_flowid;
 		pbuf->pb_flags = &nm->pm_flags;
 		pbuf->pb_pftag = &nm->pm_pftag;
-	} else
+		pbuf->pb_pf_fragtag = &nm->pm_pf_fragtag;
+	} else {
 		panic("%s: bad pb_type: %d", __func__, pbuf->pb_type);
+	}
 }
 
 struct mbuf *
@@ -130,22 +130,23 @@ pbuf_to_mbuf(pbuf_t *pbuf, boolean_t release_ptr)
 		m = pbuf->pb_mbuf;
 		if (release_ptr) {
 			pbuf->pb_mbuf = NULL;
-			pbuf_destroy(pbuf);
 		}
-	} else
-	if (pbuf->pb_type == PBUF_TYPE_MEMORY) {
+	} else if (pbuf->pb_type == PBUF_TYPE_MEMORY) {
+		boolean_t fragtag = FALSE;
+
 		if (pbuf->pb_packet_len > (u_int)MHLEN) {
 			if (pbuf->pb_packet_len > (u_int)MCLBYTES) {
 				printf("%s: packet too big for cluster (%u)\n",
 				    __func__, pbuf->pb_packet_len);
-				return (NULL);
+				return NULL;
 			}
 			m = m_getcl(M_WAITOK, MT_DATA, M_PKTHDR);
 		} else {
 			m = m_gethdr(M_DONTWAIT, MT_DATA);
 		}
-		if (m == NULL)
-			return (NULL);
+		if (m == NULL) {
+			goto done;
+		}
 
 		m_copyback(m, 0, pbuf->pb_packet_len, pbuf->pb_data);
 		m->m_pkthdr.csum_flags = *pbuf->pb_csum_flags;
@@ -158,15 +159,27 @@ pbuf_to_mbuf(pbuf_t *pbuf, boolean_t release_ptr)
 		if (pbuf->pb_pftag != NULL) {
 			struct pf_mtag *pftag = m_pftag(m);
 
-			if (pftag != NULL)
-				*pftag = *pbuf->pb_pftag;
+			ASSERT(pftag != NULL);
+			*pftag = *pbuf->pb_pftag;
+			fragtag =
+			    ((pftag->pftag_flags & PF_TAG_REASSEMBLED) != 0);
 		}
 
-		if (release_ptr)
-			pbuf_destroy(pbuf);
+		if (fragtag && pbuf->pb_pf_fragtag != NULL) {
+			if (pf_copy_fragment_tag(m, pbuf->pb_pf_fragtag,
+			    M_NOWAIT) == NULL) {
+				m_freem(m);
+				m = NULL;
+				goto done;
+			}
+		}
 	}
 
-	return (m);
+done:
+	if (release_ptr) {
+		pbuf_destroy(pbuf);
+	}
+	return m;
 }
 
 struct mbuf *
@@ -176,40 +189,40 @@ pbuf_clone_to_mbuf(pbuf_t *pbuf)
 
 	pbuf_sync(pbuf);
 
-	if (pbuf->pb_type == PBUF_TYPE_MBUF)
+	if (pbuf->pb_type == PBUF_TYPE_MBUF) {
 		m = m_copy(pbuf->pb_mbuf, 0, M_COPYALL);
-	else
-	if (pbuf->pb_type == PBUF_TYPE_MEMORY)
+	} else if (pbuf->pb_type == PBUF_TYPE_MEMORY) {
 		m = pbuf_to_mbuf(pbuf, FALSE);
-	else
+	} else {
 		panic("%s: bad pb_type: %d", __func__, pbuf->pb_type);
+	}
 
-	return (m);
+	return m;
 }
 
 void *
 pbuf_ensure_writable(pbuf_t *pbuf, size_t len)
 {
-
 	if (pbuf->pb_type == PBUF_TYPE_MBUF) {
 		struct mbuf *m = pbuf->pb_mbuf;
 
-		if (m_makewritable(&pbuf->pb_mbuf, 0, len, M_DONTWAIT))
-			return (NULL);
+		if (m_makewritable(&pbuf->pb_mbuf, 0, len, M_DONTWAIT)) {
+			return NULL;
+		}
 
 		if (pbuf->pb_mbuf == NULL) {
 			pbuf_destroy(pbuf);
-			return (NULL);
+			return NULL;
 		}
 
-		if  (m != pbuf->pb_mbuf)
+		if (m != pbuf->pb_mbuf) {
 			pbuf_sync(pbuf);
-
-	} else
-	if (pbuf->pb_type != PBUF_TYPE_MEMORY)
+		}
+	} else if (pbuf->pb_type != PBUF_TYPE_MEMORY) {
 		panic("%s: bad pb_type: %d", __func__, pbuf->pb_type);
+	}
 
-	return (pbuf->pb_data);
+	return pbuf->pb_data;
 }
 
 void *
@@ -229,8 +242,9 @@ pbuf_resize_segment(pbuf_t *pbuf, int off, int olen, int nlen)
 
 		if (off > 0) {
 			/* Split the mbuf chain at the specified boundary */
-			if ((n = m_split(m, off, M_DONTWAIT)) == NULL)
-				return (NULL);
+			if ((n = m_split(m, off, M_DONTWAIT)) == NULL) {
+				return NULL;
+			}
 		} else {
 			n = m;
 		}
@@ -239,8 +253,9 @@ pbuf_resize_segment(pbuf_t *pbuf, int off, int olen, int nlen)
 		m_adj(n, olen);
 
 		/* Prepend new length */
-		if (M_PREPEND(n, nlen, M_DONTWAIT, 0) == NULL)
-			return (NULL);
+		if (M_PREPEND(n, nlen, M_DONTWAIT, 0) == NULL) {
+			return NULL;
+		}
 
 		rv = mtod(n, void *);
 
@@ -282,7 +297,7 @@ pbuf_resize_segment(pbuf_t *pbuf, int off, int olen, int nlen)
 	} else {
 		panic("pbuf_csum_flags_get: bad pb_type: %d", pbuf->pb_type);
 	}
-	return (rv);
+	return rv;
 }
 
 void *
@@ -309,58 +324,58 @@ pbuf_contig_segment(pbuf_t *pbuf, int off, int len)
 			/* mbuf is freed by m_pulldown() in this case */
 			pbuf->pb_mbuf = NULL;
 			pbuf_destroy(pbuf);
-			return (NULL);
+			return NULL;
 		}
 
 		pbuf_sync(pbuf);
 
 		rv = (void *)(mtod(n, uint8_t *) + moff);
-	} else
-	if (pbuf->pb_type == PBUF_TYPE_MEMORY) {
+	} else if (pbuf->pb_type == PBUF_TYPE_MEMORY) {
 		/*
 		 * This always succeeds since memory pbufs are fully contig.
 		 */
 		rv = (void *)(uintptr_t)(((uint8_t *)pbuf->pb_data)[off]);
-	} else
+	} else {
 		panic("%s: bad pb_type: %d", __func__, pbuf->pb_type);
+	}
 
-	return (rv);
+	return rv;
 }
 
 void
 pbuf_copy_back(pbuf_t *pbuf, int off, int len, void *src)
 {
-
 	VERIFY(off >= 0);
 	VERIFY(len >= 0);
 	VERIFY((u_int)(off + len) <= pbuf->pb_packet_len);
 
-	if (pbuf->pb_type == PBUF_TYPE_MBUF)
-		m_copyback(pbuf->pb_mbuf, off, len, src);
-	else
 	if (pbuf->pb_type == PBUF_TYPE_MBUF) {
-		if (len)
+		m_copyback(pbuf->pb_mbuf, off, len, src);
+	} else if (pbuf->pb_type == PBUF_TYPE_MEMORY) {
+		if (len) {
 			memcpy(&((uint8_t *)pbuf->pb_data)[off], src, len);
-	} else
+		}
+	} else {
 		panic("%s: bad pb_type: %d", __func__, pbuf->pb_type);
+	}
 }
 
 void
 pbuf_copy_data(pbuf_t *pbuf, int off, int len, void *dst)
 {
-
 	VERIFY(off >= 0);
 	VERIFY(len >= 0);
 	VERIFY((u_int)(off + len) <= pbuf->pb_packet_len);
 
-	if (pbuf->pb_type == PBUF_TYPE_MBUF)
-		m_copydata(pbuf->pb_mbuf, off, len, dst);
-	else
 	if (pbuf->pb_type == PBUF_TYPE_MBUF) {
-		if (len)
+		m_copydata(pbuf->pb_mbuf, off, len, dst);
+	} else if (pbuf->pb_type == PBUF_TYPE_MEMORY) {
+		if (len) {
 			memcpy(dst, &((uint8_t *)pbuf->pb_data)[off], len);
-	} else
+		}
+	} else {
 		panic("%s: bad pb_type: %d", __func__, pbuf->pb_type);
+	}
 }
 
 uint16_t
@@ -368,15 +383,15 @@ pbuf_inet_cksum(const pbuf_t *pbuf, uint32_t nxt, uint32_t off, uint32_t len)
 {
 	uint16_t sum = 0;
 
-	if (pbuf->pb_type == PBUF_TYPE_MBUF)
+	if (pbuf->pb_type == PBUF_TYPE_MBUF) {
 		sum = inet_cksum(pbuf->pb_mbuf, nxt, off, len);
-	else
-	if (pbuf->pb_type == PBUF_TYPE_MEMORY)
+	} else if (pbuf->pb_type == PBUF_TYPE_MEMORY) {
 		sum = inet_cksum_buffer(pbuf->pb_data, nxt, off, len);
-	else
+	} else {
 		panic("%s: bad pb_type: %d", __func__, pbuf->pb_type);
+	}
 
-	return (sum);
+	return sum;
 }
 
 uint16_t
@@ -384,25 +399,25 @@ pbuf_inet6_cksum(const pbuf_t *pbuf, uint32_t nxt, uint32_t off, uint32_t len)
 {
 	uint16_t sum = 0;
 
-	if (pbuf->pb_type == PBUF_TYPE_MBUF)
+	if (pbuf->pb_type == PBUF_TYPE_MBUF) {
 		sum = inet6_cksum(pbuf->pb_mbuf, nxt, off, len);
-	else
-	if (pbuf->pb_type == PBUF_TYPE_MEMORY)
+	} else if (pbuf->pb_type == PBUF_TYPE_MEMORY) {
 		sum = inet6_cksum_buffer(pbuf->pb_data, nxt, off, len);
-	else
+	} else {
 		panic("%s: bad pb_type: %d", __func__, pbuf->pb_type);
+	}
 
-	return (sum);
+	return sum;
 }
 
 mbuf_svc_class_t
 pbuf_get_service_class(const pbuf_t *pbuf)
 {
-
-	if (pbuf->pb_type == PBUF_TYPE_MBUF)
+	if (pbuf->pb_type == PBUF_TYPE_MBUF) {
 		return m_get_service_class(pbuf->pb_mbuf);
+	}
 
 	VERIFY(pbuf->pb_type == PBUF_TYPE_MEMORY);
 
-	return (MBUF_SC_BE);
+	return MBUF_SC_BE;
 }

@@ -35,15 +35,17 @@
 
 #include <uuid/uuid.h>
 
+#ifdef PLATFORM_BridgeOS
 /* Version 0 trust caches: No defined sorting order (thus only suitable for small trust caches).
  * Used for loadable trust caches only, until phasing out support. */
 typedef uint8_t trust_cache_hash0[CS_CDHASH_LEN];
 struct trust_cache_module0 {
-    uint32_t version;
-    uuid_t uuid;
-    uint32_t num_hashes;
-    trust_cache_hash0 hashes[];
+	uint32_t version;
+	uuid_t uuid;
+	uint32_t num_hashes;
+	trust_cache_hash0 hashes[];
 } __attribute__((__packed__));
+#endif
 
 
 /* Version 1 trust caches: Always sorted by cdhash, added hash type and flags field.
@@ -56,14 +58,30 @@ struct trust_cache_entry1 {
 } __attribute__((__packed__));
 
 struct trust_cache_module1 {
-    uint32_t version;
-    uuid_t uuid;
-    uint32_t num_entries;
-    struct trust_cache_entry1 entries[];
+	uint32_t version;
+	uuid_t uuid;
+	uint32_t num_entries;
+	struct trust_cache_entry1 entries[];
 } __attribute__((__packed__));
 
 // Trust Cache Entry Flags
-#define CS_TRUST_CACHE_AMFID    0x1			// valid cdhash for amfid
+#define CS_TRUST_CACHE_AMFID    0x1                     // valid cdhash for amfid
+
+/* Trust Cache lookup functions return their result as a 32bit value
+ * comprised of subfields, for straightforward passing through layers.
+ *
+ * Format:
+ *
+ * 0xXXCCBBAA
+ *
+ * AA:  0-7: lookup result
+ *  bit  0: TC_LOOKUP_FOUND: set if any entry found
+ *  bit  1: (obsolete) TC_LOOKUP_FALLBACK: set if found in legacy static trust cache
+ *  bit  2-7: reserved
+ * BB:  8-15: entry flags pass-through, see "Trust Cache Entry Flags" above
+ * CC: 16-23: code directory hash type of entry, see CS_HASHTYPE_* in cs_blobs.h
+ * XX: 24-31: reserved
+ */
 
 #define TC_LOOKUP_HASH_TYPE_SHIFT               16
 #define TC_LOOKUP_HASH_TYPE_MASK                0xff0000L;
@@ -73,7 +91,6 @@ struct trust_cache_module1 {
 #define TC_LOOKUP_RESULT_MASK                   0xffL
 
 #define TC_LOOKUP_FOUND         1
-#define TC_LOOKUP_FALLBACK      2
 
 #ifdef XNU_KERNEL_PRIVATE
 
@@ -81,35 +98,19 @@ struct trust_cache_module1 {
 
 /* This is how iBoot delivers them to us. */
 struct serialized_trust_caches {
-       uint32_t num_caches;
-       uint32_t offsets[0];
+	uint32_t num_caches;
+	uint32_t offsets[0];
 } __attribute__((__packed__));
 
-
-// Legacy Static Trust Cache
-
-/* This is the old legacy trust cache baked into the AMFI kext.
- * We support it for a transitionary period, until external trust caches
- * are fully established, and the AMFI trust cache can be removed. */
-
-struct legacy_trust_cache_bucket {
-	uint16_t count;
-	uint16_t offset;
-} __attribute__((__packed__));
-
-#define LEGACY_TRUST_CACHE_ENTRY_LEN (CS_CDHASH_LEN-1)
-#define LEGACY_TRUST_CACHE_BUCKET_COUNT (256)
-
-typedef uint8_t pmap_cs_legacy_stc_entry[CS_CDHASH_LEN-1]; // bucketized with first byte
 
 void trust_cache_init(void);
 
 uint32_t lookup_in_static_trust_cache(const uint8_t cdhash[CS_CDHASH_LEN]);
 
 bool lookup_in_trust_cache_module(struct trust_cache_module1 const * const module,
-								  uint8_t const	cdhash[CS_CDHASH_LEN],
-								  uint8_t	* const	hash_type,
-								  uint8_t	* const flags);
+    uint8_t const cdhash[CS_CDHASH_LEN],
+    uint8_t       * const hash_type,
+    uint8_t       * const flags);
 
 #endif
 

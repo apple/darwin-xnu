@@ -56,7 +56,7 @@
  */
 
 #ifndef _NET_CLASSQ_CLASSQ_RED_H_
-#define	_NET_CLASSQ_CLASSQ_RED_H_
+#define _NET_CLASSQ_CLASSQ_RED_H_
 
 #ifdef PRIVATE
 #ifdef BSD_KERNEL_PRIVATE
@@ -72,17 +72,17 @@ extern "C" {
  * disciplines (e.g., CBQ)
  */
 struct redparams {
-	int th_min;		/* red min threshold */
-	int th_max;		/* red max threshold */
-	int inv_pmax;		/* inverse of max drop probability */
+	int th_min;             /* red min threshold */
+	int th_max;             /* red max threshold */
+	int inv_pmax;           /* inverse of max drop probability */
 };
 
 struct red_stats {
-	int32_t		q_avg;
-	u_int32_t	_pad;
-	u_int32_t	drop_forced;
-	u_int32_t	drop_unforced;
-	u_int32_t	marked_packets;
+	int32_t         q_avg;
+	u_int32_t       _pad;
+	u_int32_t       drop_forced;
+	u_int32_t       drop_unforced;
+	u_int32_t       marked_packets;
 };
 
 #ifdef __cplusplus

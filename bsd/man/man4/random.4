@@ -36,13 +36,13 @@ is a compatibility nod to Linux. On Linux,
 will produce lower quality output if the entropy pool drains, while
 .Nm /dev/random
 will prefer to block and wait for additional entropy to be collected.
-With Yarrow, this choice and distinction is not necessary, and
+With Fortuna, this choice and distinction is not necessary, and
 the two devices behave identically. You may use either.
 .Pp
 The
 .Nm
 device implements the
-.Nm Yarrow
+.Nm Fortuna
 pseudo random number generator algorithm and maintains its entropy pool.
 The kernel automatically seeds the algorithm with additional entropy during normal execution.
 .Sh FILES

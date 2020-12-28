@@ -33,9 +33,11 @@
 #include <i386/proc_reg.h>
 #include <kern/assert.h> /* static_assert, assert */
 #include <kern/monotonic.h>
-#include <x86_64/monotonic.h>
+#include <os/overflow.h>
 #include <sys/errno.h>
 #include <sys/monotonic.h>
+#include <x86_64/monotonic.h>
+#include <kern/kpc.h>
 
 /*
  * Sanity check the compiler.
@@ -157,17 +159,39 @@ mt_core_set_snap(unsigned int ctr, uint64_t count)
 
 #define GLOBAL_OVF 0x390
 
+static void mt_check_for_pmi(struct mt_cpu *mtc, x86_saved_state_t *state);
+
+static void
+enable_counters(void)
+{
+	wrmsr64(FIXED_CTR_CTRL, FIXED_CTR_CTRL_INIT | FIXED_CTR_CTRL_ENABLE);
+
+	uint64_t global_en = GLOBAL_CTRL_FIXED_EN;
+	if (kpc_get_running() & KPC_CLASS_CONFIGURABLE_MASK) {
+		global_en |= kpc_get_configurable_pmc_mask(KPC_CLASS_CONFIGURABLE_MASK);
+	}
+
+	wrmsr64(GLOBAL_CTRL, global_en);
+}
+
+static void
+disable_counters(void)
+{
+	wrmsr64(GLOBAL_CTRL, 0);
+}
+
 static void
 core_down(cpu_data_t *cpu)
 {
 	if (!mt_core_supported) {
 		return;
 	}
-
 	assert(ml_get_interrupts_enabled() == FALSE);
+	struct mt_cpu *mtc = &cpu->cpu_monotonic;
 
-	wrmsr64(GLOBAL_CTRL, 0);
-	mt_mtc_update_fixed_counts(&cpu->cpu_monotonic, NULL, NULL);
+	disable_counters();
+	mt_mtc_update_fixed_counts(mtc, NULL, NULL);
+	mtc->mtc_active = false;
 }
 
 static void
@@ -186,8 +210,8 @@ core_up(cpu_data_t *cpu)
 	for (int i = 0; i < MT_CORE_NFIXED; i++) {
 		mt_core_set_snap(i, mtc->mtc_snaps[i]);
 	}
-	wrmsr64(FIXED_CTR_CTRL, FIXED_CTR_CTRL_INIT | FIXED_CTR_CTRL_ENABLE);
-	wrmsr64(GLOBAL_CTRL, GLOBAL_CTRL_FIXED_EN);
+	enable_counters();
+	mtc->mtc_active = true;
 }
 
 void
@@ -205,17 +229,27 @@ mt_cpu_up(cpu_data_t *cpu)
 	ml_set_interrupts_enabled(intrs_en);
 }
 
-static int
-mt_pmi_x86_64(x86_saved_state_t *state)
+uint64_t
+mt_count_pmis(void)
 {
-	uint64_t status;
-	struct mt_cpu *mtc;
+	uint64_t npmis = 0;
+	for (unsigned int i = 0; i < real_ncpus; i++) {
+		cpu_data_t *cpu = cpu_data_ptr[i];
+		npmis += cpu->cpu_monotonic.mtc_npmis;
+	}
+	return npmis;
+}
 
-	assert(ml_get_interrupts_enabled() == FALSE);
-	mtc = mt_cur_cpu();
-	status = rdmsr64(GLOBAL_STATUS);
+static void
+mt_check_for_pmi(struct mt_cpu *mtc, x86_saved_state_t *state)
+{
+	uint64_t status = rdmsr64(GLOBAL_STATUS);
 
-	(void)atomic_fetch_add_explicit(&mt_pmis, 1, memory_order_relaxed);
+	mtc->mtc_npmis += 1;
+
+	if (mtc->mtc_active) {
+		disable_counters();
+	}
 
 	for (unsigned int i = 0; i < MT_CORE_NFIXED; i++) {
 		if (status & CTR_FIX_POS(i)) {
@@ -227,14 +261,17 @@ mt_pmi_x86_64(x86_saved_state_t *state)
 			mtc->mtc_counts[i] += delta;
 
 			if (mt_microstackshots && mt_microstackshot_ctr == i) {
-				x86_saved_state64_t *state64 = saved_state64(state);
-				bool user_mode = (state64->isf.cs & 0x3) ? true : false;
+				bool user_mode = false;
+				if (state) {
+					x86_saved_state64_t *state64 = saved_state64(state);
+					user_mode = (state64->isf.cs & 0x3) != 0;
+				}
 				KDBG_RELEASE(KDBG_EVENTID(DBG_MONOTONIC, DBG_MT_DEBUG, 1),
-						mt_microstackshot_ctr, user_mode);
+				    mt_microstackshot_ctr, user_mode);
 				mt_microstackshot_pmi_handler(user_mode, mt_microstackshot_ctx);
 			} else if (mt_debug) {
 				KDBG(KDBG_EVENTID(DBG_MONOTONIC, DBG_MT_DEBUG, 2),
-						mt_microstackshot_ctr, i);
+				    mt_microstackshot_ctr, i);
 			}
 
 			mtc->mtc_snaps[i] = mt_core_reset_values[i];
@@ -244,9 +281,20 @@ mt_pmi_x86_64(x86_saved_state_t *state)
 
 	/* if any of the configurable counters overflowed, tell kpc */
 	if (status & ((UINT64_C(1) << 4) - 1)) {
-		extern void kpc_pmi_handler(x86_saved_state_t *state);
-		kpc_pmi_handler(state);
+		extern void kpc_pmi_handler(void);
+		kpc_pmi_handler();
 	}
+
+	if (mtc->mtc_active) {
+		enable_counters();
+	}
+}
+
+static int
+mt_pmi_x86_64(x86_saved_state_t *state)
+{
+	assert(ml_get_interrupts_enabled() == FALSE);
+	mt_check_for_pmi(mt_cur_cpu(), state);
 	return 0;
 }
 
@@ -274,15 +322,24 @@ mt_microstackshot_start_arch(uint64_t period)
 		return ENOTSUP;
 	}
 
+	uint64_t reset_value = 0;
+	int ovf = os_sub_overflow(CTR_MAX, period, &reset_value);
+	if (ovf) {
+		return ERANGE;
+	}
+
 	mt_core_reset_values[mt_microstackshot_ctr] = CTR_MAX - period;
 	mp_cpus_call(CPUMASK_ALL, ASYNC, mt_microstackshot_start_remote,
-			NULL);
+	    NULL);
 	return 0;
 }
 
 void
 mt_early_init(void)
 {
+	if (PE_parse_boot_argn("-nomt_core", NULL, 0)) {
+		return;
+	}
 	i386_cpu_info_t *info = cpuid_info();
 	if (info->cpuid_arch_perf_leaf.version >= 2) {
 		lapic_set_pmi_func((i386_intr_func_t)mt_pmi_x86_64);
@@ -306,5 +363,5 @@ struct mt_device mt_devices[] = {
 };
 
 static_assert(
-		(sizeof(mt_devices) / sizeof(mt_devices[0])) == MT_NDEVS,
-		"MT_NDEVS macro should be same as the length of mt_devices");
+	(sizeof(mt_devices) / sizeof(mt_devices[0])) == MT_NDEVS,
+	"MT_NDEVS macro should be same as the length of mt_devices");

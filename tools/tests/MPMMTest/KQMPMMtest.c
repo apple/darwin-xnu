@@ -26,21 +26,21 @@
 
 
 typedef struct {
-	mach_msg_header_t	header;
-	mach_msg_trailer_t	trailer;		// subtract this when sending
+	mach_msg_header_t       header;
+	mach_msg_trailer_t      trailer;                // subtract this when sending
 } ipc_trivial_message;
 
 typedef struct {
-	mach_msg_header_t	header;
-	u_int32_t		numbers[0];
-	mach_msg_trailer_t	trailer;		// subtract this when sending
+	mach_msg_header_t       header;
+	u_int32_t               numbers[0];
+	mach_msg_trailer_t      trailer;                // subtract this when sending
 } ipc_inline_message;
 
 typedef struct {
-	mach_msg_header_t		header;
-	mach_msg_body_t			body;
-	mach_msg_ool_descriptor_t	descriptor;
-	mach_msg_trailer_t		trailer;	// subtract this when sending
+	mach_msg_header_t               header;
+	mach_msg_body_t                 body;
+	mach_msg_ool_descriptor_t       descriptor;
+	mach_msg_trailer_t              trailer;        // subtract this when sending
 } ipc_complex_message;
 
 enum {
@@ -60,33 +60,37 @@ struct port_args {
 };
 
 typedef union {
-	pid_t		pid;
-	pthread_t	tid;
+	pid_t           pid;
+	pthread_t       tid;
 } thread_id_t;
 
 /* Global options */
-static boolean_t	verbose = FALSE;
-static boolean_t	affinity = FALSE;
-static boolean_t	timeshare = FALSE;
-static boolean_t	threaded = FALSE;
-static boolean_t	oneway = FALSE;
-static boolean_t	do_select = FALSE;
+static boolean_t        verbose = FALSE;
+static boolean_t        affinity = FALSE;
+static boolean_t        timeshare = FALSE;
+static boolean_t        threaded = FALSE;
+static boolean_t        oneway = FALSE;
+static boolean_t        do_select = FALSE;
 static boolean_t    save_perfdata = FALSE;
 
-int			msg_type;
-int			num_ints;
-int			num_msgs;
-int			num_clients;
-int			num_servers;
-int			client_delay;
-int			client_spin;
-int			client_pages;
-char			**server_port_name;
+int                     msg_type;
+int                     num_ints;
+int                     num_msgs;
+int                     num_clients;
+int                     num_servers;
+int                     client_delay;
+int                     client_spin;
+int                     client_pages;
+char                    **server_port_name;
 
-void signal_handler(int sig) {
+void
+signal_handler(int sig)
+{
 }
 
-void usage(const char *progname) {
+void
+usage(const char *progname)
+{
 	fprintf(stderr, "usage: %s [options]\n", progname);
 	fprintf(stderr, "where options are:\n");
 	fprintf(stderr, "    -affinity\t\tthreads use affinity\n");
@@ -118,10 +122,12 @@ void usage(const char *progname) {
 	exit(1);
 }
 
-void parse_args(int argc, char *argv[]) {
-	host_basic_info_data_t		info;
-	mach_msg_type_number_t		count;
-	kern_return_t			result;
+void
+parse_args(int argc, char *argv[])
+{
+	host_basic_info_data_t          info;
+	mach_msg_type_number_t          count;
+	kern_return_t                   result;
 
 	/* Initialize defaults */
 	msg_type = msg_type_trivial;
@@ -131,12 +137,13 @@ void parse_args(int argc, char *argv[]) {
 	num_clients = 4;
 
 	count = HOST_BASIC_INFO_COUNT;
-	result = host_info(mach_host_self(), HOST_BASIC_INFO, 
-			(host_info_t)&info, &count);
-	if (result == KERN_SUCCESS && info.avail_cpus > 1)
+	result = host_info(mach_host_self(), HOST_BASIC_INFO,
+	    (host_info_t)&info, &count);
+	if (result == KERN_SUCCESS && info.avail_cpus > 1) {
 		num_servers = info.avail_cpus / 2;
-	else
+	} else {
 		num_servers = 1;
+	}
 
 	const char *progname = argv[0];
 	argc--; argv++;
@@ -157,50 +164,59 @@ void parse_args(int argc, char *argv[]) {
 			oneway = TRUE;
 			argc--; argv++;
 		} else if (0 == strcmp("-type", argv[0])) {
-			if (argc < 2) 
+			if (argc < 2) {
 				usage(progname);
+			}
 			if (0 == strcmp("trivial", argv[1])) {
 				msg_type = msg_type_trivial;
 			} else if (0 == strcmp("inline", argv[1])) {
 				msg_type = msg_type_inline;
 			} else if (0 == strcmp("complex", argv[1])) {
 				msg_type = msg_type_complex;
-			} else 
+			} else {
 				usage(progname);
+			}
 			argc -= 2; argv += 2;
 		} else if (0 == strcmp("-numints", argv[0])) {
-			if (argc < 2) 
+			if (argc < 2) {
 				usage(progname);
+			}
 			num_ints = strtoul(argv[1], NULL, 0);
 			argc -= 2; argv += 2;
 		} else if (0 == strcmp("-count", argv[0])) {
-			if (argc < 2) 
+			if (argc < 2) {
 				usage(progname);
+			}
 			num_msgs = strtoul(argv[1], NULL, 0);
 			argc -= 2; argv += 2;
-		}  else if (0 == strcmp("-clients", argv[0])) {
-			if (argc < 2) 
+		} else if (0 == strcmp("-clients", argv[0])) {
+			if (argc < 2) {
 				usage(progname);
+			}
 			num_clients = strtoul(argv[1], NULL, 0);
 			argc -= 2; argv += 2;
-		}  else if (0 == strcmp("-servers", argv[0])) {
-			if (argc < 2) 
+		} else if (0 == strcmp("-servers", argv[0])) {
+			if (argc < 2) {
 				usage(progname);
+			}
 			num_servers = strtoul(argv[1], NULL, 0);
 			argc -= 2; argv += 2;
 		} else if (0 == strcmp("-delay", argv[0])) {
-			if (argc < 2) 
+			if (argc < 2) {
 				usage(progname);
+			}
 			client_delay = strtoul(argv[1], NULL, 0);
 			argc -= 2; argv += 2;
 		} else if (0 == strcmp("-spin", argv[0])) {
-			if (argc < 2) 
+			if (argc < 2) {
 				usage(progname);
+			}
 			client_spin = strtoul(argv[1], NULL, 0);
 			argc -= 2; argv += 2;
 		} else if (0 == strcmp("-pages", argv[0])) {
-			if (argc < 2) 
+			if (argc < 2) {
 				usage(progname);
+			}
 			client_pages = strtoul(argv[1], NULL, 0);
 			argc -= 2; argv += 2;
 		} else if (0 == strcmp("-select", argv[0])) {
@@ -209,52 +225,54 @@ void parse_args(int argc, char *argv[]) {
 		} else if (0 == strcmp("-perf", argv[0])) {
 			save_perfdata = TRUE;
 			argc--; argv++;
-		} else 
+		} else {
 			usage(progname);
+		}
 	}
 }
 
-void setup_server_ports(struct port_args *ports)
+void
+setup_server_ports(struct port_args *ports)
 {
 	kern_return_t ret = 0;
 	mach_port_t bsport;
 
-	ports->req_size = MAX(sizeof(ipc_inline_message) +  
-			sizeof(u_int32_t) * num_ints, 
-			sizeof(ipc_complex_message));
-	ports->reply_size = sizeof(ipc_trivial_message) - 
-		sizeof(mach_msg_trailer_t);
+	ports->req_size = MAX(sizeof(ipc_inline_message) +
+	    sizeof(u_int32_t) * num_ints,
+	    sizeof(ipc_complex_message));
+	ports->reply_size = sizeof(ipc_trivial_message) -
+	    sizeof(mach_msg_trailer_t);
 	ports->req_msg = malloc(ports->req_size);
 	ports->reply_msg = malloc(ports->reply_size);
 
-	ret = mach_port_allocate(mach_task_self(), 
-			MACH_PORT_RIGHT_RECEIVE,  
-			&(ports->port));
+	ret = mach_port_allocate(mach_task_self(),
+	    MACH_PORT_RIGHT_RECEIVE,
+	    &(ports->port));
 	if (KERN_SUCCESS != ret) {
 		mach_error("mach_port_allocate(): ", ret);
 		exit(1);
 	}
 
-	ret = mach_port_allocate(mach_task_self(), 
-			MACH_PORT_RIGHT_PORT_SET,  
-			&(ports->pset));
+	ret = mach_port_allocate(mach_task_self(),
+	    MACH_PORT_RIGHT_PORT_SET,
+	    &(ports->pset));
 	if (KERN_SUCCESS != ret) {
 		mach_error("mach_port_allocate(): ", ret);
 		exit(1);
 	}
-	
+
 	ret = mach_port_insert_member(mach_task_self(),
-			ports->port,
-			ports->pset);
+	    ports->port,
+	    ports->pset);
 	if (KERN_SUCCESS != ret) {
 		mach_error("mach_port_insert_member(): ", ret);
 		exit(1);
 	}
 
-	ret = mach_port_insert_right(mach_task_self(), 
-			ports->port, 
-			ports->port, 
-			MACH_MSG_TYPE_MAKE_SEND);
+	ret = mach_port_insert_right(mach_task_self(),
+	    ports->port,
+	    ports->port,
+	    MACH_MSG_TYPE_MAKE_SEND);
 	if (KERN_SUCCESS != ret) {
 		mach_error("mach_port_insert_right(): ", ret);
 		exit(1);
@@ -268,85 +286,88 @@ void setup_server_ports(struct port_args *ports)
 
 	if (verbose) {
 		printf("server waiting for IPC messages from client on port '%s'.\n",
-			server_port_name[ports->server_num]);
+		    server_port_name[ports->server_num]);
 	}
 	ret = bootstrap_register(bsport,
-				 server_port_name[ports->server_num],
-				 ports->port);
+	    server_port_name[ports->server_num],
+	    ports->port);
 	if (KERN_SUCCESS != ret) {
 		mach_error("bootstrap_register(): ", ret);
 		exit(1);
 	}
 }
 
-void setup_client_ports(struct port_args *ports)
+void
+setup_client_ports(struct port_args *ports)
 {
 	kern_return_t ret = 0;
-	switch(msg_type) {
-		case msg_type_trivial:
-			ports->req_size = sizeof(ipc_trivial_message);
-			break;
-		case msg_type_inline:
-			ports->req_size = sizeof(ipc_inline_message) +  
-				sizeof(u_int32_t) * num_ints;
-			break;
-		case msg_type_complex:
-			ports->req_size = sizeof(ipc_complex_message);
-			break;
+	switch (msg_type) {
+	case msg_type_trivial:
+		ports->req_size = sizeof(ipc_trivial_message);
+		break;
+	case msg_type_inline:
+		ports->req_size = sizeof(ipc_inline_message) +
+		    sizeof(u_int32_t) * num_ints;
+		break;
+	case msg_type_complex:
+		ports->req_size = sizeof(ipc_complex_message);
+		break;
 	}
 	ports->req_size -= sizeof(mach_msg_trailer_t);
 	ports->reply_size = sizeof(ipc_trivial_message);
 	ports->req_msg = malloc(ports->req_size);
 	ports->reply_msg = malloc(ports->reply_size);
 
-	ret = mach_port_allocate(mach_task_self(), 
-			MACH_PORT_RIGHT_RECEIVE,  
-			&(ports->port));
+	ret = mach_port_allocate(mach_task_self(),
+	    MACH_PORT_RIGHT_RECEIVE,
+	    &(ports->port));
 	if (KERN_SUCCESS != ret) {
 		mach_error("mach_port_allocate(): ", ret);
 		exit(1);
 	}
 	if (verbose) {
 		printf("Client sending %d %s IPC messages to port '%s' in %s mode.\n",
-				num_msgs, (msg_type == msg_type_inline) ? 
-				"inline" :  ((msg_type == msg_type_complex) ? 
-					"complex" : "trivial"),  
-				server_port_name[ports->server_num],
-				(oneway ? "oneway" : "rpc"));
+		    num_msgs, (msg_type == msg_type_inline) ?
+		    "inline" :  ((msg_type == msg_type_complex) ?
+		    "complex" : "trivial"),
+		    server_port_name[ports->server_num],
+		    (oneway ? "oneway" : "rpc"));
 	}
-
 }
 
 
 static void
-thread_setup(int tag) {
-	kern_return_t			ret;
-        thread_extended_policy_data_t   epolicy;
-        thread_affinity_policy_data_t   policy;
+thread_setup(int tag)
+{
+	kern_return_t                   ret;
+	thread_extended_policy_data_t   epolicy;
+	thread_affinity_policy_data_t   policy;
 
 	if (!timeshare) {
 		epolicy.timeshare = FALSE;
 		ret = thread_policy_set(
-				mach_thread_self(), THREAD_EXTENDED_POLICY,
-				(thread_policy_t) &epolicy,
-				THREAD_EXTENDED_POLICY_COUNT);
-		if (ret != KERN_SUCCESS)
+			mach_thread_self(), THREAD_EXTENDED_POLICY,
+			(thread_policy_t) &epolicy,
+			THREAD_EXTENDED_POLICY_COUNT);
+		if (ret != KERN_SUCCESS) {
 			printf("thread_policy_set(THREAD_EXTENDED_POLICY) returned %d\n", ret);
+		}
 	}
 
-        if (affinity) {
-                policy.affinity_tag = tag;
-                ret = thread_policy_set(
-                                mach_thread_self(), THREAD_AFFINITY_POLICY,
-                                (thread_policy_t) &policy,
-                                THREAD_AFFINITY_POLICY_COUNT);
-                if (ret != KERN_SUCCESS)
-                        printf("thread_policy_set(THREAD_AFFINITY_POLICY) returned %d\n", ret);
-        }
+	if (affinity) {
+		policy.affinity_tag = tag;
+		ret = thread_policy_set(
+			mach_thread_self(), THREAD_AFFINITY_POLICY,
+			(thread_policy_t) &policy,
+			THREAD_AFFINITY_POLICY_COUNT);
+		if (ret != KERN_SUCCESS) {
+			printf("thread_policy_set(THREAD_AFFINITY_POLICY) returned %d\n", ret);
+		}
+	}
 }
 
 void *
-server(void *serverarg) 
+server(void *serverarg)
 {
 	int kq;
 	struct kevent64_s kev[1];
@@ -362,35 +383,36 @@ server(void *serverarg)
 	setup_server_ports(&args);
 
 	thread_setup(args.server_num + 1);
-	
+
 	kq = kqueue();
 	if (kq == -1) {
 		perror("kqueue");
 		exit(1);
 	}
-	EV_SET64(&kev[0], args.pset, EVFILT_MACHPORT, (EV_ADD | EV_CLEAR | EV_DISPATCH), 
+	EV_SET64(&kev[0], args.pset, EVFILT_MACHPORT, (EV_ADD | EV_CLEAR | EV_DISPATCH),
 #if DIRECT_MSG_RCV
-		 MACH_RCV_MSG|MACH_RCV_LARGE, 0, 0, (mach_vm_address_t)args.req_msg, args.req_size);
+	    MACH_RCV_MSG | MACH_RCV_LARGE, 0, 0, (mach_vm_address_t)args.req_msg, args.req_size);
 #else
-		0, 0, 0, 0, 0);
+	    0, 0, 0, 0, 0);
 #endif
 	err = kevent64(kq, kev, 1, NULL, 0, 0, NULL);
 	if (err == -1) {
 		perror("kevent");
 		exit(1);
 	}
-	
-	for (idx = 0; idx < totalmsg; idx++) {
 
-		if (verbose) 
+	for (idx = 0; idx < totalmsg; idx++) {
+		if (verbose) {
 			printf("server awaiting message %d\n", idx);
-	retry:
+		}
+retry:
 		if (do_select) {
 			FD_ZERO(&readfds);
 			FD_SET(kq, &readfds);
 
-			if (verbose)
+			if (verbose) {
 				printf("Calling select() prior to kevent64().\n");
+			}
 
 			count = select(kq + 1, &readfds, NULL, NULL, NULL);
 			if (count == -1) {
@@ -399,77 +421,83 @@ server(void *serverarg)
 			}
 		}
 
-		EV_SET64(&kev[0], args.pset, EVFILT_MACHPORT, EV_ENABLE, 
+		EV_SET64(&kev[0], args.pset, EVFILT_MACHPORT, EV_ENABLE,
 #if DIRECT_MSG_RCV
-			 MACH_RCV_MSG|MACH_RCV_LARGE, 0, 0, (mach_vm_address_t)args.req_msg, args.req_size);
+		    MACH_RCV_MSG | MACH_RCV_LARGE, 0, 0, (mach_vm_address_t)args.req_msg, args.req_size);
 #else
-			0, 0, 0, 0, 0);
+		    0, 0, 0, 0, 0);
 #endif
 		err = kevent64(kq, kev, 1, kev, 1, 0, NULL);
 		if (err == -1) {
 			perror("kevent64");
 			exit(1);
-		}		
+		}
 		if (err == 0) {
-		  // printf("kevent64: returned zero\n");
+			// printf("kevent64: returned zero\n");
 			goto retry;
 		}
 
 #if DIRECT_MSG_RCV
 		ret = kev[0].fflags;
 		if (MACH_MSG_SUCCESS != ret) {
-			if (verbose)
+			if (verbose) {
 				printf("kevent64() mach_msg_return=%d", ret);
+			}
 			mach_error("kevent64 (msg receive): ", ret);
 			exit(1);
-		} 
+		}
 #else
-		if (kev[0].data != args.port)
+		if (kev[0].data != args.port) {
 			printf("kevent64(MACH_PORT_NULL) port name (%lld) != expected (0x%x)\n", kev[0].data, args.port);
+		}
 
 		args.req_msg->msgh_bits = 0;
 		args.req_msg->msgh_size = args.req_size;
 		args.req_msg->msgh_local_port = args.port;
-		ret = mach_msg(args.req_msg,  
-				MACH_RCV_MSG|MACH_RCV_INTERRUPT|MACH_RCV_LARGE, 
-				0, 
-				args.req_size,  
-				args.pset, 
-				MACH_MSG_TIMEOUT_NONE, 
-				MACH_PORT_NULL);
-		if (MACH_RCV_INTERRUPTED == ret)
+		ret = mach_msg(args.req_msg,
+		    MACH_RCV_MSG | MACH_RCV_INTERRUPT | MACH_RCV_LARGE,
+		    0,
+		    args.req_size,
+		    args.pset,
+		    MACH_MSG_TIMEOUT_NONE,
+		    MACH_PORT_NULL);
+		if (MACH_RCV_INTERRUPTED == ret) {
 			break;
+		}
 		if (MACH_MSG_SUCCESS != ret) {
-			if (verbose)
+			if (verbose) {
 				printf("mach_msg() ret=%d", ret);
+			}
 			mach_error("mach_msg (receive): ", ret);
 			exit(1);
 		}
 #endif
-		if (verbose)
+		if (verbose) {
 			printf("server received message %d\n", idx);
+		}
 		if (args.req_msg->msgh_bits & MACH_MSGH_BITS_COMPLEX) {
-			ret = vm_deallocate(mach_task_self(),  
-					(vm_address_t)((ipc_complex_message *)args.req_msg)->descriptor.address,  
-					((ipc_complex_message *)args.req_msg)->descriptor.size);
+			ret = vm_deallocate(mach_task_self(),
+			    (vm_address_t)((ipc_complex_message *)args.req_msg)->descriptor.address,
+			    ((ipc_complex_message *)args.req_msg)->descriptor.size);
 		}
 
 		if (1 == args.req_msg->msgh_id) {
-			if (verbose) 
+			if (verbose) {
 				printf("server sending reply %d\n", idx);
-			args.reply_msg->msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND,  
-					MACH_MSG_TYPE_MAKE_SEND);
+			}
+			args.reply_msg->msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND,
+			    MACH_MSG_TYPE_MAKE_SEND);
 			args.reply_msg->msgh_size = args.reply_size;
 			args.reply_msg->msgh_remote_port = args.req_msg->msgh_remote_port;
 			args.reply_msg->msgh_local_port = args.req_msg->msgh_local_port;
 			args.reply_msg->msgh_id = 2;
-			ret = mach_msg(args.reply_msg, 
-					MACH_SEND_MSG, 
-					args.reply_size, 
-					0, 
-					MACH_PORT_NULL, 
-					MACH_MSG_TIMEOUT_NONE,  
-					MACH_PORT_NULL);
+			ret = mach_msg(args.reply_msg,
+			    MACH_SEND_MSG,
+			    args.reply_size,
+			    0,
+			    MACH_PORT_NULL,
+			    MACH_MSG_TIMEOUT_NONE,
+			    MACH_PORT_NULL);
 			if (MACH_MSG_SUCCESS != ret) {
 				mach_error("mach_msg (send): ", ret);
 				exit(1);
@@ -480,34 +508,36 @@ server(void *serverarg)
 }
 
 static inline void
-client_spin_loop(unsigned count, void (fn)(void))
+client_spin_loop(unsigned count, void(fn)(void))
 {
-	while (count--)
+	while (count--) {
 		fn();
+	}
 }
 
-static long	dummy_memory;
-static long	*client_memory = &dummy_memory;
+static long     dummy_memory;
+static long     *client_memory = &dummy_memory;
 static void
 client_work_atom(void)
 {
-	static int	i;
+	static int      i;
 
-	if (++i > client_pages * PAGE_SIZE / sizeof(long))
+	if (++i > client_pages * PAGE_SIZE / sizeof(long)) {
 		i = 0;
+	}
 	client_memory[i] = 0;
 }
 
-static	int	calibration_count = 10000;
-static	int	calibration_usec;
+static  int     calibration_count = 10000;
+static  int     calibration_usec;
 static void *
 calibrate_client_work(void)
 {
-	long		dummy;
-	struct timeval	nowtv;
-	struct timeval	warmuptv = { 0, 100 * 1000 }; /* 100ms */
-	struct timeval	starttv;
-	struct timeval	endtv;
+	long            dummy;
+	struct timeval  nowtv;
+	struct timeval  warmuptv = { 0, 100 * 1000 }; /* 100ms */
+	struct timeval  starttv;
+	struct timeval  endtv;
 
 	if (client_spin) {
 		/* Warm-up the stepper first... */
@@ -516,8 +546,8 @@ calibrate_client_work(void)
 		do {
 			client_spin_loop(calibration_count, client_work_atom);
 			gettimeofday(&nowtv, NULL);
-		} while (timercmp(&nowtv, &endtv, < ));	
-	
+		} while (timercmp(&nowtv, &endtv, < ));
+
 		/* Now do the calibration */
 		while (TRUE) {
 			gettimeofday(&starttv, NULL);
@@ -538,41 +568,43 @@ calibrate_client_work(void)
 			calibration_count /= calibration_usec;
 			break;
 		}
-		if (verbose)
+		if (verbose) {
 			printf("calibration_count=%d calibration_usec=%d\n",
-				calibration_count, calibration_usec);
+			    calibration_count, calibration_usec);
+		}
 	}
-        return NULL;
+	return NULL;
 }
 
 static void *
 client_work(void)
 {
-
 	if (client_spin) {
-		client_spin_loop(calibration_count*client_spin,
-				 client_work_atom);
+		client_spin_loop(calibration_count * client_spin,
+		    client_work_atom);
 	}
-	
+
 	if (client_delay) {
 		usleep(client_delay);
 	}
 	return NULL;
 }
 
-void *client(void *threadarg) 
+void *
+client(void *threadarg)
 {
 	struct port_args args;
 	int idx;
-	mach_msg_header_t *req, *reply; 
+	mach_msg_header_t *req, *reply;
 	mach_port_t bsport, servport;
 	kern_return_t ret;
 	int server_num = (int) threadarg;
 	void *ints = malloc(sizeof(u_int32_t) * num_ints);
 
-	if (verbose) 
+	if (verbose) {
 		printf("client(%d) started, server port name %s\n",
-			server_num, server_port_name[server_num]);
+		    server_num, server_port_name[server_num]);
+	}
 
 	args.server_num = server_num;
 	thread_setup(server_num + 1);
@@ -584,8 +616,8 @@ void *client(void *threadarg)
 		exit(1);
 	}
 	ret = bootstrap_look_up(bsport,
-				server_port_name[server_num],
-				&servport); 
+	    server_port_name[server_num],
+	    &servport);
 	if (KERN_SUCCESS != ret) {
 		mach_error("bootstrap_look_up(): ", ret);
 		exit(1);
@@ -595,19 +627,20 @@ void *client(void *threadarg)
 
 	/* Allocate and touch memory */
 	if (client_pages) {
-		unsigned	i;
+		unsigned        i;
 		client_memory = (long *) malloc(client_pages * PAGE_SIZE);
-		for (i = 0; i < client_pages; i++)
+		for (i = 0; i < client_pages; i++) {
 			client_memory[i * PAGE_SIZE / sizeof(long)] = 0;
+		}
 	}
-	
+
 	/* start message loop */
 	for (idx = 0; idx < num_msgs; idx++) {
 		req = args.req_msg;
 		reply = args.reply_msg;
 
-		req->msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 
-				MACH_MSG_TYPE_MAKE_SEND);
+		req->msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND,
+		    MACH_MSG_TYPE_MAKE_SEND);
 		req->msgh_size = args.req_size;
 		req->msgh_remote_port = servport;
 		req->msgh_local_port = args.port;
@@ -616,21 +649,22 @@ void *client(void *threadarg)
 			(req)->msgh_bits |=  MACH_MSGH_BITS_COMPLEX;
 			((ipc_complex_message *)req)->body.msgh_descriptor_count = 1;
 			((ipc_complex_message *)req)->descriptor.address = ints;
-			((ipc_complex_message *)req)->descriptor.size = 
-				num_ints * sizeof(u_int32_t);
+			((ipc_complex_message *)req)->descriptor.size =
+			    num_ints * sizeof(u_int32_t);
 			((ipc_complex_message *)req)->descriptor.deallocate = FALSE;
 			((ipc_complex_message *)req)->descriptor.copy = MACH_MSG_VIRTUAL_COPY;
 			((ipc_complex_message *)req)->descriptor.type = MACH_MSG_OOL_DESCRIPTOR;
 		}
-		if (verbose) 
+		if (verbose) {
 			printf("client sending message %d\n", idx);
-		ret = mach_msg(req,  
-				MACH_SEND_MSG, 
-				args.req_size, 
-				0, 
-				MACH_PORT_NULL,  
-				MACH_MSG_TIMEOUT_NONE, 
-				MACH_PORT_NULL);
+		}
+		ret = mach_msg(req,
+		    MACH_SEND_MSG,
+		    args.req_size,
+		    0,
+		    MACH_PORT_NULL,
+		    MACH_MSG_TIMEOUT_NONE,
+		    MACH_PORT_NULL);
 		if (MACH_MSG_SUCCESS != ret) {
 			mach_error("mach_msg (send): ", ret);
 			fprintf(stderr, "bailing after %u iterations\n", idx);
@@ -638,26 +672,28 @@ void *client(void *threadarg)
 			break;
 		}
 		if (!oneway) {
-			if (verbose) 
+			if (verbose) {
 				printf("client awaiting reply %d\n", idx);
+			}
 			reply->msgh_bits = 0;
 			reply->msgh_size = args.reply_size;
 			reply->msgh_local_port = args.port;
-			ret = mach_msg(args.reply_msg,  
-					MACH_RCV_MSG|MACH_RCV_INTERRUPT, 
-					0, 
-					args.reply_size, 
-					args.port,  
-					MACH_MSG_TIMEOUT_NONE, 
-					MACH_PORT_NULL);
+			ret = mach_msg(args.reply_msg,
+			    MACH_RCV_MSG | MACH_RCV_INTERRUPT,
+			    0,
+			    args.reply_size,
+			    args.port,
+			    MACH_MSG_TIMEOUT_NONE,
+			    MACH_PORT_NULL);
 			if (MACH_MSG_SUCCESS != ret) {
 				mach_error("mach_msg (receive): ", ret);
 				fprintf(stderr, "bailing after %u iterations\n",
-						idx);
+				    idx);
 				exit(1);
 			}
-			if (verbose) 
+			if (verbose) {
 				printf("client received reply %d\n", idx);
+			}
 		}
 
 		client_work();
@@ -668,44 +704,53 @@ void *client(void *threadarg)
 }
 
 static void
-thread_spawn(thread_id_t *thread, void *(fn)(void *), void *arg) {
+thread_spawn(thread_id_t *thread, void *(fn)(void *), void *arg)
+{
 	if (threaded) {
-		kern_return_t	ret;
+		kern_return_t   ret;
 		ret = pthread_create(
-				&thread->tid,
-				NULL,
-				fn,
-				arg);
-		if (ret != 0)
+			&thread->tid,
+			NULL,
+			fn,
+			arg);
+		if (ret != 0) {
 			err(1, "pthread_create()");
-		if (verbose)
+		}
+		if (verbose) {
 			printf("created pthread %p\n", thread->tid);
+		}
 	} else {
 		thread->pid = fork();
 		if (thread->pid == 0) {
-			if (verbose)
+			if (verbose) {
 				printf("calling %p(%p)\n", fn, arg);
+			}
 			fn(arg);
 			exit(0);
 		}
-		if (verbose)
+		if (verbose) {
 			printf("forked pid %d\n", thread->pid);
+		}
 	}
 }
 
 static void
-thread_join(thread_id_t *thread) {
+thread_join(thread_id_t *thread)
+{
 	if (threaded) {
-		kern_return_t	ret;
-		if (verbose)
+		kern_return_t   ret;
+		if (verbose) {
 			printf("joining thread %p\n", thread->tid);
+		}
 		ret = pthread_join(thread->tid, NULL);
-		if (ret != KERN_SUCCESS)
+		if (ret != KERN_SUCCESS) {
 			err(1, "pthread_join(%p)", thread->tid);
+		}
 	} else {
-		int	stat;
-		if (verbose)
+		int     stat;
+		if (verbose) {
 			printf("waiting for pid %d\n", thread->pid);
+		}
 		waitpid(thread->pid, &stat, 0);
 	}
 }
@@ -713,10 +758,10 @@ thread_join(thread_id_t *thread) {
 static void
 wait_for_servers(void)
 {
-	int		i;
-	int		retry_count = 10;
-	mach_port_t	bsport, servport;
-	kern_return_t	ret;
+	int             i;
+	int             retry_count = 10;
+	mach_port_t     bsport, servport;
+	kern_return_t   ret;
 
 	/* find server port */
 	ret = task_get_bootstrap_port(mach_task_self(), &bsport);
@@ -728,27 +773,29 @@ wait_for_servers(void)
 	while (retry_count-- > 0) {
 		for (i = 0; i < num_servers; i++) {
 			ret = bootstrap_look_up(bsport,
-					server_port_name[i],
-					&servport); 
+			    server_port_name[i],
+			    &servport);
 			if (ret != KERN_SUCCESS) {
 				break;
 			}
 		}
-		if (ret == KERN_SUCCESS)
+		if (ret == KERN_SUCCESS) {
 			return;
-		usleep(100 * 1000);	/* 100ms */
+		}
+		usleep(100 * 1000);     /* 100ms */
 	}
 	fprintf(stderr, "Server(s) failed to register\n");
 	exit(1);
 }
 
 
-int main(int argc, char *argv[]) 
+int
+main(int argc, char *argv[])
 {
-	int		i;
-	int		j;
-	thread_id_t	*client_id;
-	thread_id_t	*server_id;
+	int             i;
+	int             j;
+	thread_id_t     *client_id;
+	thread_id_t     *server_id;
 
 	signal(SIGINT, signal_handler);
 	parse_args(argc, argv);
@@ -759,13 +806,15 @@ int main(int argc, char *argv[])
 	 * If we're using affinity create an empty namespace now
 	 * so this is shared by all our offspring.
 	 */
-	if (affinity)
+	if (affinity) {
 		thread_setup(0);
+	}
 
 	server_id = (thread_id_t *) malloc(num_servers * sizeof(thread_id_t));
 	server_port_name = (char **) malloc(num_servers * sizeof(char *));
-	if (verbose)
+	if (verbose) {
 		printf("creating %d servers\n", num_servers);
+	}
 	for (i = 0; i < num_servers; i++) {
 		server_port_name[i] = (char *) malloc(sizeof("PORT.pppppp.xx"));
 		/* PORT names include pid of main process for disambiguation */
@@ -782,12 +831,12 @@ int main(int argc, char *argv[])
 	 * the clients and the clock.
 	 */
 	wait_for_servers();
-	
-	printf("%d server%s, %d client%s per server (%d total) %u messages...", 
-			num_servers, (num_servers > 1)? "s" : "",
-			num_clients, (num_clients > 1)? "s" : "",
-			totalclients,
-			totalmsg);
+
+	printf("%d server%s, %d client%s per server (%d total) %u messages...",
+	    num_servers, (num_servers > 1)? "s" : "",
+	    num_clients, (num_clients > 1)? "s" : "",
+	    totalclients,
+	    totalmsg);
 	fflush(stdout);
 
 	/* Call gettimeofday() once and throw away result; some implementations
@@ -797,12 +846,13 @@ int main(int argc, char *argv[])
 	gettimeofday(&starttv, NULL);
 
 	client_id = (thread_id_t *) malloc(totalclients * sizeof(thread_id_t));
-	if (verbose)
+	if (verbose) {
 		printf("creating %d clients\n", totalclients);
+	}
 	for (i = 0; i < num_servers; i++) {
 		for (j = 0; j < num_clients; j++) {
 			thread_spawn(
-				&client_id[(i*num_clients) + j],
+				&client_id[(i * num_clients) + j],
 				client,
 				(void *) (long) i);
 		}
@@ -827,25 +877,24 @@ int main(int argc, char *argv[])
 		deltatv.tv_usec += 1000000;
 	}
 
-	double dsecs = (double) deltatv.tv_sec + 
-		1.0E-6 * (double) deltatv.tv_usec;
+	double dsecs = (double) deltatv.tv_sec +
+	    1.0E-6 * (double) deltatv.tv_usec;
 
-	double time_in_sec = (double)deltatv.tv_sec + (double)deltatv.tv_usec/1000.0;
-	double throughput_msg_p_sec = (double) totalmsg/dsecs;
-	double avg_msg_latency = dsecs*1.0E6 / (double)totalmsg;
+	double time_in_sec = (double)deltatv.tv_sec + (double)deltatv.tv_usec / 1000.0;
+	double throughput_msg_p_sec = (double) totalmsg / dsecs;
+	double avg_msg_latency = dsecs * 1.0E6 / (double)totalmsg;
 
-	printf(" in %ld.%03u seconds\n",  
-	       (long)deltatv.tv_sec, deltatv.tv_usec/1000);
+	printf(" in %ld.%03u seconds\n",
+	    (long)deltatv.tv_sec, deltatv.tv_usec / 1000);
 	printf("  throughput in messages/sec:     %g\n",
-			(double)totalmsg / dsecs);
-	printf("  average message latency (usec): %2.3g\n", 
-			dsecs * 1.0E6 / (double) totalmsg);
+	    (double)totalmsg / dsecs);
+	printf("  average message latency (usec): %2.3g\n",
+	    dsecs * 1.0E6 / (double) totalmsg);
 
 	if (save_perfdata == TRUE) {
 		char name[256];
 		snprintf(name, sizeof(name), "%s_avg_msg_latency", basename(argv[0]));
 		record_perf_data(name, "usec", avg_msg_latency, "Message latency measured in microseconds. Lower is better", stderr);
 	}
-	return (0);
-
+	return 0;
 }

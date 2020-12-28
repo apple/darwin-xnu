@@ -1,3 +1,30 @@
+/*
+ * Copyright (c) 2020 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ *
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ *
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ *
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
 /*	$FreeBSD: src/sys/netinet6/dest6.c,v 1.1.2.3 2001/07/03 11:01:49 ume Exp $	*/
 /*	$KAME: dest6.c,v 1.27 2001/03/29 05:34:30 itojun Exp $	*/
 
@@ -58,9 +85,9 @@ dest6_input(struct mbuf **mp, int *offp, int proto)
 {
 #pragma unused(proto)
 	struct mbuf *m = *mp;
-	int off = *offp, dstoptlen, optlen;
-	struct ip6_dest *dstopts;
-	u_int8_t *opt;
+	int off = *offp, dstoptlen = 0, optlen = 0;
+	struct ip6_dest *dstopts = NULL;
+	u_int8_t *opt = NULL;
 
 	/* validation of the length of the header */
 	IP6_EXTHDR_CHECK(m, off, sizeof(*dstopts), return IPPROTO_DONE);
@@ -89,20 +116,22 @@ dest6_input(struct mbuf **mp, int *offp, int proto)
 			optlen = *(opt + 1) + 2;
 			break;
 
-		default:		/* unknown option */
+		default:                /* unknown option */
 			optlen = ip6_unknown_opt(opt, m,
 			    opt - mtod(m, u_int8_t *));
-			if (optlen == -1)
-				return (IPPROTO_DONE);
+			if (optlen == -1) {
+				return IPPROTO_DONE;
+			}
 			optlen += 2;
 			break;
 		}
 	}
-
+	*mp = m;
 	*offp = off;
-	return (dstopts->ip6d_nxt);
+	return dstopts->ip6d_nxt;
 
-  bad:
+bad:
+	*mp = NULL;
 	m_freem(m);
-	return (IPPROTO_DONE);
+	return IPPROTO_DONE;
 }

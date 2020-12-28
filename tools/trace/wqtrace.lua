@@ -149,6 +149,8 @@ trace_codename("wq_select_threadreq", function(buf)
 		printf("%s\tSelection failed: no request\n", prefix)
 	elseif buf[2] == 2 then
 		printf("%s\tSelection failed: throttled\n", prefix)
+	elseif buf[2] == 3 then
+		printf("%s\tSelection failed: scheduler would preempt\n", prefix)
 	end
 end)
 

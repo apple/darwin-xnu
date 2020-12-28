@@ -2,7 +2,7 @@
  * Copyright (c) 2007 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
@@ -51,7 +51,7 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/types.h> 
+#include <sys/types.h>
 
 #include "mac_internal.h"
 
@@ -62,9 +62,10 @@ mac_find_policy_data(const mac_policy_handle_t handle, const char *key,
 	struct mac_policy_conf *mpc;
 	int error = ENOENT;
 
-	if ((mpc = mac_get_mpc(handle)) != NULL)
+	if ((mpc = mac_get_mpc(handle)) != NULL) {
 		error = mac_find_module_data(mpc->mpc_data, key, valp, sizep);
-	return (error);
+	}
+	return error;
 }
 
 int
@@ -85,5 +86,5 @@ mac_find_module_data(struct mac_module_data *mmd, const char *key,
 		}
 	}
 
-	return (error);
+	return error;
 }

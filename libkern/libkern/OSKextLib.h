@@ -261,9 +261,12 @@ __BEGIN_DECLS
 /* Define C-string versions of the CFBundle keys for use in the kernel.
  */
 #define kCFBundleIdentifierKey                  "CFBundleIdentifier"
+#define kCFBundleIdentifierKernelKey            "CFBundleIdentifierKernel"
 #define kCFBundleVersionKey                     "CFBundleVersion"
 #define kCFBundleNameKey                        "CFBundleName"
 #define kCFBundleExecutableKey                  "CFBundleExecutable"
+#define kCFBundlePackageTypeKey                 "CFBundlePackageType"
+#define kCFBundleDriverKitUUIDKey               "CFBundleDriverKitUUID"
 #endif /* KERNEL */
 
 /*!
@@ -333,11 +336,27 @@ __BEGIN_DECLS
 #define kOSBundleAllowUserLoadKey               "OSBundleAllowUserLoad"
 
 /*!
+ * @define   kOSBundleAllowUserTerminateKey
+ * @abstract A boolean value indicating whether the kextunload tool
+ *           is allowed to issue IOService terminate to classes defined in this kext.
+ * @discussion A boolean value indicating whether the kextunload tool
+ *           is allowed to issue IOService terminate to classes defined in this kext.
+ */
+#define kOSBundleAllowUserTerminateKey          "OSBundleAllowUserTerminate"
+
+/*!
  * @define   kOSKernelResourceKey
  * @abstract A boolean value indicating whether the kext represents a built-in
  *           component of the kernel.
  */
 #define kOSKernelResourceKey                    "OSKernelResource"
+
+/*!
+ * @define   kOSKextVariantOverrideKey
+ * @abstract A dictionary with target names as key and a target-specific variant
+ *           name as value.
+ */
+#define kOSKextVariantOverrideKey               "OSKextVariantOverride"
 
 /*!
  * @define   kIOKitPersonalitiesKey
@@ -402,61 +421,88 @@ __BEGIN_DECLS
  */
 
 /*!
-* @define   kOSKextKernelIdentifier
-* @abstract
-* This is the CFBundleIdentifier user for the kernel itself.
-*/
+ * @define   kOSKextKernelIdentifier
+ * @abstract
+ * This is the CFBundleIdentifier user for the kernel itself.
+ */
 #define kOSKextKernelIdentifier                 "__kernel__"
 
 /*!
-* @define   kOSBundleRequiredRoot
-* @abstract
-* This <code>@link kOSBundleRequiredKey OSBundleRequired@/link</code>
-* value indicates that the kext may be needed to mount the root filesystem
-* whether starting from a local or a network volume.
-*/
+ * @define  kOSKextBundlePackageTypeKext
+ * @abstract
+ * The bundle type value for Kernel Extensions.
+ */
+#define kOSKextBundlePackageTypeKext        "KEXT"
+
+/*!
+ * @define  kOSKextBundlePackageTypeDriverKit
+ * @abstract
+ * The bundle type value for Driver Extensions.
+ */
+#define kOSKextBundlePackageTypeDriverKit   "DEXT"
+
+/*!
+ * @define   kOSBundleRequiredRoot
+ * @abstract
+ * This <code>@link kOSBundleRequiredKey OSBundleRequired@/link</code>
+ * value indicates that the kext may be needed to mount the root filesystem
+ * whether starting from a local or a network volume.
+ */
 #define kOSBundleRequiredRoot                   "Root"
 
 /*!
-* @define   kOSBundleRequiredLocalRoot
-* @abstract
-* This <code>@link kOSBundleRequiredKey OSBundleRequired@/link</code>
-* value indicates that the kext may be needed to mount the root filesystem
-* when starting from a local disk.
-*/
+ * @define   kOSBundleRequiredLocalRoot
+ * @abstract
+ * This <code>@link kOSBundleRequiredKey OSBundleRequired@/link</code>
+ * value indicates that the kext may be needed to mount the root filesystem
+ * when starting from a local disk.
+ */
 #define kOSBundleRequiredLocalRoot              "Local-Root"
 
 /*!
-* @define   kOSBundleRequiredNetworkRoot
-* @abstract
-* This <code>@link kOSBundleRequiredKey OSBundleRequired@/link</code>
-* value indicates that the kext may be needed to mount the root filesystem
-* when starting over a network connection.
-*/
+ * @define   kOSBundleRequiredNetworkRoot
+ * @abstract
+ * This <code>@link kOSBundleRequiredKey OSBundleRequired@/link</code>
+ * value indicates that the kext may be needed to mount the root filesystem
+ * when starting over a network connection.
+ */
 #define kOSBundleRequiredNetworkRoot            "Network-Root"
 
 /*!
-* @define   kOSBundleRequiredSafeBoot
-* @abstract
-* This <code>@link kOSBundleRequiredKey OSBundleRequired@/link</code>
-* value indicates that the kext can be loaded during a safe startup.
-* This value does not normally cause the kext to be read by the booter
-* or included in startup kext caches.
-*/
+ * @define   kOSBundleRequiredSafeBoot
+ * @abstract
+ * This <code>@link kOSBundleRequiredKey OSBundleRequired@/link</code>
+ * value indicates that the kext can be loaded during a safe startup.
+ * This value does not normally cause the kext to be read by the booter
+ * or included in startup kext caches.
+ */
 #define kOSBundleRequiredSafeBoot               "Safe Boot"
 
 /*!
-* @define   kOSBundleRequiredConsole
-* @abstract
-* This <code>@link kOSBundleRequiredKey OSBundleRequired@/link</code>
-* value indicates that the kext may be needed for console access
-* (specifically in a single-user startup when
-* <code>@link //apple_ref/doc/man/8/kextd kextd(8)@/link</code>.
-* does not run)
-* and should be loaded during early startup.
-*/
+ * @define   kOSBundleRequiredConsole
+ * @abstract
+ * This <code>@link kOSBundleRequiredKey OSBundleRequired@/link</code>
+ * value indicates that the kext may be needed for console access
+ * (specifically in a single-user startup when
+ * <code>@link //apple_ref/doc/man/8/kextd kextd(8)@/link</code>.
+ * does not run)
+ * and should be loaded during early startup.
+ */
 #define kOSBundleRequiredConsole                "Console"
 
+/*!
+ * @define   kOSBundleRequiredDriverKit
+ * @abstract
+ * This <code>@link kOSBundleRequiredKey OSBundleRequired@/link</code>
+ * value indicates that the driver extension's (DriverKit driver's)
+ * personalities must be present in the kernel at early boot (specifically
+ * before <code>@link //apple_ref/doc/man/8/kextd kextd(8)@/link</code> starts)
+ * in order to compete with kexts built into the prelinkedkernel. Note that
+ * kextd is still required to launch the user space driver binary. The IOKit
+ * matching will happen during early boot, and the actual driver launch
+ * will happen after kextd starts.
+ */
+#define kOSBundleRequiredDriverKit              "DriverKit"
 
 #if PRAGMA_MARK
 #pragma mark -
@@ -574,7 +620,7 @@ const char * OSKextGetCurrentVersionString(void);
  * @group Kext Loading C Functions
  * Functions for loading and tracking kexts in the kernel.
  */
- 
+
 /*!
  * @function OSKextLoadKextWithIdentifier
  *
@@ -753,11 +799,11 @@ typedef uint32_t OSKextRequestTag;
  *                             OSKextRequestResource@/link</code>.
  */
 typedef void (* OSKextRequestResourceCallback)(
-    OSKextRequestTag                requestTag,
-    OSReturn                        result,
-    const void                    * resourceData,
-    uint32_t                        resourceDataLength,
-    void                          * context);
+	OSKextRequestTag                requestTag,
+	OSReturn                        result,
+	const void                    * resourceData,
+	uint32_t                        resourceDataLength,
+	void                          * context);
 
 /*!
  * @function OSKextRequestResource
@@ -843,11 +889,11 @@ typedef void (* OSKextRequestResourceCallback)(
  * outside of the stop function.
  */
 OSReturn OSKextRequestResource(
-    const char                    * kextIdentifier,
-    const char                    * resourceName,
-    OSKextRequestResourceCallback   callback,
-    void                          * context,
-    OSKextRequestTag              * requestTagOut);
+	const char                    * kextIdentifier,
+	const char                    * resourceName,
+	OSKextRequestResourceCallback   callback,
+	void                          * context,
+	OSKextRequestTag              * requestTagOut);
 
 /*!
  * @function OSKextCancelRequest
@@ -881,8 +927,8 @@ OSReturn OSKextRequestResource(
  * before the stop function is called.
  */
 OSReturn OSKextCancelRequest(
-    OSKextRequestTag    requestTag,
-    void             ** contextOut);
+	OSKextRequestTag    requestTag,
+	void             ** contextOut);
 
 
 /*!
@@ -907,11 +953,11 @@ OSReturn OSKextCancelRequest(
  */
 int
 OSKextGrabPgoData(uuid_t uuid,
-                  uint64_t *pSize,
-                  char *pBuffer,
-                  uint64_t bufferSize,
-                  int wait_for_unload,
-                  int metadata);
+    uint64_t *pSize,
+    char *pBuffer,
+    uint64_t bufferSize,
+    int wait_for_unload,
+    int metadata);
 
 /*!
  * @function OSKextResetPgoCountersLock
@@ -955,11 +1001,11 @@ OSKextResetPgoCounters(void);
 /*!
  * @var gOSKextUnresolved
  *
- * @abstract 
+ * @abstract
  * The value to which a kext's unresolved, weakly-referenced symbols are bound.
  *
  * @discussion
- * A kext must test a weak symbol before using it.  A weak symbol 
+ * A kext must test a weak symbol before using it.  A weak symbol
  * is only safe to use if it is not equal to <code>gOSKextUnresolved</code>.
  *
  * Example for a weak symbol named <code>foo</code>:
@@ -973,23 +1019,23 @@ OSKextResetPgoCounters(void);
  * @/textblock
  * </pre>
  */
-extern const void * gOSKextUnresolved;
+extern const void * const gOSKextUnresolved;
 
 /*!
  * @define OSKextSymbolIsResolved
  *
- * @abstract 
+ * @abstract
  * Checks whether a weakly-referenced symbol has been resolved.
  *
  * @param weak_sym   The weak symbol to be tested for resolution.
  *
- * @result 
- * <code>TRUE</code> if weak_sym is resolved, or <code>FALSE</code> 
+ * @result
+ * <code>TRUE</code> if weak_sym is resolved, or <code>FALSE</code>
  * if weak_sym is unresolved.
  *
  * @discussion
  * This is a convenience macro for testing if weak symbols are resolved.
- * 
+ *
  * Example for a weak symbol named <code>foo</code>:
  * <pre>
  * @textblock
@@ -1017,9 +1063,9 @@ extern const void * gOSKextUnresolved;
 // Kernel External Components for FIPS compliance (KEC_FIPS)
 // WARNING - ath_hash is owned by the kernel, do not free
 typedef struct AppleTEXTHash {
-    int       		ath_version;    // version of this structure (value is 1 or 2)
-    int             ath_length;     // length of hash data
-    void *          ath_hash;       // hash extracted from AppleTextHashes dict 
+	int                 ath_version;// version of this structure (value is 1 or 2)
+	int             ath_length; // length of hash data
+	void *          ath_hash;   // hash extracted from AppleTextHashes dict
 } AppleTEXTHash_t;
 #endif // CONFIG_KEC_FIPS
 

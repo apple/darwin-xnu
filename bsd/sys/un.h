@@ -2,7 +2,7 @@
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -73,25 +73,25 @@
 /*
  * [XSI] Definitions for UNIX IPC domain.
  */
-struct	sockaddr_un {
-	unsigned char	sun_len;	/* sockaddr len including null */
-	sa_family_t	sun_family;	/* [XSI] AF_UNIX */
-	char		sun_path[104];	/* [XSI] path name (gag) */
+struct  sockaddr_un {
+	unsigned char   sun_len;        /* sockaddr len including null */
+	sa_family_t     sun_family;     /* [XSI] AF_UNIX */
+	char            sun_path[104];  /* [XSI] path name (gag) */
 };
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 
 /* Level number of get/setsockopt for local domain sockets */
-#define SOL_LOCAL		0
+#define SOL_LOCAL               0
 
 /* Socket options. */
-#define LOCAL_PEERCRED		0x001		/* retrieve peer credentials */
-#define LOCAL_PEERPID		0x002		/* retrieve peer pid */
-#define LOCAL_PEEREPID		0x003		/* retrieve eff. peer pid */
-#define LOCAL_PEERUUID		0x004		/* retrieve peer UUID */
-#define LOCAL_PEEREUUID		0x005		/* retrieve eff. peer UUID */
+#define LOCAL_PEERCRED          0x001           /* retrieve peer credentials */
+#define LOCAL_PEERPID           0x002           /* retrieve peer pid */
+#define LOCAL_PEEREPID          0x003           /* retrieve eff. peer pid */
+#define LOCAL_PEERUUID          0x004           /* retrieve peer UUID */
+#define LOCAL_PEEREUUID         0x005           /* retrieve eff. peer UUID */
 
-#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
+#endif  /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 
 #ifdef KERNEL
@@ -102,14 +102,14 @@ struct mbuf;
 struct socket;
 struct sockopt;
 
-int	uipc_usrreq(struct socket *so, int req, struct mbuf *m,
-		struct mbuf *nam, struct mbuf *control);
-int	uipc_ctloutput (struct socket *so, struct sockopt *sopt);
-int	unp_connect2(struct socket *so, struct socket *so2);
-void	unp_dispose(struct mbuf *m);
-int	unp_externalize(struct mbuf *rights);
-void	unp_init(void);
-extern	struct pr_usrreqs uipc_usrreqs;
+int     uipc_usrreq(struct socket *so, int req, struct mbuf *m,
+    struct mbuf *nam, struct mbuf *control);
+int     uipc_ctloutput(struct socket *so, struct sockopt *sopt);
+int     unp_connect2(struct socket *so, struct socket *so2);
+void    unp_dispose(struct mbuf *m);
+int     unp_externalize(struct mbuf *rights);
+void    unp_init(void);
+extern  struct pr_usrreqs uipc_usrreqs;
 int     unp_lock(struct socket *, int, void *);
 int     unp_unlock(struct socket *, int, void *);
 lck_mtx_t* unp_getlock(struct socket *, int);
@@ -121,7 +121,7 @@ __END_DECLS
 /* actual length of an initialized sockaddr_un */
 #define SUN_LEN(su) \
 	(sizeof(*(su)) - sizeof((su)->sun_path) + strlen((su)->sun_path))
-#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
+#endif  /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 #endif /* KERNEL */
 

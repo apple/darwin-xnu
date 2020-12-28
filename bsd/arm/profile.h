@@ -23,8 +23,8 @@
 #warning MCOUNT_* not implemented yet.
 
 #define MCOUNT_INIT
-#define	MCOUNT_ENTER	/* s = splhigh(); */ /* XXX TODO */
-#define	MCOUNT_EXIT	/* (void) splx(s); */ /* XXX TODO */
+#define MCOUNT_ENTER    /* s = splhigh(); */ /* XXX TODO */
+#define MCOUNT_EXIT     /* (void) splx(s); */ /* XXX TODO */
 
 #endif /* __APPLE_API_UNSTABLE */
 #endif /* KERNEL */

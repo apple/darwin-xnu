@@ -54,8 +54,9 @@
 static struct proc *
 mac_task_get_proc(struct task *task)
 {
-	if (task == current_task())
+	if (task == current_task()) {
 		return proc_self();
+	}
 
 	/*
 	 * Tasks don't really hold a reference on a proc unless the
@@ -65,8 +66,9 @@ mac_task_get_proc(struct task *task)
 	struct proc *p = proc_find(pid);
 
 	if (p != NULL) {
-		if (proc_task(p) == task)
+		if (proc_task(p) == task) {
 			return p;
+		}
 		proc_rele(p);
 	}
 	return NULL;
@@ -78,13 +80,14 @@ mac_task_check_expose_task(struct task *task)
 	int error;
 
 	struct proc *p = mac_task_get_proc(task);
-	if (p == NULL)
+	if (p == NULL) {
 		return ESRCH;
+	}
 
 	struct ucred *cred = kauth_cred_get();
 	MAC_CHECK(proc_check_expose_task, cred, p);
 	proc_rele(p);
-	return (error);
+	return error;
 }
 
 int
@@ -93,14 +96,15 @@ mac_task_check_set_host_special_port(struct task *task, int id, struct ipc_port 
 	int error;
 
 	struct proc *p = mac_task_get_proc(task);
-	if (p == NULL)
+	if (p == NULL) {
 		return ESRCH;
+	}
 
 	kauth_cred_t cred = kauth_cred_proc_ref(p);
 	MAC_CHECK(proc_check_set_host_special_port, cred, id, port);
 	kauth_cred_unref(&cred);
 	proc_rele(p);
-	return (error);
+	return error;
 }
 
 int
@@ -109,14 +113,15 @@ mac_task_check_set_host_exception_port(struct task *task, unsigned int exception
 	int error;
 
 	struct proc *p = mac_task_get_proc(task);
-	if (p == NULL)
+	if (p == NULL) {
 		return ESRCH;
+	}
 
 	kauth_cred_t cred = kauth_cred_proc_ref(p);
 	MAC_CHECK(proc_check_set_host_exception_port, cred, exception);
 	kauth_cred_unref(&cred);
 	proc_rele(p);
-	return (error);
+	return error;
 }
 
 int
@@ -126,26 +131,27 @@ mac_task_check_set_host_exception_ports(struct task *task, unsigned int exceptio
 	int exception;
 
 	struct proc *p = mac_task_get_proc(task);
-	if (p == NULL)
+	if (p == NULL) {
 		return ESRCH;
+	}
 
 	kauth_cred_t cred = kauth_cred_proc_ref(p);
 	for (exception = FIRST_EXCEPTION; exception < EXC_TYPES_COUNT; exception++) {
 		if (exception_mask & (1 << exception)) {
 			MAC_CHECK(proc_check_set_host_exception_port, cred, exception);
-			if (error)
+			if (error) {
 				break;
+			}
 		}
 	}
 	kauth_cred_unref(&cred);
 	proc_rele(p);
-	return (error);
+	return error;
 }
 
 void
 mac_thread_userret(struct thread *td)
 {
-
 	MAC_PERFORM(thread_userret, td);
 }
 
@@ -188,7 +194,7 @@ mac_exc_create_label(void)
 	// Policy initialization of the label, typically performs allocations as well.
 	// (Unless the policy's full data really fits into a pointer size.)
 	MAC_PERFORM(exc_action_label_init, label);
-	
+
 	return label;
 }
 
@@ -219,21 +225,25 @@ mac_exc_free_action_label(struct exception_action *action)
 
 int
 mac_exc_update_action_label(struct exception_action *action,
-							struct label *newlabel) {
+    struct label *newlabel)
+{
 	int error;
-	
+
 	MAC_CHECK(exc_action_label_update, action, action->label, newlabel);
-	
-	return (error);
+
+	return error;
 }
 
 int
 mac_exc_inherit_action_label(struct exception_action *parent,
-							 struct exception_action *child) {
+    struct exception_action *child)
+{
 	return mac_exc_update_action_label(child, parent->label);
 }
 
-int mac_exc_update_task_crash_label(struct task *task, struct label *label) {
+int
+mac_exc_update_task_crash_label(struct task *task, struct label *label)
+{
 	int error;
 
 	assert(task != kernel_task);
@@ -241,8 +251,8 @@ int mac_exc_update_task_crash_label(struct task *task, struct label *label) {
 	struct label *crash_label = get_task_crash_label(task);
 
 	MAC_CHECK(exc_action_label_update, NULL, crash_label, label);
-	
-	return (error);
+
+	return error;
 }
 
 // Process label creation, may sleep.
@@ -291,5 +301,5 @@ mac_exc_action_check_exception_send(struct task *victim_task, struct exception_a
 		mac_exc_free_label(bsd_label);
 	}
 
-	return (error);
+	return error;
 }

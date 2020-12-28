@@ -66,7 +66,6 @@ src:./osfmk/i386/pmap_x86_common.c
 src:./osfmk/i386/pmCPU.c
 src:./osfmk/i386/startup64.c
 src:./osfmk/i386/lapic_native.c
-src:./osfmk/i386/fpu.c
 src:./osfmk/vm/vm_compressor.c
 fun:doublemap_init
 fun:getsegbynamefromheader

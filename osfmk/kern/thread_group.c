@@ -40,11 +40,17 @@
 #include <kern/queue.h>
 #include <kern/locks.h>
 #include <kern/thread_group.h>
+#include <kern/sched_clutch.h>
 
 
 #if CONFIG_EMBEDDED
 void
-sched_perfcontrol_thread_group_recommend(void *machine_data __unused, cluster_type_t new_recommendation __unused)	
+thread_group_join_io_storage(void)
+{
+}
+
+void
+sched_perfcontrol_thread_group_recommend(void *machine_data __unused, cluster_type_t new_recommendation __unused)
 {
 }
 #endif /* CONFIG_EMBEDDED */

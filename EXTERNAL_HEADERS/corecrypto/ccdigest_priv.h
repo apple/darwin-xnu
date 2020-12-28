@@ -11,6 +11,7 @@
 #ifndef _CORECRYPTO_CCDIGEST_PRIV_H_
 #define _CORECRYPTO_CCDIGEST_PRIV_H_
 
+#include <corecrypto/cc_priv.h>
 #include <corecrypto/ccdigest.h>
 #include <corecrypto/ccasn1.h>
 
@@ -25,5 +26,7 @@ typedef const struct ccdigest_info *(ccdigest_lookup)(ccoid_t oid);
 
 #include <stdarg.h>
 const struct ccdigest_info *ccdigest_oid_lookup(ccoid_t oid, ...);
+
+#define ccdigest_copy_state(_di_, _dst_, _src_) cc_memcpy_nochk(_dst_, _src_, (_di_)->state_size)
 
 #endif /* _CORECRYPTO_CCDIGEST_PRIV_H_ */

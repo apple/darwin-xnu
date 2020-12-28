@@ -75,10 +75,7 @@ function state_string(strings, state)
 end
 
 kqrequest_state_strings = {
-	['THREQUESTED'] = 0x02,
-	['WAKEUP'] = 0x04,
-	['BOUND'] = 0x08,
-	['DRAIN'] = 0x40,
+	['WAKEUP'] = 1,
 }
 
 kqueue_state_strings = {
@@ -94,6 +91,8 @@ kqueue_state_strings = {
 	['DRAIN'] = 0x200,
 	['WAKEUP'] = 0x400,
 	['DYNAMIC'] = 0x800,
+	['R2K'] = 0x1000,
+	['TURNSTILE'] = 0x2000,
 }
 
 knote_state_strings = {
@@ -102,16 +101,13 @@ knote_state_strings = {
 	['DISABLED'] = 0x0004,
 	['DROPPING'] = 0x0008,
 	['LOCKED'] = 0x0010,
-	['ATTACHING'] = 0x0020,
+	['POSTING'] = 0x0020,
 	['STAYACTIVE'] = 0x0040,
 	['DEFERDELETE'] = 0x0080,
-	['ATTACHED'] = 0x0100,
-	['DISPATCH'] = 0x0200,
-	['UDATA_SPECIFIC'] = 0x0400,
+	['MERGE_QOS'] = 0x0100,
+	['REQVANISH'] = 0x0200,
+	['VANISHED'] = 0x0400,
 	['SUPPRESSED'] = 0x0800,
-	['MERGE_QOS'] = 0x1000,
-	['REQVANISH'] = 0x2000,
-	['VANISHED'] = 0x4000,
 }
 
 kevent_flags_strings = {
@@ -159,36 +155,53 @@ function kevent_filter_string(filt)
 		return 'SOCK'
 	elseif filt == -14 then
 		return 'MEMORYSTATUS'
-	elseif filt == 15 then
-		return 'KQREAD'
-	elseif filt == 16 then
-		return 'PIPE_R'
+	elseif filt == -15 then
+		return 'EXCEPT'
+	elseif filt == -16 then
+		return 'NW_CHANNEL'
+	elseif filt == -17 then
+		return 'WORKLOOP'
+
 	elseif filt == 17 then
-		return 'PIPE_W'
+		return 'KQREAD'
 	elseif filt == 18 then
-		return 'PTSD'
+		return 'PIPE_N'
 	elseif filt == 19 then
-		return 'SOWRITE'
+		return 'PIPE_R'
 	elseif filt == 20 then
-		return 'SOEXCEPT'
+		return 'PIPE_W'
 	elseif filt == 21 then
-		return 'SPEC'
+		return 'PTSD'
 	elseif filt == 22 then
-		return 'BPFREAD'
+		return 'SOREAD'
 	elseif filt == 23 then
-		return 'NECP_FD'
+		return 'SOWRITE'
 	elseif filt == 24 then
-		return 'SKYWALK_CHANNEL_W'
+		return 'SCK'
 	elseif filt == 25 then
-		return 'SKYWALK_CHANNEL_R'
+		return 'SOEXCEPT'
 	elseif filt == 26 then
-		return 'FSEVENT'
+		return 'SPEC'
 	elseif filt == 27 then
-		return 'VN'
+		return 'BPFREAD'
 	elseif filt == 28 then
-		return 'SKYWALK_CHANNEL_E'
+		return 'NECP_FD'
 	elseif filt == 29 then
+		return 'SKYWALK_CHANNEL_W'
+	elseif filt == 30 then
+		return 'SKYWALK_CHANNEL_R'
+	elseif filt == 31 then
+		return 'SKYWALK_CHANNEL_E'
+	elseif filt == 32 then
+		return 'FSEVENT'
+	elseif filt == 33 then
+		return 'VN'
+	elseif filt == 34 then
 		return 'TTY'
+	elseif filt == 35 then
+		return 'PTMX'
+	elseif filt == 36 then
+		return 'DETACHED'
 	else
 		return string.format('[%d]', filt)
 	end

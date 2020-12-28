@@ -2,7 +2,7 @@
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,12 +22,12 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
- * 
+ *
  */
 
 #include <kern/sync_sema.h>
@@ -54,8 +54,8 @@
  */
 kern_return_t
 port_name_to_semaphore(
-	mach_port_name_t 	name,
-	semaphore_t 		*semaphorep)
+	mach_port_name_t        name,
+	semaphore_t             *semaphorep)
 {
 	ipc_port_t kern_port;
 	kern_return_t kr;
@@ -65,8 +65,7 @@ port_name_to_semaphore(
 		return KERN_INVALID_NAME;
 	}
 
-	kr = ipc_object_translate(current_space(), name, MACH_PORT_RIGHT_SEND,
-				  (ipc_object_t *) &kern_port);
+	kr = ipc_port_translate_send(current_space(), name, &kern_port);
 	if (kr != KERN_SUCCESS) {
 		*semaphorep = SEMAPHORE_NULL;
 		return kr;
@@ -97,9 +96,8 @@ port_name_to_semaphore(
  *		Port may or may not be locked.
  */
 semaphore_t
-convert_port_to_semaphore (ipc_port_t port)
+convert_port_to_semaphore(ipc_port_t port)
 {
-
 	if (IP_VALID(port)) {
 		semaphore_t semaphore;
 
@@ -109,10 +107,10 @@ convert_port_to_semaphore (ipc_port_t port)
 		 * keeps the semaphore bound to the port (and active).
 		 */
 		if (ip_kotype(port) == IKOT_SEMAPHORE) {
-			assert(ip_active(port));
-			semaphore = (semaphore_t) port->ip_kobject;
+			require_ip_active(port);
+			semaphore = (semaphore_t) ip_get_kobject(port);
 			semaphore_reference(semaphore);
-			return (semaphore);
+			return semaphore;
 		}
 	}
 	return SEMAPHORE_NULL;
@@ -131,48 +129,21 @@ convert_port_to_semaphore (ipc_port_t port)
  *		all extant send rights collectively.
  */
 ipc_port_t
-convert_semaphore_to_port (semaphore_t semaphore)
+convert_semaphore_to_port(semaphore_t semaphore)
 {
-	ipc_port_t port, send;
-
-	if (semaphore == SEMAPHORE_NULL)
-		return (IP_NULL);
-
-	/* caller is donating a reference */
-	port = semaphore->port;
-
-	if (!IP_VALID(port)) {
-		port = ipc_port_alloc_kernel();
-		assert(IP_VALID(port));
-		ipc_kobject_set_atomically(port, (ipc_kobject_t) semaphore, IKOT_SEMAPHORE);
-
-		/* If we lose the race, deallocate and pick up the other guy's port */
-		if (!OSCompareAndSwapPtr(IP_NULL, port, &semaphore->port)) {
-			ipc_port_dealloc_kernel(port);
-			port = semaphore->port;
-			assert(ip_kotype(port) == IKOT_SEMAPHORE);
-			assert(port->ip_kobject == (ipc_kobject_t)semaphore);
-		}
+	if (semaphore == SEMAPHORE_NULL) {
+		return IP_NULL;
 	}
 
-	ip_lock(port);
-	assert(ip_active(port));
-	send = ipc_port_make_send_locked(port);
-
-	if (1 == port->ip_srights) {
-		ipc_port_t old_notify;
-
-		/* transfer our ref to the port, and arm the no-senders notification */
-		assert(IP_NULL == port->ip_nsrequest);
-		ipc_port_nsrequest(port, port->ip_mscount, ipc_port_make_sonce_locked(port), &old_notify);
-		/* port unlocked */
-		assert(IP_NULL == old_notify);
-	} else {
-		/* piggyback on the existing port reference, so consume ours */
-		ip_unlock(port);
+	/*
+	 * make a send right and donate our reference for
+	 * semaphore_notify if this is the first send right
+	 */
+	if (!ipc_kobject_make_send_lazy_alloc_port(&semaphore->port,
+	    (ipc_kobject_t) semaphore, IKOT_SEMAPHORE)) {
 		semaphore_dereference(semaphore);
 	}
-	return (send);
+	return semaphore->port;
 }
 
 /*
@@ -194,24 +165,21 @@ semaphore_notify(mach_msg_header_t *msg)
 {
 	mach_no_senders_notification_t *notification = (void *)msg;
 	ipc_port_t port = notification->not_header.msgh_remote_port;
-	semaphore_t semaphore;
 
-	assert(ip_active(port));
+	require_ip_active(port);
 	assert(IKOT_SEMAPHORE == ip_kotype(port));
-	semaphore = (semaphore_t)port->ip_kobject;
 
-	semaphore_dereference(semaphore);
+	semaphore_dereference((semaphore_t) ip_get_kobject(port));
 }
 
 lock_set_t
-convert_port_to_lock_set (__unused ipc_port_t port)
+convert_port_to_lock_set(__unused ipc_port_t port)
 {
-	return (LOCK_SET_NULL);
+	return LOCK_SET_NULL;
 }
 
 ipc_port_t
-convert_lock_set_to_port (__unused lock_set_t lock_set)
+convert_lock_set_to_port(__unused lock_set_t lock_set)
 {
-	return (IP_NULL);
+	return IP_NULL;
 }
-

@@ -24,42 +24,73 @@
 #include <sys/types.h>
 #include <stdint.h>
 #include <signal.h>
+#include <os/reason_private.h>
 #include <unistd.h>
+
+/* Crash simulation */
+
+extern int pthread_current_stack_contains_np(const void *, unsigned long);
+int
+__darwin_check_fd_set_overflow(int n, const void *fd_set, int unlimited_select)
+{
+	if (n < 0) {
+		os_fault_with_payload(OS_REASON_LIBSYSTEM, OS_REASON_LIBSYSTEM_CODE_FAULT,
+		    &n, sizeof(n), "FD_SET underflow", 0);
+		return 0;
+	}
+
+	if (n >= __DARWIN_FD_SETSIZE) {
+		if (pthread_current_stack_contains_np((const void *) fd_set, sizeof(struct fd_set))) {
+			if (!unlimited_select) {
+				os_fault_with_payload(OS_REASON_LIBSYSTEM, OS_REASON_LIBSYSTEM_CODE_FAULT,
+				    &n, sizeof(n), "FD_SET overflow", 0);
+				return 0;
+			} else {
+				return 1;
+			}
+		} else {
+			return 1;
+		}
+	}
+
+	return 1;
+}
 
 /* System call entry points */
 int __terminate_with_payload(int pid, uint32_t reason_namespace, uint64_t reason_code,
-				void *payload, uint32_t payload_size, const char *reason_string,
-				uint64_t reason_flags);
+    void *payload, uint32_t payload_size, const char *reason_string,
+    uint64_t reason_flags);
 
 void __abort_with_payload(uint32_t reason_namespace, uint64_t reason_code,
-				void *payload, uint32_t payload_size, const char *reason_string,
-				uint64_t reason_flags);
+    void *payload, uint32_t payload_size, const char *reason_string,
+    uint64_t reason_flags);
 
 static void abort_with_payload_wrapper_internal(uint32_t reason_namespace, uint64_t reason_code,
-				void *payload, uint32_t payload_size, const char *reason_string,
-				uint64_t reason_flags) __attribute__((noreturn));
+    void *payload, uint32_t payload_size, const char *reason_string,
+    uint64_t reason_flags) __attribute__((noreturn, cold));
 
 /* System call wrappers */
 int
 terminate_with_reason(int pid, uint32_t reason_namespace, uint64_t reason_code,
-			const char *reason_string, uint64_t reason_flags)
+    const char *reason_string, uint64_t reason_flags)
 {
 	return __terminate_with_payload(pid, reason_namespace, reason_code, 0, 0,
-					reason_string, reason_flags);
+	           reason_string, reason_flags);
 }
 
 int
 terminate_with_payload(int pid, uint32_t reason_namespace, uint64_t reason_code,
-			void *payload, uint32_t payload_size,
-                        const char *reason_string, uint64_t reason_flags)
+    void *payload, uint32_t payload_size,
+    const char *reason_string, uint64_t reason_flags)
 {
 	return __terminate_with_payload(pid, reason_namespace, reason_code, payload,
-					payload_size, reason_string, reason_flags);
+	           payload_size, reason_string, reason_flags);
 }
 
-static void abort_with_payload_wrapper_internal(uint32_t reason_namespace, uint64_t reason_code,
-				void *payload, uint32_t payload_size, const char *reason_string,
-				uint64_t reason_flags)
+static void
+abort_with_payload_wrapper_internal(uint32_t reason_namespace, uint64_t reason_code,
+    void *payload, uint32_t payload_size, const char *reason_string,
+    uint64_t reason_flags)
 {
 	sigset_t unmask_signal;
 
@@ -69,28 +100,27 @@ static void abort_with_payload_wrapper_internal(uint32_t reason_namespace, uint6
 	sigprocmask(SIG_UNBLOCK, &unmask_signal, NULL);
 
 	__abort_with_payload(reason_namespace, reason_code, payload, payload_size,
-			reason_string, reason_flags);
+	    reason_string, reason_flags);
 
 	/* If sending a SIGABRT failed, we fall back to SIGKILL */
 	terminate_with_payload(getpid(), reason_namespace, reason_code, payload, payload_size,
-			reason_string, reason_flags | OS_REASON_FLAG_ABORT);
+	    reason_string, reason_flags | OS_REASON_FLAG_ABORT);
 
 	__builtin_unreachable();
 }
 
 void
 abort_with_reason(uint32_t reason_namespace, uint64_t reason_code, const char *reason_string,
-			uint64_t reason_flags)
+    uint64_t reason_flags)
 {
 	abort_with_payload_wrapper_internal(reason_namespace, reason_code, 0, 0, reason_string, reason_flags);
 }
 
 void
 abort_with_payload(uint32_t reason_namespace, uint64_t reason_code, void *payload,
-			uint32_t payload_size, const char *reason_string,
-                        uint64_t reason_flags)
+    uint32_t payload_size, const char *reason_string,
+    uint64_t reason_flags)
 {
 	abort_with_payload_wrapper_internal(reason_namespace, reason_code, payload, payload_size,
-			reason_string, reason_flags);
+	    reason_string, reason_flags);
 }
-

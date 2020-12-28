@@ -73,7 +73,7 @@ url_decode(char *str)
 				/* overwrite the '%' with the new char, and bump the rest of the
 				 * string down a few characters */
 				*esc++ = c;
-				str = memmove(esc, str, strlen(str)+1);
+				str = memmove(esc, str, strlen(str) + 1);
 			}
 		} else {
 			str++;

@@ -70,13 +70,13 @@ $(OBJROOT)/%.o: $(SRCROOT)/%.c
 	$(CC) $(CFLAGS) $? -o $@
 
 $(DSTROOT):
-	mkdir -p $(DSTROOT);
+	mkdir -p $(DSTROOT)
 
 $(OBJROOT):
-	mkdir -p $(OBJROOT);
+	mkdir -p $(OBJROOT)
 
 $(SYMROOT):
-	mkdir -p $(SYMROOT);
+	mkdir -p $(SYMROOT)
 
 clean:
 	rm -rf $(OBJROOT)

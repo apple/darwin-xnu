@@ -37,40 +37,40 @@ typedef u_char cookie_t[8];
 typedef u_char msgid_t[4];
 
 /* 3.1 ISAKMP Header Format (IKEv1 and IKEv2)
- 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+ *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- !                          Initiator                            !
- !                            Cookie                             !
+ *  !                          Initiator                            !
+ *  !                            Cookie                             !
  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- !                          Responder                            !
- !                            Cookie                             !
+ *  !                          Responder                            !
+ *  !                            Cookie                             !
  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- !  Next Payload ! MjVer ! MnVer ! Exchange Type !     Flags     !
+ *  !  Next Payload ! MjVer ! MnVer ! Exchange Type !     Flags     !
  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- !                          Message ID                           !
+ *  !                          Message ID                           !
  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- !                            Length                             !
+ *  !                            Length                             !
  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
  */
 struct isakmp {
-	cookie_t i_ck;		/* Initiator Cookie */
-	cookie_t r_ck;		/* Responder Cookie */
-	uint8_t np;		/* Next Payload Type */
+	cookie_t i_ck;          /* Initiator Cookie */
+	cookie_t r_ck;          /* Responder Cookie */
+	uint8_t np;             /* Next Payload Type */
 	uint8_t vers;
-#define ISAKMP_VERS_MAJOR	0xf0
-#define ISAKMP_VERS_MAJOR_SHIFT	4
-#define ISAKMP_VERS_MINOR	0x0f
-#define ISAKMP_VERS_MINOR_SHIFT	0
-	uint8_t etype;		/* Exchange Type */
-	uint8_t flags;		/* Flags */
+#define ISAKMP_VERS_MAJOR       0xf0
+#define ISAKMP_VERS_MAJOR_SHIFT 4
+#define ISAKMP_VERS_MINOR       0x0f
+#define ISAKMP_VERS_MINOR_SHIFT 0
+	uint8_t etype;          /* Exchange Type */
+	uint8_t flags;          /* Flags */
 	msgid_t msgid;
-	uint32_t len;		/* Length */
+	uint32_t len;           /* Length */
 };
 
 /* 3.2 Payload Generic Header
- 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+ *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- ! Next Payload  !   RESERVED    !         Payload Length        !
+ *  ! Next Payload  !   RESERVED    !         Payload Length        !
  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
  */
 struct isakmp_gen {

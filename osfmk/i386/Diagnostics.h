@@ -2,7 +2,7 @@
  * Copyright (c) 2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -36,7 +36,7 @@
  *	Here are the Diagnostic interface interfaces
  *	Lovingly crafted by Bill Angell using traditional methods
  */
-#ifdef	KERNEL_PRIVATE
+#ifdef  KERNEL_PRIVATE
 
 #ifndef _DIAGNOSTICS_H_
 #define _DIAGNOSTICS_H_
@@ -71,15 +71,14 @@ int diagCall64(x86_saved_state_t *regs);
 #define dgAcntg 20
 #define dgKlra 21
 #define dgEnaPMC 22
-#define	dgWar 23
+#define dgWar 23
 #define dgNapStat 24
 #define dgRuptStat 25
-#define	dgPermCheck 26
+#define dgPermCheck 26
 
-typedef struct diagWork {			/* Diagnostic work area */
-
-	unsigned int dgLock;			/* Lock if needed */
-	unsigned int dgFlags;			/* Flags */
+typedef struct diagWork {                       /* Diagnostic work area */
+	unsigned int dgLock;                    /* Lock if needed */
+	unsigned int dgFlags;                   /* Flags */
 #define enaExpTrace 0x00000001
 #define enaUsrFCall 0x00000002
 #define enaUsrPhyMp 0x00000004
@@ -88,14 +87,13 @@ typedef struct diagWork {			/* Diagnostic work area */
 #define enaDiagEM  0x00000020
 #define enaDiagTrap  0x00000040
 #define enaNotifyEM  0x00000080
-	
+
 	unsigned int dgMisc0;
 	unsigned int dgMisc1;
 	unsigned int dgMisc2;
 	unsigned int dgMisc3;
 	unsigned int dgMisc4;
 	unsigned int dgMisc5;
-
 } diagWork;
 
 extern diagWork dgWork;
@@ -109,11 +107,12 @@ extern diagWork dgWork;
 #define GPMC2 (2)
 #define GPMC3 (3)
 
-static inline uint64_t read_pmc(uint32_t counter)
+static inline uint64_t
+read_pmc(uint32_t counter)
 {
 	uint32_t lo = 0, hi = 0;
-	__asm__ volatile("rdpmc" : "=a" (lo), "=d" (hi) : "c" (counter));
-	return ((((uint64_t)hi) << 32) | ((uint64_t)lo));
+	__asm__ volatile ("rdpmc" : "=a" (lo), "=d" (hi) : "c" (counter));
+	return (((uint64_t)hi) << 32) | ((uint64_t)lo);
 }
 #endif /* _DIAGNOSTICS_H_ */
 

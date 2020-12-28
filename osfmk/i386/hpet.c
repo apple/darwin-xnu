@@ -2,7 +2,7 @@
  * Copyright (c) 2005-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -66,11 +66,11 @@
 #define Tera (kilo * Giga)
 #define Peta (kilo * Tera)
 
-vm_offset_t hpetArea = 0;			
-uint32_t hpetAreap = 0;			
+vm_offset_t hpetArea = 0;
+uint32_t hpetAreap = 0;
 uint64_t hpetFemto = 0;
 uint64_t hpetFreq = 0;
-uint64_t hpetCvt = 0;			/* (TAKE OUT LATER)  */
+uint64_t hpetCvt = 0;                   /* (TAKE OUT LATER)  */
 uint64_t hpetCvtt2n = 0;
 uint64_t hpetCvtn2t = 0;
 uint64_t tsc2hpet = 0;
@@ -78,27 +78,27 @@ uint64_t hpet2tsc = 0;
 uint64_t bus2hpet = 0;
 uint64_t hpet2bus = 0;
 
-vm_offset_t rcbaArea = 0;			
-uint32_t rcbaAreap = 0;			
+vm_offset_t rcbaArea = 0;
+uint32_t rcbaAreap = 0;
 
 static int (*hpet_req)(uint32_t apicid, void *arg, hpetRequest_t *hpet) = NULL;
 static void *hpet_arg = NULL;
 
 #if DEBUG
-#define DBG(x...)	kprintf("DBG: " x)
+#define DBG(x...)       kprintf("DBG: " x)
 #else
 #define DBG(x...)
 #endif
 
 int
 hpet_register_callback(int (*hpet_reqst)(uint32_t apicid,
-					 void *arg,
-					 hpetRequest_t *hpet),
-		       void *arg)
+    void *arg,
+    hpetRequest_t *hpet),
+    void *arg)
 {
-    hpet_req = hpet_reqst;
-    hpet_arg = arg;
-    return(0);
+	hpet_req = hpet_reqst;
+	hpet_arg = arg;
+	return 0;
 }
 
 /*
@@ -109,78 +109,78 @@ hpet_register_callback(int (*hpet_reqst)(uint32_t apicid,
 int
 hpet_request(uint32_t cpu)
 {
-    hpetRequest_t	hpetReq;
-    int			rc;
-    x86_lcpu_t		*lcpu;
-    x86_core_t		*core;
-    x86_pkg_t		*pkg;
-    boolean_t		enabled;
+	hpetRequest_t       hpetReq;
+	int                 rc;
+	x86_lcpu_t          *lcpu;
+	x86_core_t          *core;
+	x86_pkg_t           *pkg;
+	boolean_t           enabled;
 
-    if (hpet_req == NULL) {
-	return(-1);
-    }
+	if (hpet_req == NULL) {
+		return -1;
+	}
 
-    /*
-     * Deal with the case where the CPU # passed in is past the
-     * value specified in cpus=n in boot-args.
-     */
-    if (cpu >= real_ncpus) {
+	/*
+	 * Deal with the case where the CPU # passed in is past the
+	 * value specified in cpus=n in boot-args.
+	 */
+	if (cpu >= real_ncpus) {
+		enabled = ml_set_interrupts_enabled(FALSE);
+		lcpu = cpu_to_lcpu(cpu);
+		if (lcpu != NULL) {
+			core = lcpu->core;
+			pkg  = core->package;
+
+			if (lcpu->primary) {
+				pkg->flags |= X86PKG_FL_HAS_HPET;
+			}
+		}
+
+		ml_set_interrupts_enabled(enabled);
+		return 0;
+	}
+
+	rc = (*hpet_req)(ml_get_apicid(cpu), hpet_arg, &hpetReq);
+	if (rc != 0) {
+		return rc;
+	}
+
 	enabled = ml_set_interrupts_enabled(FALSE);
 	lcpu = cpu_to_lcpu(cpu);
-	if (lcpu != NULL) {
-	    core = lcpu->core;
-	    pkg  = core->package;
+	core = lcpu->core;
+	pkg  = core->package;
 
-	    if (lcpu->primary) {
+	/*
+	 * Compute the address of the HPET.
+	 */
+	core->Hpet = (hpetTimer_t *)((uint8_t *)hpetArea + hpetReq.hpetOffset);
+	core->HpetVec = hpetReq.hpetVector;
+
+	/*
+	 * Enable interrupts
+	 */
+	core->Hpet->Config |= Tn_INT_ENB_CNF;
+
+	/*
+	 * Save the configuration
+	 */
+	core->HpetCfg = core->Hpet->Config;
+	core->HpetCmp = 0;
+
+	/*
+	 * If the CPU is the "primary" for the package, then
+	 * add the HPET to the package too.
+	 */
+	if (lcpu->primary) {
+		pkg->Hpet = core->Hpet;
+		pkg->HpetCfg = core->HpetCfg;
+		pkg->HpetCmp = core->HpetCmp;
 		pkg->flags |= X86PKG_FL_HAS_HPET;
-	    }
 	}
 
 	ml_set_interrupts_enabled(enabled);
-	return(0);
-    }
 
-    rc = (*hpet_req)(ml_get_apicid(cpu), hpet_arg, &hpetReq);
-    if (rc != 0) {
-	return(rc);
-    }
-
-    enabled = ml_set_interrupts_enabled(FALSE);
-    lcpu = cpu_to_lcpu(cpu);
-    core = lcpu->core;
-    pkg  = core->package;
-
-    /*
-     * Compute the address of the HPET.
-     */
-    core->Hpet = (hpetTimer_t *)((uint8_t *)hpetArea + hpetReq.hpetOffset);
-    core->HpetVec = hpetReq.hpetVector;
-
-    /*
-     * Enable interrupts
-     */
-    core->Hpet->Config |= Tn_INT_ENB_CNF;
-
-    /*
-     * Save the configuration
-     */
-    core->HpetCfg = core->Hpet->Config;
-    core->HpetCmp = 0;
-
-    /*
-     * If the CPU is the "primary" for the package, then
-     * add the HPET to the package too.
-     */
-    if (lcpu->primary) {
-	pkg->Hpet = core->Hpet;
-	pkg->HpetCfg = core->HpetCfg;
-	pkg->HpetCmp = core->HpetCmp;
-	pkg->flags |= X86PKG_FL_HAS_HPET;
-    }
-
-    ml_set_interrupts_enabled(enabled);
-
-    return(0);
+	return 0;
 }
 
 /*
@@ -204,7 +204,7 @@ map_rcbaArea(void)
 void
 hpet_init(void)
 {
-	unsigned int	*xmod;
+	unsigned int    *xmod;
 
 	map_rcbaArea();
 
@@ -212,10 +212,10 @@ hpet_init(void)
 	 * Is the HPET memory already enabled?
 	 * If not, set address and enable.
 	 */
-	xmod = (uint32_t *)(rcbaArea + 0x3404);	/* Point to the HPTC */
-	uint32_t hptc = *xmod;			/* Get HPET config */
+	xmod = (uint32_t *)(rcbaArea + 0x3404); /* Point to the HPTC */
+	uint32_t hptc = *xmod;                  /* Get HPET config */
 	DBG("    current RCBA.HPTC:  %08X\n", *xmod);
-	if(!(hptc & hptcAE)) {
+	if (!(hptc & hptcAE)) {
 		DBG("HPET memory is not enabled, "
 		    "enabling and assigning to 0xFED00000 (hope that's ok)\n");
 		*xmod = (hptc & ~3) | hptcAE;
@@ -254,10 +254,10 @@ hpet_init(void)
 	hpetCvtt2n = hpetCvtt2n / 1000000ULL;
 	hpetCvtn2t = 0xFFFFFFFFFFFFFFFFULL / hpetCvtt2n;
 	kprintf("HPET: Frequency = %6d.%04dMHz, "
-		"cvtt2n = %08X.%08X, cvtn2t = %08X.%08X\n",
-		(uint32_t)(hpetFreq / Mega), (uint32_t)(hpetFreq % Mega), 
-		(uint32_t)(hpetCvtt2n >> 32), (uint32_t)hpetCvtt2n,
-		(uint32_t)(hpetCvtn2t >> 32), (uint32_t)hpetCvtn2t);
+	    "cvtt2n = %08X.%08X, cvtn2t = %08X.%08X\n",
+	    (uint32_t)(hpetFreq / Mega), (uint32_t)(hpetFreq % Mega),
+	    (uint32_t)(hpetCvtt2n >> 32), (uint32_t)hpetCvtt2n,
+	    (uint32_t)(hpetCvtn2t >> 32), (uint32_t)hpetCvtn2t);
 
 
 	/* (TAKE OUT LATER)
@@ -296,19 +296,19 @@ hpet_init(void)
 void
 hpet_get_info(hpetInfo_t *info)
 {
-    info->hpetCvtt2n = hpetCvtt2n;
-    info->hpetCvtn2t = hpetCvtn2t;
-    info->tsc2hpet   = tsc2hpet;
-    info->hpet2tsc   = hpet2tsc;
-    info->bus2hpet   = bus2hpet;
-    info->hpet2bus   = hpet2bus;
-    /*
-     * XXX
-     * We're repurposing the rcbaArea so we can use the HPET.
-     * Eventually we'll rename this correctly.
-     */
-    info->rcbaArea   = hpetArea;
-    info->rcbaAreap  = hpetAreap;
+	info->hpetCvtt2n = hpetCvtt2n;
+	info->hpetCvtn2t = hpetCvtn2t;
+	info->tsc2hpet   = tsc2hpet;
+	info->hpet2tsc   = hpet2tsc;
+	info->bus2hpet   = bus2hpet;
+	info->hpet2bus   = hpet2bus;
+	/*
+	 * XXX
+	 * We're repurposing the rcbaArea so we can use the HPET.
+	 * Eventually we'll rename this correctly.
+	 */
+	info->rcbaArea   = hpetArea;
+	info->rcbaAreap  = hpetAreap;
 }
 
 
@@ -322,14 +322,14 @@ hpet_get_info(hpetInfo_t *info)
 void
 ml_hpet_cfg(uint32_t cpu, uint32_t hpetVect)
 {
-	uint64_t	*hpetVaddr;
-	hpetTimer_t	*hpet;
-	x86_lcpu_t	*lcpu;
-	x86_core_t	*core;
-	x86_pkg_t	*pkg;
-	boolean_t	enabled;
-	
-	if(cpu > 1) {
+	uint64_t        *hpetVaddr;
+	hpetTimer_t     *hpet;
+	x86_lcpu_t      *lcpu;
+	x86_core_t      *core;
+	x86_pkg_t       *pkg;
+	boolean_t       enabled;
+
+	if (cpu > 1) {
 		panic("ml_hpet_cfg: invalid cpu = %d\n", cpu);
 	}
 
@@ -340,8 +340,9 @@ ml_hpet_cfg(uint32_t cpu, uint32_t hpetVect)
 	/*
 	 * Only deal with the primary CPU for the package.
 	 */
-	if (!lcpu->primary)
-	    return;
+	if (!lcpu->primary) {
+		return;
+	}
 
 	enabled = ml_set_interrupts_enabled(FALSE);
 
@@ -350,7 +351,7 @@ ml_hpet_cfg(uint32_t cpu, uint32_t hpetVect)
 	hpet = (hpetTimer_t *)hpetVaddr;
 
 	DBG("ml_hpet_cfg: HPET for cpu %d at %p, vector = %d\n",
-	     cpu, hpetVaddr, hpetVect);
+	    cpu, hpetVaddr, hpetVect);
 
 	/* Save the address and vector of the HPET for this processor */
 	core->Hpet = hpet;
@@ -387,7 +388,6 @@ ml_hpet_cfg(uint32_t cpu, uint32_t hpetVect)
 int
 HPETInterrupt(void)
 {
-
 	/* All we do here is to bump the count */
 	x86_package()->HpetInt++;
 
@@ -406,8 +406,8 @@ static hpetReg_t saved_hpet;
 void
 hpet_save(void)
 {
-	hpetReg_t	*from = (hpetReg_t *) hpetArea;
-	hpetReg_t	*to = &saved_hpet;
+	hpetReg_t       *from = (hpetReg_t *) hpetArea;
+	hpetReg_t       *to = &saved_hpet;
 
 	to->GEN_CONF  = from->GEN_CONF;
 	to->TIM0_CONF = from->TIM0_CONF;
@@ -422,8 +422,8 @@ hpet_save(void)
 void
 hpet_restore(void)
 {
-	hpetReg_t	*from = &saved_hpet;
-	hpetReg_t	*to = (hpetReg_t *) hpetArea;
+	hpetReg_t       *from = &saved_hpet;
+	hpetReg_t       *to = (hpetReg_t *) hpetArea;
 
 	/*
 	 * Is the HPET memory already enabled?
@@ -431,7 +431,7 @@ hpet_restore(void)
 	 */
 	uint32_t *hptcp = (uint32_t *)(rcbaArea + 0x3404);
 	uint32_t hptc = *hptcp;
-	if(!(hptc & hptcAE)) {
+	if (!(hptc & hptcAE)) {
 		DBG("HPET memory is not enabled, "
 		    "enabling and assigning to 0xFED00000 (hope that's ok)\n");
 		*hptcp = (hptc & ~3) | hptcAE;
@@ -458,10 +458,10 @@ hpet_restore(void)
 uint64_t
 rdHPET(void)
 {
-	hpetReg_t		*hpetp = (hpetReg_t *) hpetArea;
-	volatile uint32_t	*regp = (uint32_t *) &hpetp->MAIN_CNT;
-	uint32_t		high;
-	uint32_t		low;
+	hpetReg_t               *hpetp = (hpetReg_t *) hpetArea;
+	volatile uint32_t       *regp = (uint32_t *) &hpetp->MAIN_CNT;
+	uint32_t                high;
+	uint32_t                low;
 
 	do {
 		high = *(regp + 1);

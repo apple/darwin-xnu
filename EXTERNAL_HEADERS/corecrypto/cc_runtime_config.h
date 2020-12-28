@@ -14,8 +14,22 @@
 #include <corecrypto/cc_config.h>
 
 /* Only intel systems have these runtime switches today. */
-#if (CCSHA1_VNG_INTEL || CCSHA2_VNG_INTEL || CCAES_INTEL_ASM) \
-    && (defined(__x86_64__) || defined(__i386__))
+
+#if defined(__x86_64__) || defined(__i386__)
+
+#if CC_KERNEL
+    #include <i386/cpuid.h>
+    #define CC_HAS_RDRAND() ((cpuid_features() & CPUID_FEATURE_RDRAND) != 0)
+#elif CC_XNU_KERNEL_AVAILABLE
+    #include <System/i386/cpu_capabilities.h>
+
+    extern int _cpu_capabilities;
+    #define CC_HAS_RDRAND() (_cpu_capabilities & kHasRDRAND)
+#else
+    #define CC_HAS_RDRAND() 0
+#endif
+
+#if (CCSHA1_VNG_INTEL || CCSHA2_VNG_INTEL || CCAES_INTEL_ASM)
 
 #if CC_KERNEL
     #include <i386/cpuid.h>
@@ -26,11 +40,7 @@
     #define CC_HAS_AVX512_AND_IN_KERNEL()    ((cpuid_info()->cpuid_leaf7_features & CPUID_LEAF7_FEATURE_AVX512F) !=0)
 
 #elif CC_XNU_KERNEL_AVAILABLE
-    # include <System/i386/cpu_capabilities.h>
-
-    #ifndef kHasAVX2_0 /* 10.8 doesn't have kHasAVX2_0 defined */
-    #define kHasAVX2_0 0
-    #endif
+    #include <System/i386/cpu_capabilities.h>
 
     extern int _cpu_capabilities;
     #define CC_HAS_AESNI() (_cpu_capabilities & kHasAES)
@@ -46,6 +56,8 @@
     #define CC_HAS_AVX512_AND_IN_KERNEL()  0
 #endif
 
-#endif /* !(defined(__x86_64__) || defined(__i386__)) */
+#endif  // (CCSHA1_VNG_INTEL || CCSHA2_VNG_INTEL || CCAES_INTEL_ASM)
+
+#endif  // defined(__x86_64__) || defined(__i386__)
 
 #endif /* CORECRYPTO_CC_RUNTIME_CONFIG_H_ */

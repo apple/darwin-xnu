@@ -26,13 +26,13 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#ifndef	_KERN_THREAD_KERNEL_STATE_H_
+#ifndef _KERN_THREAD_KERNEL_STATE_H_
 
 #include <vm/vm_kern.h>
 
 struct thread_kernel_state {
-    machine_thread_kernel_state  machine;           /* must be first */
-    kern_allocation_name_t       allocation_name;
+	machine_thread_kernel_state  machine;       /* must be first */
+	kern_allocation_name_t       allocation_name;
 } __attribute__((aligned(16)));
 
 typedef struct thread_kernel_state * thread_kernel_state_t;

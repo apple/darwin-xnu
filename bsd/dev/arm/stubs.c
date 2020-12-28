@@ -7,6 +7,7 @@
  *
  */
 
+#include <sys/cdefs.h>
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/ioctl.h>
@@ -33,15 +34,21 @@ copyoutstr(const void *from, user_addr_t to, size_t maxlen, size_t * lencopied)
 {
 	size_t          slen;
 	size_t          len;
-	int             error = 0;
+	int             error = copyoutstr_prevalidate(from, to, maxlen);
+
+	if (__improbable(error)) {
+		return error;
+	}
 
 	slen = strlen(from) + 1;
-	if (slen > maxlen)
+	if (slen > maxlen) {
 		error = ENAMETOOLONG;
+	}
 
 	len = min(maxlen, slen);
-	if (copyout(from, to, len))
+	if (copyout(from, to, len)) {
 		error = EFAULT;
+	}
 	*lencopied = len;
 
 	return error;
@@ -65,13 +72,15 @@ copystr(const void *vfrom, void *vto, size_t maxlen, size_t * lencopied)
 
 	for (l = 0; l < maxlen; l++) {
 		if ((*to++ = *from++) == '\0') {
-			if (lencopied)
+			if (lencopied) {
 				*lencopied = l + 1;
+			}
 			return 0;
 		}
 	}
-	if (lencopied)
+	if (lencopied) {
 		*lencopied = maxlen;
+	}
 	return ENAMETOOLONG;
 }
 

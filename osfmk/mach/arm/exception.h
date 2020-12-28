@@ -26,7 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#ifndef	_MACH_ARM_EXCEPTION_H_
+#ifndef _MACH_ARM_EXCEPTION_H_
 #define _MACH_ARM_EXCEPTION_H_
 
 #define EXC_TYPES_COUNT         14      /* incl. illegal exception 0 */
@@ -34,6 +34,12 @@
 #define EXC_MASK_MACHINE         0
 
 #define EXCEPTION_CODE_MAX       2      /*  code and subcode */
+
+#if XNU_KERNEL_PRIVATE
+#if __has_feature(ptrauth_calls)
+#define EXC_PTRAUTH_BIT         0x200  /* bit set if exception could have been caused by ptrauth failure */
+#endif /* __has_feature(ptrauth_calls) */
+#endif /* XNU_KERNEL_PRIVATE */
 
 /*
  *	Trap numbers as defined by the hardware exception vectors.
@@ -43,24 +49,35 @@
  *      EXC_BAD_INSTRUCTION
  */
 
-#define EXC_ARM_UNDEFINED	1	/* Undefined */
+#define EXC_ARM_UNDEFINED       1       /* Undefined */
 
+/*
+ *      EXC_ARITHMETIC
+ */
+
+#define EXC_ARM_FP_UNDEFINED    0       /* Undefined Floating Point Exception */
+#define EXC_ARM_FP_IO           1       /* Invalid Floating Point Operation */
+#define EXC_ARM_FP_DZ           2       /* Floating Point Divide by Zero */
+#define EXC_ARM_FP_OF           3       /* Floating Point Overflow */
+#define EXC_ARM_FP_UF           4       /* Floating Point Underflow */
+#define EXC_ARM_FP_IX           5       /* Inexact Floating Point Result */
+#define EXC_ARM_FP_ID           6       /* Floating Point Denormal Input */
 
 /*
  *      EXC_BAD_ACCESS
  *      Note: do not conflict with kern_return_t values returned by vm_fault
  */
 
-#define EXC_ARM_DA_ALIGN	0x101	/* Alignment Fault */
-#define EXC_ARM_DA_DEBUG	0x102	/* Debug (watch/break) Fault */
-#define EXC_ARM_SP_ALIGN	0x103	/* SP Alignment Fault */
-#define EXC_ARM_SWP			0x104	/* SWP instruction */
+#define EXC_ARM_DA_ALIGN        0x101   /* Alignment Fault */
+#define EXC_ARM_DA_DEBUG        0x102   /* Debug (watch/break) Fault */
+#define EXC_ARM_SP_ALIGN        0x103   /* SP Alignment Fault */
+#define EXC_ARM_SWP             0x104   /* SWP instruction */
 
 /*
  *	EXC_BREAKPOINT
  */
 
-#define EXC_ARM_BREAKPOINT	1	/* breakpoint trap */
+#define EXC_ARM_BREAKPOINT      1       /* breakpoint trap */
 
 
-#endif	/* _MACH_ARM_EXCEPTION_H_ */
+#endif  /* _MACH_ARM_EXCEPTION_H_ */

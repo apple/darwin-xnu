@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -51,13 +51,33 @@ extern kern_return_t arm64_lock_test(void);
 #endif
 kern_return_t kalloc_test(void);
 kern_return_t ipi_test(void);
+#if defined(KERNEL_INTEGRITY_CTRR)
+extern kern_return_t ctrr_test(void);
+#endif
+#if __ARM_PAN_AVAILABLE__
+extern kern_return_t arm64_late_pan_test(void);
+#endif
+#if HAS_TWO_STAGE_SPR_LOCK
+extern kern_return_t arm64_spr_lock_test(void);
+#endif
+extern kern_return_t copyio_test(void);
 
 struct xnupost_test bsd_post_tests[] = {
 #ifdef __arm64__
 	XNUPOST_TEST_CONFIG_BASIC(arm64_lock_test),
 #endif
+#if defined(KERNEL_INTEGRITY_CTRR)
+	XNUPOST_TEST_CONFIG_BASIC(ctrr_test),
+#endif
+#if __ARM_PAN_AVAILABLE__
+	XNUPOST_TEST_CONFIG_BASIC(arm64_late_pan_test),
+#endif
 	XNUPOST_TEST_CONFIG_BASIC(kalloc_test),
-	XNUPOST_TEST_CONFIG_BASIC(ipi_test)
+	XNUPOST_TEST_CONFIG_BASIC(ipi_test),
+#if HAS_TWO_STAGE_SPR_LOCK
+	XNUPOST_TEST_CONFIG_BASIC(arm64_spr_lock_test),
+#endif
+	XNUPOST_TEST_CONFIG_BASIC(copyio_test),
 };
 
 uint32_t bsd_post_tests_count = sizeof(bsd_post_tests) / sizeof(xnupost_test_data_t);
@@ -130,17 +150,18 @@ kalloc_test()
 #define XNUPOST_TNAME_MAXLEN 132
 
 struct kcdata_subtype_descriptor kc_xnupost_test_def[] = {
-    {KCS_SUBTYPE_FLAGS_NONE, KC_ST_UINT16, 0, sizeof(uint16_t), "config"},
-    {KCS_SUBTYPE_FLAGS_NONE, KC_ST_UINT16, 1 * sizeof(uint16_t), sizeof(uint16_t), "test_num"},
-    {KCS_SUBTYPE_FLAGS_NONE, KC_ST_INT32, 2 * sizeof(uint16_t), sizeof(int32_t), "retval"},
-    {KCS_SUBTYPE_FLAGS_NONE, KC_ST_INT32, 2 * sizeof(uint16_t) + sizeof(int32_t), sizeof(int32_t), "expected_retval"},
-    {KCS_SUBTYPE_FLAGS_NONE, KC_ST_UINT64, 2 * (sizeof(uint16_t) + sizeof(int32_t)), sizeof(uint64_t), "begin_time"},
-    {KCS_SUBTYPE_FLAGS_NONE, KC_ST_UINT64, 2 * (sizeof(uint16_t) + sizeof(int32_t)) + sizeof(uint64_t), sizeof(uint64_t), "end_time"},
-    {KCS_SUBTYPE_FLAGS_ARRAY,
-     KC_ST_CHAR,
-     2 * (sizeof(uint16_t) + sizeof(int32_t) + sizeof(uint64_t)),
-     KCS_SUBTYPE_PACK_SIZE(XNUPOST_TNAME_MAXLEN * sizeof(char), sizeof(char)),
-     "test_name"}};
+	{.kcs_flags = KCS_SUBTYPE_FLAGS_NONE, .kcs_elem_type = KC_ST_UINT16, .kcs_elem_offset = 0, .kcs_elem_size = sizeof(uint16_t), .kcs_name = "config"},
+	{.kcs_flags = KCS_SUBTYPE_FLAGS_NONE, .kcs_elem_type = KC_ST_UINT16, .kcs_elem_offset = 1 * sizeof(uint16_t), .kcs_elem_size = sizeof(uint16_t), .kcs_name = "test_num"},
+	{.kcs_flags = KCS_SUBTYPE_FLAGS_NONE, .kcs_elem_type = KC_ST_INT32, .kcs_elem_offset = 2 * sizeof(uint16_t), .kcs_elem_size = sizeof(int32_t), .kcs_name = "retval"},
+	{.kcs_flags = KCS_SUBTYPE_FLAGS_NONE, .kcs_elem_type = KC_ST_INT32, .kcs_elem_offset = 2 * sizeof(uint16_t) + sizeof(int32_t), .kcs_elem_size = sizeof(int32_t), .kcs_name = "expected_retval"},
+	{.kcs_flags = KCS_SUBTYPE_FLAGS_NONE, .kcs_elem_type = KC_ST_UINT64, .kcs_elem_offset = 2 * (sizeof(uint16_t) + sizeof(int32_t)), .kcs_elem_size = sizeof(uint64_t), .kcs_name = "begin_time"},
+	{.kcs_flags = KCS_SUBTYPE_FLAGS_NONE, .kcs_elem_type = KC_ST_UINT64, .kcs_elem_offset = 2 * (sizeof(uint16_t) + sizeof(int32_t)) + sizeof(uint64_t), .kcs_elem_size = sizeof(uint64_t), .kcs_name = "end_time"},
+	{.kcs_flags = KCS_SUBTYPE_FLAGS_ARRAY,
+	 .kcs_elem_type = KC_ST_CHAR,
+	 .kcs_elem_offset = 2 * (sizeof(uint16_t) + sizeof(int32_t) + sizeof(uint64_t)),
+	 .kcs_elem_size = KCS_SUBTYPE_PACK_SIZE(XNUPOST_TNAME_MAXLEN * sizeof(char), sizeof(char)),
+	 .kcs_name = "test_name"}
+};
 
 const uint32_t kc_xnupost_test_def_count = sizeof(kc_xnupost_test_def) / sizeof(struct kcdata_subtype_descriptor);
 
@@ -154,39 +175,46 @@ xnupost_copyout_test(xnupost_test_t t, mach_vm_address_t outaddr)
 	uint32_t namelen = 0;
 
 	kret = copyout(&t->xt_config, outaddr, sizeof(uint16_t));
-	if (kret)
+	if (kret) {
 		return kret;
+	}
 	outaddr += sizeof(uint16_t);
 
 	kret = copyout(&t->xt_test_num, outaddr, sizeof(uint16_t));
-	if (kret)
+	if (kret) {
 		return kret;
+	}
 	outaddr += sizeof(uint16_t);
 
 	kret = copyout(&t->xt_retval, outaddr, sizeof(uint32_t));
-	if (kret)
+	if (kret) {
 		return kret;
+	}
 	outaddr += sizeof(uint32_t);
 
 	kret = copyout(&t->xt_expected_retval, outaddr, sizeof(uint32_t));
-	if (kret)
+	if (kret) {
 		return kret;
+	}
 	outaddr += sizeof(uint32_t);
 
 	kret = copyout(&t->xt_begin_time, outaddr, sizeof(uint64_t));
-	if (kret)
+	if (kret) {
 		return kret;
+	}
 	outaddr += sizeof(uint64_t);
 
 	kret = copyout(&t->xt_end_time, outaddr, sizeof(uint64_t));
-	if (kret)
+	if (kret) {
 		return kret;
+	}
 	outaddr += sizeof(uint64_t);
 
 	namelen = strnlen(t->xt_name, XNUPOST_TNAME_MAXLEN);
 	kret = copyout(t->xt_name, outaddr, namelen);
-	if (kret)
+	if (kret) {
 		return kret;
+	}
 	outaddr += namelen;
 
 	return 0;
@@ -197,7 +225,7 @@ xnupost_get_estimated_testdata_size(void)
 {
 	uint32_t total_tests = bsd_post_tests_count + kernel_post_tests_count;
 	uint32_t elem_size = kc_xnupost_test_def[kc_xnupost_test_def_count - 1].kcs_elem_offset +
-	                     kcs_get_elem_size(&kc_xnupost_test_def[kc_xnupost_test_def_count - 1]);
+	    kcs_get_elem_size(&kc_xnupost_test_def[kc_xnupost_test_def_count - 1]);
 	uint32_t retval = 1024; /* account for type definition and mach timebase */
 	retval += 1024;         /* kernel version and boot-args string data */
 	retval += (total_tests * elem_size);
@@ -219,9 +247,9 @@ xnupost_export_testdata(void * outp, uint32_t size, uint32_t * lenp)
 
 #define RET_IF_OP_FAIL                                                                                       \
 	do {                                                                                                     \
-		if (kret != KERN_SUCCESS) {                                                                          \
-			return (kret == KERN_NO_ACCESS) ? EACCES : ((kret == KERN_RESOURCE_SHORTAGE) ? ENOMEM : EINVAL); \
-		}                                                                                                    \
+	        if (kret != KERN_SUCCESS) {                                                                          \
+	                return (kret == KERN_NO_ACCESS) ? EACCES : ((kret == KERN_RESOURCE_SHORTAGE) ? ENOMEM : EINVAL); \
+	        }                                                                                                    \
 	} while (0)
 
 	kret = kcdata_memory_static_init(&kcd, (mach_vm_address_t)outp, KCDATA_BUFFER_BEGIN_XNUPOST_CONFIG, size, KCFLAG_USE_COPYOUT);
@@ -241,7 +269,7 @@ xnupost_export_testdata(void * outp, uint32_t size, uint32_t * lenp)
 	kret = copyout(&version[0], user_addr, length_to_copy);
 	RET_IF_OP_FAIL;
 
-	length_to_copy = MIN((uint32_t)(strlen(PE_boot_args()) + 1), OSVERSIZE);
+	length_to_copy = MIN((uint32_t)(strlen(PE_boot_args()) + 1), BOOT_LINE_LENGTH);
 	kret           = kcdata_get_memory_addr(&kcd, STACKSHOT_KCTYPE_BOOTARGS, length_to_copy, &user_addr);
 	RET_IF_OP_FAIL;
 	kret = copyout(PE_boot_args(), user_addr, length_to_copy);
@@ -249,13 +277,13 @@ xnupost_export_testdata(void * outp, uint32_t size, uint32_t * lenp)
 
 	/* add type definition to buffer */
 	kret = kcdata_add_type_definition(&kcd, XNUPOST_KCTYPE_TESTCONFIG, kctype_name, &kc_xnupost_test_def[0],
-	                                  kc_xnupost_test_def_count);
+	    kc_xnupost_test_def_count);
 	RET_IF_OP_FAIL;
 
 	/* add the tests to buffer as array */
 	uint32_t total_tests = bsd_post_tests_count + kernel_post_tests_count;
 	uint32_t elem_size = kc_xnupost_test_def[kc_xnupost_test_def_count - 1].kcs_elem_offset +
-	                     kcs_get_elem_size(&kc_xnupost_test_def[kc_xnupost_test_def_count - 1]);
+	    kcs_get_elem_size(&kc_xnupost_test_def[kc_xnupost_test_def_count - 1]);
 
 	kret = kcdata_get_memory_addr_for_array(&kcd, XNUPOST_KCTYPE_TESTCONFIG, elem_size, total_tests, &user_addr);
 	RET_IF_OP_FAIL;
@@ -273,8 +301,9 @@ xnupost_export_testdata(void * outp, uint32_t size, uint32_t * lenp)
 		RET_IF_OP_FAIL;
 	}
 
-	if (kret == KERN_SUCCESS && lenp != NULL)
+	if (kret == KERN_SUCCESS && lenp != NULL) {
 		*lenp = (uint32_t)kcdata_memory_get_used_bytes(&kcd);
+	}
 	RET_IF_OP_FAIL;
 
 #undef RET_IF_OP_FAIL

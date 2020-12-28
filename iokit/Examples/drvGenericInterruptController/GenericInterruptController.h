@@ -2,7 +2,7 @@
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -40,45 +40,45 @@
 
 class GenericInterruptController : public IOInterruptController
 {
-  IODeclareDefaultStructors(GenericInterruptController);
-  
+	IODeclareDefaultStructors(GenericInterruptController);
+
 public:
-  // There should be a method to start or init the controller.
-  // Its nature is up to you.
-  virtual bool start(IOService *provider);
-  
-  // Returns the type of a vector: level or edge.  This will probably get
-  // replaced but a default method and a new method getVectorType.
-  virtual IOReturn getInterruptType(IOService *nub, int source,
-				    int *interruptType);
-  
-  // Returns a function pointer for the interrupt handler.
-  // Sadly, egcs prevents this from being done by the base class.
-  virtual IOInterruptAction getInterruptHandlerAddress(void);
-  
-  // The actual interrupt handler.
-  virtual IOReturn handleInterrupt(void *refCon,
-				   IOService *nub, int source);
-  
-  
-  // Should return true if this vector can be shared.
-  // The base class return false, so this method only need to be implemented
-  // if the controller needs to support shared interrupts.
-  // No other work is required to support shared interrupts.
-  virtual bool vectorCanBeShared(long vectorNumber, IOInterruptVector *vector);
-  
-  // Do any hardware initalization for this vector.  Leave the vector
-  // hard disabled.
-  virtual void initVector(long vectorNumber, IOInterruptVector *vector);
-  
-  // Disable this vector at the hardware.
-  virtual void disableVectorHard(long vectorNumber, IOInterruptVector *vector);
-  
-  // Enable this vector at the hardware.
-  virtual void enableVector(long vectorNumber, IOInterruptVector *vector);
-  
-  // Cause an interrupt on this vector.
-  virtual void causeVector(long vectorNumber, IOInterruptVector *vector);
+// There should be a method to start or init the controller.
+// Its nature is up to you.
+	virtual bool start(IOService *provider);
+
+// Returns the type of a vector: level or edge.  This will probably get
+// replaced but a default method and a new method getVectorType.
+	virtual IOReturn getInterruptType(IOService *nub, int source,
+	    int *interruptType);
+
+// Returns a function pointer for the interrupt handler.
+// Sadly, egcs prevents this from being done by the base class.
+	virtual IOInterruptAction getInterruptHandlerAddress(void);
+
+// The actual interrupt handler.
+	virtual IOReturn handleInterrupt(void *refCon,
+	    IOService *nub, int source);
+
+
+// Should return true if this vector can be shared.
+// The base class return false, so this method only need to be implemented
+// if the controller needs to support shared interrupts.
+// No other work is required to support shared interrupts.
+	virtual bool vectorCanBeShared(long vectorNumber, IOInterruptVector *vector);
+
+// Do any hardware initalization for this vector.  Leave the vector
+// hard disabled.
+	virtual void initVector(long vectorNumber, IOInterruptVector *vector);
+
+// Disable this vector at the hardware.
+	virtual void disableVectorHard(long vectorNumber, IOInterruptVector *vector);
+
+// Enable this vector at the hardware.
+	virtual void enableVector(long vectorNumber, IOInterruptVector *vector);
+
+// Cause an interrupt on this vector.
+	virtual void causeVector(long vectorNumber, IOInterruptVector *vector);
 };
 
 #endif /* ! _IOKIT_GENERICINTERRUPTCONTROLLER_H */

@@ -34,8 +34,10 @@ fi
 SDKROOT="$1"
 OUTPUT="$2"
 
-if [ ! -x "${SDKROOT}/usr/local/libexec/availability.pl" ] ; then
-    echo "Unable to locate ${SDKROOT}/usr/local/libexec/availability.pl (or not executable)" >&2
+AVAILABILITY_PL="${SDKROOT}/${DRIVERKITROOT}/usr/local/libexec/availability.pl"
+
+if [ ! -x "${AVAILABILITY_PL}" ] ; then
+    echo "Unable to locate ${AVAILABILITY_PL} (or not executable)" >&2
     exit 1
 fi
 	    
@@ -74,7 +76,7 @@ cat <<EOF
 
 EOF
 
-for ver in $(${SDKROOT}/usr/local/libexec/availability.pl --ios) ; do
+for ver in $(${AVAILABILITY_PL} --ios) ; do
     ver_major=${ver%.*}
     ver_minor=${ver#*.}
     value=$(printf "%d%02d00" ${ver_major} ${ver_minor})
@@ -87,7 +89,7 @@ for ver in $(${SDKROOT}/usr/local/libexec/availability.pl --ios) ; do
     echo ""
 done
 
-for ver in $(${SDKROOT}/usr/local/libexec/availability.pl --macosx) ; do
+for ver in $(${AVAILABILITY_PL} --macosx) ; do
     set -- $(echo "$ver" | tr '.' ' ')
     ver_major=$1
     ver_minor=$2

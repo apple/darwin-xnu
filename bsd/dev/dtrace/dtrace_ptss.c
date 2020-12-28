@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
@@ -48,7 +48,8 @@
  * page of memory, the underlying kernel _MALLOC may block.
  */
 struct dtrace_ptss_page_entry*
-dtrace_ptss_claim_entry_locked(struct proc* p) {
+dtrace_ptss_claim_entry_locked(struct proc* p)
+{
 	LCK_MTX_ASSERT(&p->p_dtrace_sprlock, LCK_MTX_ASSERT_OWNED);
 
 	struct dtrace_ptss_page_entry* entry = NULL;
@@ -61,8 +62,9 @@ dtrace_ptss_claim_entry_locked(struct proc* p) {
 			struct dtrace_ptss_page* page = dtrace_ptss_allocate_page(p);
 
 			// Make sure we actually got a page
-			if (page == NULL)
+			if (page == NULL) {
 				return NULL;
+			}
 
 			// Add the page to the page list
 			page->next = p->p_dtrace_ptss_pages;
@@ -70,18 +72,19 @@ dtrace_ptss_claim_entry_locked(struct proc* p) {
 
 			// CAS the entries onto the free list.
 			do {
-				page->entries[DTRACE_PTSS_ENTRIES_PER_PAGE-1].next = p->p_dtrace_ptss_free_list;
-			} while (!OSCompareAndSwapPtr((void *)page->entries[DTRACE_PTSS_ENTRIES_PER_PAGE-1].next,
-						   (void *)&page->entries[0],
-						   (void * volatile *)&p->p_dtrace_ptss_free_list));
-				 
+				page->entries[DTRACE_PTSS_ENTRIES_PER_PAGE - 1].next = p->p_dtrace_ptss_free_list;
+			} while (!OSCompareAndSwapPtr((void *)page->entries[DTRACE_PTSS_ENTRIES_PER_PAGE - 1].next,
+			    (void *)&page->entries[0],
+			    (void * volatile *)&p->p_dtrace_ptss_free_list));
+
 			// Now that we've added to the free list, try again.
 			continue;
 		}
 
 		// Claim temp
-		if (!OSCompareAndSwapPtr((void *)temp, (void *)temp->next, (void * volatile *)&p->p_dtrace_ptss_free_list))
+		if (!OSCompareAndSwapPtr((void *)temp, (void *)temp->next, (void * volatile *)&p->p_dtrace_ptss_free_list)) {
 			continue;
+		}
 
 		// At this point, we own temp.
 		entry = temp;
@@ -96,7 +99,8 @@ dtrace_ptss_claim_entry_locked(struct proc* p) {
  * This function does not require any locks to be held on entry.
  */
 struct dtrace_ptss_page_entry*
-dtrace_ptss_claim_entry(struct proc* p) {
+dtrace_ptss_claim_entry(struct proc* p)
+{
 	// Verify no locks held on entry
 	LCK_MTX_ASSERT(&p->p_dtrace_sprlock, LCK_MTX_ASSERT_NOTOWNED);
 	LCK_MTX_ASSERT(&p->p_mlock, LCK_MTX_ASSERT_NOTOWNED);
@@ -114,8 +118,9 @@ dtrace_ptss_claim_entry(struct proc* p) {
 		}
 
 		// Claim temp
-		if (!OSCompareAndSwapPtr((void *)temp, (void *)temp->next, (void * volatile *)&p->p_dtrace_ptss_free_list))
+		if (!OSCompareAndSwapPtr((void *)temp, (void *)temp->next, (void * volatile *)&p->p_dtrace_ptss_free_list)) {
 			continue;
+		}
 
 		// At this point, we own temp.
 		entry = temp;
@@ -134,7 +139,8 @@ dtrace_ptss_claim_entry(struct proc* p) {
  * of releasing an entry to the free list is ignored.
  */
 void
-dtrace_ptss_release_entry(struct proc* p, struct dtrace_ptss_page_entry* e) {
+dtrace_ptss_release_entry(struct proc* p, struct dtrace_ptss_page_entry* e)
+{
 	if (p && p->p_dtrace_ptss_pages && e) {
 		do {
 			e->next = p->p_dtrace_ptss_free_list;
@@ -144,7 +150,7 @@ dtrace_ptss_release_entry(struct proc* p, struct dtrace_ptss_page_entry* e) {
 
 /*
  * This function allocates a new page in the target process's address space.
- * 
+ *
  * It returns a dtrace_ptss_page that has its entries chained, with the last
  * entries next field set to NULL. It does not add the page or the entries to
  * the process's page/entry lists.
@@ -156,24 +162,26 @@ dtrace_ptss_allocate_page(struct proc* p)
 {
 	// Allocate the kernel side data
 	struct dtrace_ptss_page* ptss_page = _MALLOC(sizeof(struct dtrace_ptss_page), M_TEMP, M_ZERO | M_WAITOK);
-	if (ptss_page == NULL)
+	if (ptss_page == NULL) {
 		return NULL;
+	}
 
 	// Now allocate a page in user space and set its protections to allow execute.
 	task_t task = p->task;
 	vm_map_t map = get_task_map_reference(task);
-	if (map == NULL)
-	  goto err;
+	if (map == NULL) {
+		goto err;
+	}
 
 	mach_vm_size_t size = PAGE_MAX_SIZE;
 	mach_vm_offset_t addr = 0;
 	mach_vm_offset_t write_addr = 0;
-	/* 
+	/*
 	 * The embedded OS has extra permissions for writable and executable pages.
 	 * To ensure correct permissions, we must set the page protections separately.
 	 */
-	vm_prot_t cur_protection = VM_PROT_READ|VM_PROT_EXECUTE;
-	vm_prot_t max_protection = VM_PROT_READ|VM_PROT_EXECUTE|VM_PROT_WRITE;
+	vm_prot_t cur_protection = VM_PROT_READ | VM_PROT_EXECUTE;
+	vm_prot_t max_protection = VM_PROT_READ | VM_PROT_EXECUTE | VM_PROT_WRITE;
 
 	kern_return_t kr = mach_vm_map_kernel(map, &addr, size, 0, VM_FLAGS_ANYWHERE, VM_MAP_KERNEL_FLAGS_NONE, VM_KERN_MEMORY_NONE, IPC_PORT_NULL, 0, FALSE, cur_protection, max_protection, VM_INHERIT_DEFAULT);
 	if (kr != KERN_SUCCESS) {
@@ -183,24 +191,26 @@ dtrace_ptss_allocate_page(struct proc* p)
 	 * If on embedded, remap the scratch space as writable at another
 	 * virtual address
 	 */
-	 kr = mach_vm_remap_kernel(map, &write_addr, size, 0, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_NONE, map, addr, FALSE, &cur_protection, &max_protection, VM_INHERIT_DEFAULT);
-	if (kr != KERN_SUCCESS || !(max_protection & VM_PROT_WRITE))
+	kr = mach_vm_remap_kernel(map, &write_addr, size, 0, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_NONE, map, addr, FALSE, &cur_protection, &max_protection, VM_INHERIT_DEFAULT);
+	if (kr != KERN_SUCCESS || !(max_protection & VM_PROT_WRITE)) {
 		goto err;
+	}
 
-	kr = mach_vm_protect (map, (mach_vm_offset_t)write_addr, (mach_vm_size_t)size, 0, VM_PROT_READ | VM_PROT_WRITE);
-	if (kr != KERN_SUCCESS)
+	kr = mach_vm_protect(map, (mach_vm_offset_t)write_addr, (mach_vm_size_t)size, 0, VM_PROT_READ | VM_PROT_WRITE);
+	if (kr != KERN_SUCCESS) {
 		goto err;
+	}
 
 	// Chain the page entries.
 	int i;
-	for (i=0; i<DTRACE_PTSS_ENTRIES_PER_PAGE; i++) {
+	for (i = 0; i < DTRACE_PTSS_ENTRIES_PER_PAGE; i++) {
 		ptss_page->entries[i].addr = addr + (i * DTRACE_PTSS_SCRATCH_SPACE_PER_THREAD);
 		ptss_page->entries[i].write_addr = write_addr + (i * DTRACE_PTSS_SCRATCH_SPACE_PER_THREAD);
-		ptss_page->entries[i].next = &ptss_page->entries[i+1];
+		ptss_page->entries[i].next = &ptss_page->entries[i + 1];
 	}
 
 	// The last entry should point to NULL
-	ptss_page->entries[DTRACE_PTSS_ENTRIES_PER_PAGE-1].next = NULL;
+	ptss_page->entries[DTRACE_PTSS_ENTRIES_PER_PAGE - 1].next = NULL;
 
 	vm_map_deallocate(map);
 
@@ -209,15 +219,16 @@ dtrace_ptss_allocate_page(struct proc* p)
 err:
 	_FREE(ptss_page, M_TEMP);
 
-	if (map)
-	  vm_map_deallocate(map);
+	if (map) {
+		vm_map_deallocate(map);
+	}
 
 	return NULL;
 }
 
 /*
  * This function frees an existing page in the target process's address space.
- * 
+ *
  * It does not alter any of the process's page/entry lists.
  *
  * TODO: Inline in dtrace_ptrace_exec_exit?
@@ -243,10 +254,11 @@ dtrace_ptss_free_page(struct proc* p, struct dtrace_ptss_page* ptss_page)
 
 /*
  * This function assumes that the target process has been
- * suspended, and the proc_lock & sprlock is held 
+ * suspended, and the proc_lock & sprlock is held
  */
 void
-dtrace_ptss_enable(struct proc* p) {
+dtrace_ptss_enable(struct proc* p)
+{
 	LCK_MTX_ASSERT(&p->p_dtrace_sprlock, LCK_MTX_ASSERT_OWNED);
 	LCK_MTX_ASSERT(&p->p_mlock, LCK_MTX_ASSERT_OWNED);
 
@@ -267,7 +279,8 @@ dtrace_ptss_enable(struct proc* p) {
  * It assumes the sprlock is held, and the proc_lock is not.
  */
 void
-dtrace_ptss_exec_exit(struct proc* p) {
+dtrace_ptss_exec_exit(struct proc* p)
+{
 	/*
 	 * Should hold sprlock to touch the pages list. Must not
 	 * hold the proc lock to avoid deadlock.
@@ -282,11 +295,11 @@ dtrace_ptss_exec_exit(struct proc* p) {
 
 	while (temp != NULL) {
 		struct dtrace_ptss_page* next = temp->next;
-		
+
 		// Do we need to specifically mach_vm_deallocate the user pages?
 		// This can be called when the process is exiting, I believe the proc's
 		// vm_map_t may already be toast.
-		
+
 		// Must be certain to free the kernel memory!
 		_FREE(temp, M_TEMP);
 		temp = next;
@@ -303,7 +316,8 @@ dtrace_ptss_exec_exit(struct proc* p) {
  * Parent and child sprlock should be held, and proc_lock must NOT be held.
  */
 void
-dtrace_ptss_fork(struct proc* parent, struct proc* child) {
+dtrace_ptss_fork(struct proc* parent, struct proc* child)
+{
 	// The child should not have any pages/entries allocated at this point.
 	// ASSERT(child->p_dtrace_ptss_pages == NULL);
 	// ASSERT(child->p_dtrace_ptss_free_list == NULL);
@@ -323,7 +337,7 @@ dtrace_ptss_fork(struct proc* parent, struct proc* child) {
 	// Get page list from *PARENT*
 	struct dtrace_ptss_page* temp = parent->p_dtrace_ptss_pages;
 
-	while (temp != NULL) {		
+	while (temp != NULL) {
 		// Freeing the page in the *CHILD*
 		dtrace_ptss_free_page(child, temp);
 

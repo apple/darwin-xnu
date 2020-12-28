@@ -61,9 +61,9 @@ ktest_temp ktest_temp1, ktest_temp2, ktest_temp3;
 char ktest_output_buf[KTEST_MAXLEN] = "";
 
 int
-ktest_test_result_statetab[KTEST_NUM_TEST_STATES]
-			  [KTEST_NUM_TESTCASE_STATES]
-			  [KTEST_NUM_TESTCASE_MODES] = {
+    ktest_test_result_statetab[KTEST_NUM_TEST_STATES]
+[KTEST_NUM_TESTCASE_STATES]
+[KTEST_NUM_TESTCASE_MODES] = {
 	[T_STATE_UNRESOLVED][T_RESULT_PASS][T_MAIN] = T_STATE_PASS,
 	[T_STATE_UNRESOLVED][T_RESULT_FAIL][T_MAIN] = T_STATE_FAIL,
 	[T_STATE_UNRESOLVED][T_RESULT_UXPASS][T_MAIN] = T_STATE_FAIL,
@@ -106,7 +106,7 @@ ktest_test_result_statetab[KTEST_NUM_TEST_STATES]
 };
 
 const char * ktest_testcase_result_tokens[KTEST_NUM_TESTCASE_MODES]
-					 [KTEST_NUM_TESTCASE_STATES] = {
+[KTEST_NUM_TESTCASE_STATES] = {
 	[T_MAIN][T_RESULT_PASS] = "PASS",
 	[T_MAIN][T_RESULT_FAIL] = "FAIL",
 	[T_MAIN][T_RESULT_UXPASS] = "UXPASS",
@@ -116,4 +116,3 @@ const char * ktest_testcase_result_tokens[KTEST_NUM_TESTCASE_MODES]
 	[T_SETUP][T_RESULT_UXPASS] = "SETUP_UXPASS",
 	[T_SETUP][T_RESULT_XFAIL] = "SETUP_XFAIL",
 };
-

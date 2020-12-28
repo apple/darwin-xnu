@@ -36,6 +36,8 @@
 #include <kern/debug.h>
 #include <mach/mach_vm.h>
 #include <mach/vm_param.h>
+#include <sys/param.h>
+#include <i386/pmap.h>
 #include <libkern/libkern.h>
 #include <pexpert/i386/efi.h>
 #include <pexpert/i386/boot.h>
@@ -48,26 +50,7 @@
 #include <memintrinsics.h>
 
 extern uint64_t *IdlePML4;
-extern uintptr_t physmap_base;
-extern uintptr_t physmap_max;
 #define phys2virt(x) ((uintptr_t)(x) + physmap_base)
-
-#define INTEL_PTE_VALID         0x00000001ULL
-#define INTEL_PTE_WRITE         0x00000002ULL
-#define INTEL_PTE_RW            0x00000002ULL
-#define INTEL_PTE_USER          0x00000004ULL
-#define INTEL_PTE_WTHRU         0x00000008ULL
-#define INTEL_PTE_NCACHE        0x00000010ULL
-#define INTEL_PTE_REF           0x00000020ULL
-#define INTEL_PTE_MOD           0x00000040ULL
-#define INTEL_PTE_PS            0x00000080ULL
-#define INTEL_PTE_PTA           0x00000080ULL
-#define INTEL_PTE_GLOBAL        0x00000100ULL
-#define INTEL_PTE_WIRED         0x00000200ULL
-#define INTEL_PDPTE_NESTED      0x00000400ULL
-#define INTEL_PTE_PFN           PG_FRAME
-#define INTEL_PTE_NX            (1ULL << 63)
-#define INTEL_PTE_INVALID       0
 
 vm_offset_t shadow_pbase;
 vm_offset_t shadow_ptop;
@@ -77,11 +60,11 @@ unsigned shadow_stolen_idx;
 static vm_offset_t zero_superpage_phys;
 
 typedef struct {
-  unsigned int pml4   : 9;
-  unsigned int pdpt   : 9;
-  unsigned int pd     : 9;
-  unsigned int pt     : 9;
-  unsigned int offset : 12;
+	unsigned int pml4   : 9;
+	unsigned int pdpt   : 9;
+	unsigned int pd     : 9;
+	unsigned int pt     : 9;
+	unsigned int offset : 12;
 } split_addr_t;
 
 static split_addr_t
@@ -143,11 +126,11 @@ kasan_map_shadow_superpage_zero(vm_offset_t address, vm_size_t size)
 
 	vm_size_t j;
 	for (j = 0; j < size; j += I386_LPGBYTES * 8) {
-
 		vm_offset_t virt_shadow_target = (vm_offset_t)SHADOW_FOR_ADDRESS(address + j);
 
 		split_addr_t addr = split_address(virt_shadow_target);
-		assert(addr.pml4 == 507 || addr.pml4 == 508);
+		assert(addr.pml4 >= KERNEL_KASAN_PML4_FIRST &&
+		    addr.pml4 <= KERNEL_KASAN_PML4_LAST);
 
 		uint64_t *L3;
 		uint64_t *L2;
@@ -158,8 +141,8 @@ kasan_map_shadow_superpage_zero(vm_offset_t address, vm_size_t size)
 			uintptr_t pmem = alloc_page_zero();
 			L3 = (uint64_t *)phys2virt(pmem);
 			IdlePML4[addr.pml4] = pmem
-				| INTEL_PTE_VALID
-				| INTEL_PTE_WRITE;
+			    | INTEL_PTE_VALID
+			    | INTEL_PTE_WRITE;
 		} else {
 			L3 = (uint64_t *)phys2virt(L3);
 		}
@@ -169,8 +152,8 @@ kasan_map_shadow_superpage_zero(vm_offset_t address, vm_size_t size)
 			uintptr_t pmem = alloc_page_zero();
 			L2 = (uint64_t *)phys2virt(pmem);
 			L3[addr.pdpt] = pmem
-				| INTEL_PTE_VALID
-				| INTEL_PTE_WRITE;
+			    | INTEL_PTE_VALID
+			    | INTEL_PTE_WRITE;
 		} else {
 			L2 = (uint64_t *)phys2virt(L2);
 		}
@@ -178,12 +161,12 @@ kasan_map_shadow_superpage_zero(vm_offset_t address, vm_size_t size)
 		L1 = (uint64_t *)(L2[addr.pd] & ~PAGE_MASK);
 		if (L1 == NULL) {
 			L2[addr.pd] = (uint64_t)zero_superpage_phys
-				| INTEL_PTE_VALID
-				| INTEL_PTE_PS
-				| INTEL_PTE_NX;
+			    | INTEL_PTE_VALID
+			    | INTEL_PTE_PS
+			    | INTEL_PTE_NX;
 		} else {
 			panic("Unexpected shadow mapping, addr =  %lx, sz = %lu\n",
-					address, size);
+			    address, size);
 		}
 
 		/* adding a new entry, this is not strictly required */
@@ -201,9 +184,9 @@ kasan_map_shadow(vm_offset_t address, vm_size_t size, bool is_zero)
 	assert((size & 0x7) == 0);
 
 	for (; shadow_base < shadow_top; shadow_base += I386_PGBYTES) {
-
 		split_addr_t addr = split_address(shadow_base);
-		assert(addr.pml4 == 507 || addr.pml4 == 508);
+		assert(addr.pml4 >= KERNEL_KASAN_PML4_FIRST &&
+		    addr.pml4 <= KERNEL_KASAN_PML4_LAST);
 
 		uint64_t *L3;
 		uint64_t *L2;
@@ -215,8 +198,8 @@ kasan_map_shadow(vm_offset_t address, vm_size_t size, bool is_zero)
 			uintptr_t pmem = alloc_page_zero();
 			L3 = (uint64_t *)phys2virt(pmem);
 			IdlePML4[addr.pml4] = pmem
-				| INTEL_PTE_VALID
-				| INTEL_PTE_WRITE;
+			    | INTEL_PTE_VALID
+			    | INTEL_PTE_WRITE;
 		} else {
 			L3 = (uint64_t *)phys2virt(L3);
 		}
@@ -226,14 +209,14 @@ kasan_map_shadow(vm_offset_t address, vm_size_t size, bool is_zero)
 			uintptr_t pmem = alloc_page_zero();
 			L2 = (uint64_t *)phys2virt(pmem);
 			L3[addr.pdpt] = pmem
-				| INTEL_PTE_VALID
-				| INTEL_PTE_WRITE;
+			    | INTEL_PTE_VALID
+			    | INTEL_PTE_WRITE;
 		} else {
 			L2 = (uint64_t *)phys2virt(L2);
 		}
 
 		uint64_t pde = L2[addr.pd];
-		if ((pde & (INTEL_PTE_VALID|INTEL_PTE_PS)) == (INTEL_PTE_VALID|INTEL_PTE_PS)) {
+		if ((pde & (INTEL_PTE_VALID | INTEL_PTE_PS)) == (INTEL_PTE_VALID | INTEL_PTE_PS)) {
 			/* Already mapped as a superpage */
 			continue;
 		}
@@ -243,8 +226,8 @@ kasan_map_shadow(vm_offset_t address, vm_size_t size, bool is_zero)
 			uintptr_t pmem = alloc_page_zero();
 			L1 = (uint64_t *)phys2virt(pmem);
 			L2[addr.pd] = pmem
-				| INTEL_PTE_VALID
-				| INTEL_PTE_WRITE;
+			    | INTEL_PTE_VALID
+			    | INTEL_PTE_WRITE;
 		} else {
 			L1 = (uint64_t *)phys2virt(L1);
 		}
@@ -256,11 +239,11 @@ kasan_map_shadow(vm_offset_t address, vm_size_t size, bool is_zero)
 				newpte = (uint64_t)zero_superpage_phys;
 			} else {
 				newpte = (vm_offset_t)alloc_page_zero()
-					| INTEL_PTE_WRITE;
+				    | INTEL_PTE_WRITE;
 			}
 			L1[addr.pt] = newpte
-				| INTEL_PTE_VALID
-				| INTEL_PTE_NX;
+			    | INTEL_PTE_VALID
+			    | INTEL_PTE_NX;
 
 			/* adding a new entry, this is not strictly required */
 			invlpg(shadow_base);
@@ -339,7 +322,8 @@ bool
 kasan_is_shadow_mapped(uintptr_t shadowp)
 {
 	split_addr_t addr = split_address(shadowp);
-	assert(addr.pml4 == 507 || addr.pml4 == 508);
+	assert(addr.pml4 >= KERNEL_KASAN_PML4_FIRST &&
+	    addr.pml4 <= KERNEL_KASAN_PML4_LAST);
 
 	uint64_t *L3;
 	uint64_t *L2;
@@ -358,7 +342,7 @@ kasan_is_shadow_mapped(uintptr_t shadowp)
 	L2 = (uint64_t *)phys2virt(L2);
 
 	uint64_t pde = L2[addr.pd];
-	if ((pde & (INTEL_PTE_VALID|INTEL_PTE_PS)) == (INTEL_PTE_VALID|INTEL_PTE_PS)) {
+	if ((pde & (INTEL_PTE_VALID | INTEL_PTE_PS)) == (INTEL_PTE_VALID | INTEL_PTE_PS)) {
 		/* mapped as superpage */
 		return true;
 	}

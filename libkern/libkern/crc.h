@@ -34,8 +34,8 @@
 
 __BEGIN_DECLS
 
-uint16_t	crc16(uint16_t crc, const void *bufp, size_t len);
-uint32_t	crc32(uint32_t crc, const void *bufp, size_t len);
+uint16_t        crc16(uint16_t crc, const void *bufp, size_t len);
+uint32_t        crc32(uint32_t crc, const void *bufp, size_t len);
 
 __END_DECLS
 

@@ -42,9 +42,14 @@ extern const struct ccdigest_info ccsha256_ltc_di;
 extern const struct ccdigest_info ccsha224_vng_intel_SupplementalSSE3_di;
 extern const struct ccdigest_info ccsha256_vng_intel_SupplementalSSE3_di;
 #endif
-#if  CCSHA2_VNG_ARMV7NEON
-extern const struct ccdigest_info ccsha224_vng_armv7neon_di;
-extern const struct ccdigest_info ccsha256_vng_armv7neon_di;
+#if  CCSHA2_VNG_ARM
+extern const struct ccdigest_info ccsha224_vng_arm_di;
+extern const struct ccdigest_info ccsha256_vng_arm_di;
+#if CC_ACCELERATECRYPTO && defined(__arm64__) && CCSHA2_VNG_ARM
+extern const struct ccdigest_info ccsha256_vng_arm64neon_di;
+#endif  // CC_ACCELERATECRYPTO
+extern const struct ccdigest_info ccsha384_vng_arm_di;
+extern const struct ccdigest_info ccsha512_vng_arm_di;
 #endif
 
 /* SHA224 */

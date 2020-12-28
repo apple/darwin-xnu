@@ -2,7 +2,7 @@
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <IOKit/pwr_mgt/IOPMinformee.h>
@@ -36,15 +36,17 @@ OSDefineMetaClassAndStructors(IOPMinformee, OSObject)
 // static constructor
 //
 //*********************************************************************************
-IOPMinformee *IOPMinformee::withObject( IOService *theObject )
+IOPMinformee *IOPMinformee::withObject( IOService * theObject )
 {
-    IOPMinformee        *newInformee = new IOPMinformee;
-    
-    if (!newInformee) return NULL;
-    newInformee->init();
-    newInformee->initialize( theObject );
- 
-    return newInformee;
+	IOPMinformee        *newInformee = new IOPMinformee;
+
+	if (!newInformee) {
+		return NULL;
+	}
+	newInformee->init();
+	newInformee->initialize( theObject );
+
+	return newInformee;
 }
 
 
@@ -52,12 +54,13 @@ IOPMinformee *IOPMinformee::withObject( IOService *theObject )
 // constructor
 //
 //*********************************************************************************
-void IOPMinformee::initialize ( IOService * theObject )
+void
+IOPMinformee::initialize( IOService * theObject )
 {
-   whatObject = theObject;
-   timer = 0;
-   active = true;
-   whatObject->retain();
+	whatObject = theObject;
+	timer = 0;
+	active = true;
+	whatObject->retain();
 }
 
 
@@ -65,9 +68,9 @@ void IOPMinformee::initialize ( IOService * theObject )
 // free
 //
 //*********************************************************************************
-void IOPMinformee::free (void )
+void
+IOPMinformee::free(void )
 {
-    whatObject->release();
-    super::free();
+	whatObject->release();
+	super::free();
 }
-

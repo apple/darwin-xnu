@@ -2,7 +2,7 @@
  * Copyright (c) 1999 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
+ *
  * "Portions Copyright (c) 1999 Apple Computer, Inc.  All Rights
  * Reserved.  This file contains Original Code and/or Modifications of
  * Original Code as defined in and that are subject to the Apple Public
@@ -10,7 +10,7 @@
  * except in compliance with the License.  Please obtain a copy of the
  * License at http://www.apple.com/publicsource and read it before using
  * this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -18,7 +18,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
  * License for the specific language governing rights and limitations
  * under the License."
- * 
+ *
  * @APPLE_LICENSE_HEADER_END@
  */
 /*  searchp  --  search through pathlist for file
@@ -45,7 +45,7 @@
  *
  *  HISTORY
  * 01-Apr-86  Rudy Nedved (ern) at Carnegie-Mellon University
- *	4.1BSD system ignores trailing slashes. 4.2BSD does not. 
+ *	4.1BSD system ignores trailing slashes. 4.2BSD does not.
  *	Therefore don't add a seperating slash if there is a null
  *	filename.
  *
@@ -75,16 +75,20 @@ searchp(const char *spath, char *file, char *fullname, int (*func)(char *))
 	do {
 		fname = fullname;
 		nextchar = nextpath;
-		while (*nextchar && (*nextchar != ':'))
+		while (*nextchar && (*nextchar != ':')) {
 			*fname++ = *nextchar++;
-		if (nextchar != nextpath && *file) *fname++ = '/';
+		}
+		if (nextchar != nextpath && *file) {
+			*fname++ = '/';
+		}
 		lastchar = nextchar;
 		nextpath = ((*nextchar) ? nextchar + 1 : nextchar);
-		nextchar = file;	/* append file */
-		while (*nextchar)  *fname++ = *nextchar++;
+		nextchar = file;        /* append file */
+		while (*nextchar) {
+			*fname++ = *nextchar++;
+		}
 		*fname = '\0';
-		failure = (*func) (fullname);
-	} 
-	while (failure && (*lastchar));
-	return (failure ? -1 : 0);
+		failure = (*func)(fullname);
+	}while (failure && (*lastchar));
+	return failure ? -1 : 0;
 }

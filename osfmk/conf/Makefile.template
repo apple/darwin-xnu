@@ -76,6 +76,14 @@ OBJS_NO_SIGN_COMPARE =		\
 $(foreach file,$(OBJS_NO_CAST_ALIGN),$(eval $(call add_perfile_cflags,$(file),-Wno-cast-align)))
 $(foreach file,$(OBJS_NO_SIGN_COMPARE),$(eval $(call add_perfile_cflags,$(file),-Wno-sign-compare)))
 
+ifeq ($(KSANCOV),1)
+# Don't instrument functions called by the ksancov runtime. SanitizeCoverage does
+# not support blacklists, so exclude the whole file.
+machine_routines.o_CFLAGS_RM = $(KSANCOV_CFLAGS)
+machine_routines_common.o_CFLAGS_RM = $(KSANCOV_CFLAGS)
+pcb_native.o_CFLAGS_RM = $(KSANCOV_CFLAGS)
+endif
+
 #
 # XXX: INCFLAGS to include libsa prototypes
 #
@@ -138,9 +146,9 @@ $(COMPONENT).filelist: $(OBJS)
                 $(SEG_HACK) -n __HIB -o $${hib_file}__ $${hib_file} || exit 1; \
                 mv $${hib_file}__ $${hib_file} || exit 1; \
 	done
-	@echo "$(ColorL)LDFILELIST$(Color0) $(ColorLF)$(COMPONENT)$(Color0)"
+	$(call makelog,$(ColorL)LDFILELIST$(Color0) $(ColorLF)$(COMPONENT)$(Color0))
 	$(_v)for obj in ${OBJS}; do	\
-		 echo $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
+		 $(ECHO) $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done > $(COMPONENT).filelist
 
 do_all: $(COMPONENT).filelist
@@ -162,7 +170,7 @@ endif
 -include genassym.d
 genassym.o: .CFLAGS $(firstword $(MAKEFILE_LIST))
 genassym.o: $(SOURCE_DIR)/$(COMPONENT)/$(GENASSYM_LOCATION)/genassym.c
-	@echo "[$(CMD_MC)] $(ColorH)GENASSYM$(Color0)      $(ColorLF)$<$(Color0)"
+	$(call makelog,[$(CMD_MC)] $(ColorH)GENASSYM$(Color0)      $(ColorLF)$<$(Color0))
 	$(_v)${GENASSYM_KCC} ${CFLAGS} ${CFLAGS_NOLTO_FLAG} -MD -S -o ${@} ${INCFLAGS} $<
 
 assym.s: genassym.o

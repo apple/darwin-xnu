@@ -38,37 +38,38 @@
 #include <net/if.h>
 #include <net/if_var.h>
 
-#define	SO_TCDBG_PID		0x01	/* Set/get traffic class policy for PID */
-#define	SO_TCDBG_PNAME		0x02	/* Set/get traffic class policy for processes of that name */
-#define	SO_TCDBG_PURGE		0x04	/* Purge entries for unused PIDs */
-#define	SO_TCDBG_FLUSH		0x08	/* Flush all entries */
-#define	SO_TCDBG_COUNT		0x10	/* Get count of entries */
-#define	SO_TCDBG_LIST		0x20	/* List entries */
-#define	SO_TCDBG_DELETE		0x40	/* Delete a process entry */
-#define	SO_TCDBG_TCFLUSH_PID	0x80	/* Flush traffic class for PID */
+#define SO_TCDBG_PID            0x01    /* Set/get traffic class policy for PID */
+#define SO_TCDBG_PNAME          0x02    /* Set/get traffic class policy for processes of that name */
+#define SO_TCDBG_PURGE          0x04    /* Purge entries for unused PIDs */
+#define SO_TCDBG_FLUSH          0x08    /* Flush all entries */
+#define SO_TCDBG_COUNT          0x10    /* Get count of entries */
+#define SO_TCDBG_LIST           0x20    /* List entries */
+#define SO_TCDBG_DELETE         0x40    /* Delete a process entry */
+#define SO_TCDBG_TCFLUSH_PID    0x80    /* Flush traffic class for PID */
 
 struct so_tcdbg {
-	u_int32_t	so_tcdbg_cmd;
-	int32_t		so_tcdbg_tclass;
-	int32_t		so_tcdbg_netsvctype;
-	u_int32_t	so_tcdbg_count;
-	pid_t		so_tcdbg_pid;
-	u_int32_t	so_tcbbg_qos_mode;
-	char		so_tcdbg_pname[(2 * MAXCOMLEN) + 1];
+	u_int32_t       so_tcdbg_cmd;
+	int32_t         so_tcdbg_tclass;
+	int32_t         so_tcdbg_netsvctype;
+	u_int32_t       so_tcdbg_count;
+	pid_t           so_tcdbg_pid;
+	u_int32_t       so_tcbbg_qos_mode;
+	char            so_tcdbg_pname[(2 * MAXCOMLEN) + 1];
 };
-#define	QOS_MODE_MARKING_POLICY_DEFAULT		0
-#define	QOS_MODE_MARKING_POLICY_ENABLE		1
-#define	QOS_MODE_MARKING_POLICY_DISABLE		2
+#define QOS_MODE_MARKING_POLICY_DEFAULT         0
+#define QOS_MODE_MARKING_POLICY_ENABLE          1
+#define QOS_MODE_MARKING_POLICY_DISABLE         2
 
-#define	NET_QOS_MARKING_POLICY_DEFAULT QOS_MODE_MARKING_POLICY_DEFAULT /* obsolete, to be removed */
-#define	NET_QOS_MARKING_POLICY_ENABLE QOS_MODE_MARKING_POLICY_ENABLE /* obsolete, to be removed */
-#define	NET_QOS_MARKING_POLICY_DISABLE QOS_MODE_MARKING_POLICY_DISABLE /* obsolete, to be removed */
+#define NET_QOS_MARKING_POLICY_DEFAULT QOS_MODE_MARKING_POLICY_DEFAULT /* obsolete, to be removed */
+#define NET_QOS_MARKING_POLICY_ENABLE QOS_MODE_MARKING_POLICY_ENABLE /* obsolete, to be removed */
+#define NET_QOS_MARKING_POLICY_DISABLE QOS_MODE_MARKING_POLICY_DISABLE /* obsolete, to be removed */
 
 struct net_qos_param {
-	u_int64_t nq_transfer_size;	/* transfer size in bytes */
-	u_int32_t nq_use_expensive:1,	/* allowed = 1 otherwise 0 */
-	          nq_uplink:1;		/* uplink = 1 otherwise 0 */
-	u_int32_t nq_unused;		/* for future expansion */
+	u_int64_t nq_transfer_size;     /* transfer size in bytes */
+	u_int32_t nq_use_expensive:1,   /* allowed = 1 otherwise 0 */
+	    nq_uplink:1,                /* uplink = 1 otherwise 0 */
+	    nq_use_constrained:1;       /* allowed = 1 otherwise 0 */
+	u_int32_t nq_unused;            /* for future expansion */
 };
 
 #ifndef KERNEL
@@ -91,13 +92,17 @@ extern int net_qos_guideline(struct net_qos_param *param, size_t param_len);
 
 extern int net_qos_policy_restricted;
 extern int net_qos_policy_wifi_enabled;
-extern int net_qos_policy_none_wifi_enabled;
 extern int net_qos_policy_capable_enabled;
 
 extern void net_qos_map_init(void);
+extern void net_qos_map_change(uint32_t mode);
 extern errno_t set_packet_qos(struct mbuf *, struct ifnet *, boolean_t, int,
     int, u_int8_t *);
 extern int so_get_netsvc_marking_level(struct socket *);
+
+extern uint8_t fastlane_sc_to_dscp(uint32_t svc_class);
+extern uint8_t rfc4594_sc_to_dscp(uint32_t svc_class);
+extern mbuf_traffic_class_t rfc4594_dscp_to_tc(uint8_t dscp);
 
 #endif /* BSD_KERNEL_PRIVATE */
 

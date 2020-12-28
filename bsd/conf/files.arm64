@@ -9,6 +9,9 @@ bsd/dev/arm/unix_signal.c	standard
 
 bsd/dev/arm64/cpu_in_cksum.s	standard
 
+#if defined(KERNEL_INTEGRITY_CTRR)
+bsd/tests/ctrr_test_sysctl.c		optional config_xnupost
+#endif /* defined(KERNEL_INTEGRITY_CTRR) */
 
 bsd/dev/arm64/dtrace_isa.c	optional config_dtrace
 bsd/dev/arm64/dtrace_subr_arm.c	optional config_dtrace

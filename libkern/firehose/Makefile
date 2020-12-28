@@ -6,7 +6,9 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-LCLDIR = /usr/local/include
+INSTALLHDRS_SKIP_HOST = NO
+
+LCLDIR = $(SDKHEADERSROOT)/usr/local/include
 
 KERNELFILES =
 

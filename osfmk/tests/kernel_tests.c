@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -45,6 +45,7 @@
 #include <vm/vm_page.h>
 #include <vm/vm_object.h>
 #include <kern/priority_queue.h>
+#include <string.h>
 
 #if !(DEVELOPMENT || DEBUG)
 #error "Testing is not enabled on RELEASE configurations"
@@ -63,6 +64,13 @@ kern_return_t zalloc_test(void);
 kern_return_t RandomULong_test(void);
 kern_return_t kcdata_api_test(void);
 kern_return_t priority_queue_test(void);
+kern_return_t ts_kernel_primitive_test(void);
+kern_return_t ts_kernel_sleep_inheritor_test(void);
+kern_return_t ts_kernel_gate_test(void);
+kern_return_t ts_kernel_turnstile_chain_test(void);
+kern_return_t ts_kernel_timingsafe_bcmp_test(void);
+
+extern kern_return_t kprintf_hhx_test(void);
 
 #if defined(__arm__) || defined(__arm64__)
 kern_return_t pmap_coredump_test(void);
@@ -81,36 +89,50 @@ extern kern_return_t ex_cb_test(void);
 #if __ARM_PAN_AVAILABLE__
 extern kern_return_t arm64_pan_test(void);
 #endif
+#if defined(HAS_APPLE_PAC)
+extern kern_return_t arm64_ropjop_test(void);
+#endif /* defined(HAS_APPLE_PAC) */
 #endif /* __arm64__ */
 
 extern kern_return_t test_thread_call(void);
 
 
-struct xnupost_panic_widget xt_panic_widgets = {NULL, NULL, NULL, NULL};
+struct xnupost_panic_widget xt_panic_widgets = {.xtp_context_p = NULL,
+	                                        .xtp_outval_p = NULL,
+	                                        .xtp_func_name = NULL,
+	                                        .xtp_func = NULL};
 
 struct xnupost_test kernel_post_tests[] = {XNUPOST_TEST_CONFIG_BASIC(zalloc_test),
-                                           XNUPOST_TEST_CONFIG_BASIC(RandomULong_test),
-                                           XNUPOST_TEST_CONFIG_BASIC(test_os_log),
-                                           XNUPOST_TEST_CONFIG_BASIC(test_os_log_parallel),
+	                                   XNUPOST_TEST_CONFIG_BASIC(RandomULong_test),
+	                                   XNUPOST_TEST_CONFIG_BASIC(test_os_log),
+	                                   XNUPOST_TEST_CONFIG_BASIC(test_os_log_parallel),
 #ifdef __arm64__
-                                           XNUPOST_TEST_CONFIG_BASIC(arm64_munger_test),
-                                           XNUPOST_TEST_CONFIG_BASIC(ex_cb_test),
+	                                   XNUPOST_TEST_CONFIG_BASIC(arm64_munger_test),
+	                                   XNUPOST_TEST_CONFIG_BASIC(ex_cb_test),
 #if __ARM_PAN_AVAILABLE__
-                                           XNUPOST_TEST_CONFIG_BASIC(arm64_pan_test),
+	                                   XNUPOST_TEST_CONFIG_BASIC(arm64_pan_test),
 #endif
+#if defined(HAS_APPLE_PAC)
+	                                   XNUPOST_TEST_CONFIG_BASIC(arm64_ropjop_test),
+#endif /* defined(HAS_APPLE_PAC) */
 #endif /* __arm64__ */
-                                           XNUPOST_TEST_CONFIG_BASIC(kcdata_api_test),
-                                           XNUPOST_TEST_CONFIG_BASIC(console_serial_test),
-                                           XNUPOST_TEST_CONFIG_BASIC(console_serial_alloc_rel_tests),
-                                           XNUPOST_TEST_CONFIG_BASIC(console_serial_parallel_log_tests),
+	                                   XNUPOST_TEST_CONFIG_BASIC(kcdata_api_test),
+	                                   XNUPOST_TEST_CONFIG_BASIC(console_serial_test),
+	                                   XNUPOST_TEST_CONFIG_BASIC(console_serial_alloc_rel_tests),
+	                                   XNUPOST_TEST_CONFIG_BASIC(console_serial_parallel_log_tests),
 #if defined(__arm__) || defined(__arm64__)
-                                           XNUPOST_TEST_CONFIG_BASIC(pmap_coredump_test),
+	                                   XNUPOST_TEST_CONFIG_BASIC(pmap_coredump_test),
 #endif
-                                           XNUPOST_TEST_CONFIG_BASIC(bitmap_post_test),
-                                         //XNUPOST_TEST_CONFIG_TEST_PANIC(kcdata_api_assert_tests)
-                                           XNUPOST_TEST_CONFIG_BASIC(test_thread_call),
-                                           XNUPOST_TEST_CONFIG_BASIC(priority_queue_test),
-};
+	                                   XNUPOST_TEST_CONFIG_BASIC(bitmap_post_test),
+	                                   //XNUPOST_TEST_CONFIG_TEST_PANIC(kcdata_api_assert_tests)
+	                                   XNUPOST_TEST_CONFIG_BASIC(test_thread_call),
+	                                   XNUPOST_TEST_CONFIG_BASIC(priority_queue_test),
+	                                   XNUPOST_TEST_CONFIG_BASIC(ts_kernel_primitive_test),
+	                                   XNUPOST_TEST_CONFIG_BASIC(ts_kernel_sleep_inheritor_test),
+	                                   XNUPOST_TEST_CONFIG_BASIC(ts_kernel_gate_test),
+	                                   XNUPOST_TEST_CONFIG_BASIC(ts_kernel_turnstile_chain_test),
+	                                   XNUPOST_TEST_CONFIG_BASIC(ts_kernel_timingsafe_bcmp_test),
+	                                   XNUPOST_TEST_CONFIG_BASIC(kprintf_hhx_test), };
 
 uint32_t kernel_post_tests_count = sizeof(kernel_post_tests) / sizeof(xnupost_test_data_t);
 
@@ -127,8 +149,9 @@ boolean_t xnupost_should_run_test(uint32_t test_num);
 kern_return_t
 xnupost_parse_config()
 {
-	if (parse_config_retval != KERN_INVALID_CAPABILITY)
+	if (parse_config_retval != KERN_INVALID_CAPABILITY) {
 		return parse_config_retval;
+	}
 	PE_parse_boot_argn("kernPOST", &kernel_post_args, sizeof(kernel_post_args));
 
 	if (PE_parse_boot_argn("kernPOST_config", &kernel_post_test_configs[0], sizeof(kernel_post_test_configs)) == TRUE) {
@@ -158,8 +181,9 @@ xnupost_should_run_test(uint32_t test_num)
 
 			/* skip to the next "," */
 			while (*b != ',') {
-				if (*b == '\0')
+				if (*b == '\0') {
 					return FALSE;
+				}
 				b++;
 			}
 			/* skip past the ',' */
@@ -173,8 +197,9 @@ xnupost_should_run_test(uint32_t test_num)
 kern_return_t
 xnupost_list_tests(xnupost_test_t test_list, uint32_t test_count)
 {
-	if (KERN_SUCCESS != xnupost_parse_config())
+	if (KERN_SUCCESS != xnupost_parse_config()) {
 		return KERN_FAILURE;
+	}
 
 	xnupost_test_t testp;
 	for (uint32_t i = 0; i < test_count; i++) {
@@ -192,7 +217,7 @@ xnupost_list_tests(xnupost_test_t test_list, uint32_t test_count)
 			}
 		}
 		printf("\n[TEST] TOC#%u name: %s expected: %d config: %x\n", testp->xt_test_num, testp->xt_name, testp->xt_expected_retval,
-		       testp->xt_config);
+		    testp->xt_config);
 	}
 
 	return KERN_SUCCESS;
@@ -224,8 +249,8 @@ xnupost_run_tests(xnupost_test_t test_list, uint32_t test_count)
 		 */
 		if ((testp->xt_config & XT_CONFIG_EXPECT_PANIC) && !(kernel_post_args & POSTARGS_CONTROLLER_AVAILABLE)) {
 			T_SKIP(
-			    "Test expects panic but "
-			    "no controller is present");
+				"Test expects panic but "
+				"no controller is present");
 			testp->xt_test_actions = XT_ACTION_SKIPPED;
 			continue;
 		}
@@ -265,8 +290,9 @@ kernel_do_post()
 kern_return_t
 xnupost_register_panic_widget(xt_panic_widget_func funcp, const char * funcname, void * context, void ** outval)
 {
-	if (xt_panic_widgets.xtp_context_p != NULL || xt_panic_widgets.xtp_func != NULL)
+	if (xt_panic_widgets.xtp_context_p != NULL || xt_panic_widgets.xtp_func != NULL) {
 		return KERN_RESOURCE_SHORTAGE;
+	}
 
 	xt_panic_widgets.xtp_context_p = context;
 	xt_panic_widgets.xtp_func      = funcp;
@@ -339,8 +365,9 @@ _xt_generic_assert_check(const char * s, void * str_to_match, void ** outval)
 		ret = XT_RET_W_SUCCESS;
 	}
 
-	if (outval)
+	if (outval) {
 		*outval = (void *)(uintptr_t)ret;
+	}
 	return ret;
 }
 
@@ -419,16 +446,16 @@ compare_numbers_descending(const void * a, const void * b)
 
 /* Node structure for the priority queue tests */
 struct priority_queue_test_node {
-	struct priority_queue_entry	link;
-	priority_queue_key_t		node_key;
+	struct priority_queue_entry     link;
+	priority_queue_key_t            node_key;
 };
 
 static void
 priority_queue_test_queue(struct priority_queue *pq, int type,
-		priority_queue_compare_fn_t cmp_fn)
+    priority_queue_compare_fn_t cmp_fn)
 {
 	/* Configuration for the test */
-#define PRIORITY_QUEUE_NODES	7
+#define PRIORITY_QUEUE_NODES    7
 	static uint32_t priority_list[] = { 20, 3, 7, 6, 50, 2, 8};
 	uint32_t increase_pri = 100;
 	uint32_t decrease_pri = 90;
@@ -479,14 +506,14 @@ priority_queue_test_queue(struct priority_queue *pq, int type,
 
 	/* Test the maximum operation by comparing max node with local list */
 	result = priority_queue_max(pq, struct priority_queue_test_node, link);
-	T_ASSERT((result->node_key == priority_list[0]), "(heap (%u) == qsort (%u)) priority queue max node lookup", 
-		(uint32_t)result->node_key, priority_list[0]);
+	T_ASSERT((result->node_key == priority_list[0]), "(heap (%u) == qsort (%u)) priority queue max node lookup",
+	    (uint32_t)result->node_key, priority_list[0]);
 
 	/* Remove all remaining elements and verify they match local list */
 	for (int i = 0; i < PRIORITY_QUEUE_NODES; i++) {
 		result = priority_queue_remove_max(pq, struct priority_queue_test_node, link, cmp_fn);
-		T_ASSERT((result->node_key == priority_list[i]), "(heap (%u) == qsort (%u)) priority queue max node removal", 
-			(uint32_t)result->node_key, priority_list[i]);
+		T_ASSERT((result->node_key == priority_list[i]), "(heap (%u) == qsort (%u)) priority queue max node removal",
+		    (uint32_t)result->node_key, priority_list[i]);
 	}
 
 	priority_queue_destroy(pq, struct priority_queue_test_node, link, ^(void *n) {
@@ -513,12 +540,12 @@ priority_queue_test(void)
 	T_SETUPEND;
 
 	priority_queue_test_queue(&pq, PRIORITY_QUEUE_BUILTIN_KEY,
-			PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE);
+	    PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE);
 
 	priority_queue_test_queue(&pq_nodes, PRIORITY_QUEUE_GENERIC_KEY,
-			priority_heap_make_comparator(a, b, struct priority_queue_test_node, link, {
-				return (a->node_key > b->node_key) ? 1 : ((a->node_key == b->node_key) ? 0 : -1);
-			}));
+	    priority_heap_make_comparator(a, b, struct priority_queue_test_node, link, {
+		return (a->node_key > b->node_key) ? 1 : ((a->node_key == b->node_key) ? 0 : -1);
+	}));
 
 	return KERN_SUCCESS;
 }
@@ -588,14 +615,16 @@ RandomULong_test()
 	 */
 	for (i = 1; i < CONF_ITERATIONS; i++) {
 		bit_entropy = count_bits(numbers[i - 1] ^ numbers[i]);
-		if (bit_entropy < min_bit_entropy)
+		if (bit_entropy < min_bit_entropy) {
 			min_bit_entropy = bit_entropy;
-		if (bit_entropy > max_bit_entropy)
+		}
+		if (bit_entropy > max_bit_entropy) {
 			max_bit_entropy = bit_entropy;
+		}
 
 		if (bit_entropy < CONF_MIN_ENTROPY) {
 			T_EXPECT_GE_UINT(bit_entropy, CONF_MIN_ENTROPY,
-			                 "Number of differing bits in consecutive numbers does not satisfy the min criteria.");
+			    "Number of differing bits in consecutive numbers does not satisfy the min criteria.");
 		}
 
 		aggregate_bit_entropy += bit_entropy;
@@ -606,7 +635,7 @@ RandomULong_test()
 	T_EXPECT_GE_UINT(mean_bit_entropy, CONF_MEAN_ENTROPY, "Test criteria for mean number of differing bits.");
 	T_PASS("Mean bit entropy criteria satisfied (Required %d, Actual: %d).", CONF_MEAN_ENTROPY, mean_bit_entropy);
 	T_LOG("{PERFORMANCE} iterations: %d, min_bit_entropy: %d, mean_bit_entropy: %d, max_bit_entropy: %d", CONF_ITERATIONS,
-	      min_bit_entropy, mean_bit_entropy, max_bit_entropy);
+	    min_bit_entropy, mean_bit_entropy, max_bit_entropy);
 	T_PERF("min_bit_entropy_" T_TOSTRING(CONF_ITERATIONS), min_bit_entropy, "bits", "minimum bit entropy in RNG. High is better");
 	T_PERF("mean_bit_entropy_" T_TOSTRING(CONF_ITERATIONS), mean_bit_entropy, "bits", "mean bit entropy in RNG. High is better");
 	T_PERF("max_bit_entropy_" T_TOSTRING(CONF_ITERATIONS), max_bit_entropy, "bits", "max bit entropy in RNG. High is better");
@@ -623,15 +652,17 @@ RandomULong_test()
 		 * Set the window
 		 */
 		window_end = window_start + CONF_WINDOW_SIZE - 1;
-		if (window_end >= CONF_ITERATIONS)
+		if (window_end >= CONF_ITERATIONS) {
 			window_end = CONF_ITERATIONS - 1;
+		}
 
 		trend = 0;
 		for (i = window_start; i < window_end; i++) {
-			if (numbers[i] < numbers[i + 1])
+			if (numbers[i] < numbers[i + 1]) {
 				trend++;
-			else if (numbers[i] > numbers[i + 1])
+			} else if (numbers[i] > numbers[i + 1]) {
 				trend--;
+			}
 		}
 		/*
 		 * Check that there is no increasing or decreasing trend
@@ -648,7 +679,6 @@ RandomULong_test()
 		 * Move to the next window
 		 */
 		window_start++;
-
 	} while (window_start < (CONF_ITERATIONS - 1));
 	T_PASS("Did not find increasing/decreasing trends in a window of %d numbers.", CONF_WINDOW_SIZE);
 
@@ -678,10 +708,34 @@ struct sample_disk_io_stats {
 } __attribute__((packed));
 
 struct kcdata_subtype_descriptor test_disk_io_stats_def[] = {
-    {KCS_SUBTYPE_FLAGS_NONE, KC_ST_UINT64, 0 * sizeof(uint64_t), sizeof(uint64_t), "disk_reads_count"},
-    {KCS_SUBTYPE_FLAGS_NONE, KC_ST_UINT64, 1 * sizeof(uint64_t), sizeof(uint64_t), "disk_reads_size"},
-    {KCS_SUBTYPE_FLAGS_ARRAY, KC_ST_UINT64, 2 * sizeof(uint64_t), KCS_SUBTYPE_PACK_SIZE(4, sizeof(uint64_t)), "io_priority_count"},
-    {KCS_SUBTYPE_FLAGS_ARRAY, KC_ST_UINT64, (2 + 4) * sizeof(uint64_t), sizeof(uint64_t), "io_priority_size"},
+	{
+		.kcs_flags = KCS_SUBTYPE_FLAGS_NONE,
+		.kcs_elem_type = KC_ST_UINT64,
+		.kcs_elem_offset = 0 * sizeof(uint64_t),
+		.kcs_elem_size = sizeof(uint64_t),
+		.kcs_name = "disk_reads_count"
+	},
+	{
+		.kcs_flags = KCS_SUBTYPE_FLAGS_NONE,
+		.kcs_elem_type = KC_ST_UINT64,
+		.kcs_elem_offset = 1 * sizeof(uint64_t),
+		.kcs_elem_size = sizeof(uint64_t),
+		.kcs_name = "disk_reads_size"
+	},
+	{
+		.kcs_flags = KCS_SUBTYPE_FLAGS_ARRAY,
+		.kcs_elem_type = KC_ST_UINT64,
+		.kcs_elem_offset = 2 * sizeof(uint64_t),
+		.kcs_elem_size = KCS_SUBTYPE_PACK_SIZE(4, sizeof(uint64_t)),
+		.kcs_name = "io_priority_count"
+	},
+	{
+		.kcs_flags = KCS_SUBTYPE_FLAGS_ARRAY,
+		.kcs_elem_type = KC_ST_UINT64,
+		.kcs_elem_offset = (2 + 4) * sizeof(uint64_t),
+		.kcs_elem_size = sizeof(uint64_t),
+		.kcs_name = "io_priority_size"
+	},
 };
 
 kern_return_t
@@ -696,12 +750,12 @@ kcdata_api_test()
 	/* another negative test with buffer size < 32 bytes */
 	char data[30] = "sample_disk_io_stats";
 	retval = kcdata_memory_static_init(&test_kc_data, (mach_vm_address_t)&data, KCDATA_BUFFER_BEGIN_CRASHINFO, sizeof(data),
-	                                   KCFLAG_USE_MEMCOPY);
+	    KCFLAG_USE_MEMCOPY);
 	T_ASSERT(retval == KERN_RESOURCE_SHORTAGE, "init with 30 bytes failed as expected with KERN_RESOURCE_SHORTAGE");
 
 	/* test with COPYOUT for 0x0 address. Should return KERN_NO_ACCESS */
 	retval = kcdata_memory_static_init(&test_kc_data, (mach_vm_address_t)0, KCDATA_BUFFER_BEGIN_CRASHINFO, PAGE_SIZE,
-	                                   KCFLAG_USE_COPYOUT);
+	    KCFLAG_USE_COPYOUT);
 	T_ASSERT(retval == KERN_NO_ACCESS, "writing to 0x0 returned KERN_NO_ACCESS");
 
 	/* test with successful kcdata_memory_static_init */
@@ -710,7 +764,7 @@ kcdata_api_test()
 	T_EXPECT_NOTNULL(address, "kalloc of PAGE_SIZE data.");
 
 	retval = kcdata_memory_static_init(&test_kc_data, (mach_vm_address_t)address, KCDATA_BUFFER_BEGIN_STACKSHOT, PAGE_SIZE,
-	                                   KCFLAG_USE_MEMCOPY);
+	    KCFLAG_USE_MEMCOPY);
 
 	T_ASSERT(retval == KERN_SUCCESS, "successful kcdata_memory_static_init call");
 
@@ -786,38 +840,38 @@ kcdata_api_test()
 	/* test adding of custom type */
 
 	retval = kcdata_add_type_definition(&test_kc_data, 0x999, data, &test_disk_io_stats_def[0],
-	                                    sizeof(test_disk_io_stats_def) / sizeof(struct kcdata_subtype_descriptor));
+	    sizeof(test_disk_io_stats_def) / sizeof(struct kcdata_subtype_descriptor));
 	T_ASSERT(retval == KERN_SUCCESS, "adding custom type succeeded.");
 
 	return KERN_SUCCESS;
 }
 
 /*
-kern_return_t
-kcdata_api_assert_tests()
-{
-	kern_return_t retval       = 0;
-	void * assert_check_retval = NULL;
-	test_kc_data2.kcd_length   = 0xdeadbeef;
-	mach_vm_address_t address = (mach_vm_address_t)kalloc(PAGE_SIZE);
-	T_EXPECT_NOTNULL(address, "kalloc of PAGE_SIZE data.");
-
-	retval = kcdata_memory_static_init(&test_kc_data2, (mach_vm_address_t)address, KCDATA_BUFFER_BEGIN_STACKSHOT, PAGE_SIZE,
-	                                   KCFLAG_USE_MEMCOPY);
-
-	T_ASSERT(retval == KERN_SUCCESS, "successful kcdata_memory_static_init call");
-
-	retval = T_REGISTER_ASSERT_CHECK("KCDATA_DESC_MAXLEN", &assert_check_retval);
-	T_ASSERT(retval == KERN_SUCCESS, "registered assert widget");
-
-	// this will assert
-	retval = kcdata_add_uint32_with_description(&test_kc_data2, 0xc0ffee, "really long description string for kcdata");
-	T_ASSERT(retval == KERN_INVALID_ARGUMENT, "API param check returned KERN_INVALID_ARGUMENT correctly");
-	T_ASSERT(assert_check_retval == (void *)XT_RET_W_SUCCESS, "assertion handler verified that it was hit");
-
-	return KERN_SUCCESS;
-}
-*/
+ *  kern_return_t
+ *  kcdata_api_assert_tests()
+ *  {
+ *       kern_return_t retval       = 0;
+ *       void * assert_check_retval = NULL;
+ *       test_kc_data2.kcd_length   = 0xdeadbeef;
+ *       mach_vm_address_t address = (mach_vm_address_t)kalloc(PAGE_SIZE);
+ *       T_EXPECT_NOTNULL(address, "kalloc of PAGE_SIZE data.");
+ *
+ *       retval = kcdata_memory_static_init(&test_kc_data2, (mach_vm_address_t)address, KCDATA_BUFFER_BEGIN_STACKSHOT, PAGE_SIZE,
+ *                                          KCFLAG_USE_MEMCOPY);
+ *
+ *       T_ASSERT(retval == KERN_SUCCESS, "successful kcdata_memory_static_init call");
+ *
+ *       retval = T_REGISTER_ASSERT_CHECK("KCDATA_DESC_MAXLEN", &assert_check_retval);
+ *       T_ASSERT(retval == KERN_SUCCESS, "registered assert widget");
+ *
+ *       // this will assert
+ *       retval = kcdata_add_uint32_with_description(&test_kc_data2, 0xc0ffee, "really long description string for kcdata");
+ *       T_ASSERT(retval == KERN_INVALID_ARGUMENT, "API param check returned KERN_INVALID_ARGUMENT correctly");
+ *       T_ASSERT(assert_check_retval == (void *)XT_RET_W_SUCCESS, "assertion handler verified that it was hit");
+ *
+ *       return KERN_SUCCESS;
+ *  }
+ */
 
 #if defined(__arm__) || defined(__arm64__)
 
@@ -838,12 +892,13 @@ extern unsigned long gPhysBase, gPhysSize, first_avail;
 static inline uintptr_t
 astris_vm_page_unpack_ptr(uintptr_t p)
 {
-	if (!p)
-		return ((uintptr_t)0);
+	if (!p) {
+		return (uintptr_t)0;
+	}
 
 	return (p & lowGlo.lgPmapMemFromArrayMask)
-	           ? lowGlo.lgPmapMemStartAddr + (p & ~(lowGlo.lgPmapMemFromArrayMask)) * lowGlo.lgPmapMemPagesize
-	           : lowGlo.lgPmapMemPackedBaseAddr + (p << lowGlo.lgPmapMemPackedShift);
+	       ? lowGlo.lgPmapMemStartAddr + (p & ~(lowGlo.lgPmapMemFromArrayMask)) * lowGlo.lgPmapMemPagesize
+	       : lowGlo.lgPmapMemPackedBaseAddr + (p << lowGlo.lgPmapMemPackedShift);
 }
 
 // assume next pointer is the first element
@@ -872,8 +927,8 @@ static inline ppnum_t
 astris_vm_page_get_phys_page(uintptr_t m)
 {
 	return (m >= lowGlo.lgPmapMemStartAddr && m < lowGlo.lgPmapMemEndAddr)
-	           ? (ppnum_t)((m - lowGlo.lgPmapMemStartAddr) / lowGlo.lgPmapMemPagesize + lowGlo.lgPmapMemFirstppnum)
-	           : *((ppnum_t *)(m + lowGlo.lgPmapMemPageOffset));
+	       ? (ppnum_t)((m - lowGlo.lgPmapMemStartAddr) / lowGlo.lgPmapMemPagesize + lowGlo.lgPmapMemFirstppnum)
+	       : *((ppnum_t *)(m + lowGlo.lgPmapMemPageOffset));
 }
 
 kern_return_t
@@ -891,7 +946,7 @@ pmap_coredump_test(void)
 	T_ASSERT_EQ_ULONG(lowGlo.lgLayoutMagic, LOWGLO_LAYOUT_MAGIC, NULL);
 
 	// check the constant values in lowGlo
-	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemQ, ((uint64_t) & (pmap_object_store.memq)), NULL);
+	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemQ, ((uint64_t) &(pmap_object_store.memq)), NULL);
 	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemPageOffset, offsetof(struct vm_page_with_ppnum, vmp_phys_page), NULL);
 	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemChainOffset, offsetof(struct vm_page, vmp_listq), NULL);
 	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemPagesize, sizeof(struct vm_page), NULL);
@@ -918,3 +973,1679 @@ pmap_coredump_test(void)
 	return KERN_SUCCESS;
 }
 #endif
+
+struct ts_kern_prim_test_args {
+	int *end_barrier;
+	int *notify_b;
+	int *wait_event_b;
+	int before_num;
+	int *notify_a;
+	int *wait_event_a;
+	int after_num;
+	int priority_to_check;
+};
+
+static void
+wait_threads(
+	int* var,
+	int num)
+{
+	if (var != NULL) {
+		while (os_atomic_load(var, acquire) != num) {
+			assert_wait((event_t) var, THREAD_UNINT);
+			if (os_atomic_load(var, acquire) != num) {
+				(void) thread_block(THREAD_CONTINUE_NULL);
+			} else {
+				clear_wait(current_thread(), THREAD_AWAKENED);
+			}
+		}
+	}
+}
+
+static void
+wake_threads(
+	int* var)
+{
+	if (var) {
+		os_atomic_inc(var, relaxed);
+		thread_wakeup((event_t) var);
+	}
+}
+
+extern void IOSleep(int);
+
+static void
+thread_lock_unlock_kernel_primitive(
+	void *args,
+	__unused wait_result_t wr)
+{
+	thread_t thread = current_thread();
+	struct ts_kern_prim_test_args *info = (struct ts_kern_prim_test_args*) args;
+	int pri;
+
+	thread_lock(thread);
+	pri = thread->sched_pri;
+	thread_unlock(thread);
+
+	wait_threads(info->wait_event_b, info->before_num);
+	wake_threads(info->notify_b);
+
+	tstile_test_prim_lock(SYSCTL_TURNSTILE_TEST_KERNEL_DEFAULT);
+
+	wake_threads(info->notify_a);
+	wait_threads(info->wait_event_a, info->after_num);
+
+	IOSleep(100);
+
+	if (info->priority_to_check) {
+		thread_lock(thread);
+		pri = thread->sched_pri;
+		thread_unlock(thread);
+		T_ASSERT(pri == info->priority_to_check, "Priority thread: current sched %d sched wanted %d", pri, info->priority_to_check);
+	}
+
+	tstile_test_prim_unlock(SYSCTL_TURNSTILE_TEST_KERNEL_DEFAULT);
+
+	wake_threads(info->end_barrier);
+	thread_terminate_self();
+}
+
+kern_return_t
+ts_kernel_primitive_test(void)
+{
+	thread_t owner, thread1, thread2;
+	struct ts_kern_prim_test_args targs[2] = {};
+	kern_return_t result;
+	int end_barrier = 0;
+	int owner_locked = 0;
+	int waiters_ready = 0;
+
+	T_LOG("Testing turnstile kernel primitive");
+
+	targs[0].notify_b = NULL;
+	targs[0].wait_event_b = NULL;
+	targs[0].before_num = 0;
+	targs[0].notify_a = &owner_locked;
+	targs[0].wait_event_a = &waiters_ready;
+	targs[0].after_num = 2;
+	targs[0].priority_to_check = 90;
+	targs[0].end_barrier = &end_barrier;
+
+	// Start owner with priority 80
+	result = kernel_thread_start_priority((thread_continue_t)thread_lock_unlock_kernel_primitive, &targs[0], 80, &owner);
+	T_ASSERT(result == KERN_SUCCESS, "Starting owner");
+
+	targs[1].notify_b = &waiters_ready;
+	targs[1].wait_event_b = &owner_locked;
+	targs[1].before_num = 1;
+	targs[1].notify_a = NULL;
+	targs[1].wait_event_a = NULL;
+	targs[1].after_num = 0;
+	targs[1].priority_to_check = 0;
+	targs[1].end_barrier = &end_barrier;
+
+	// Start waiters with priority 85 and 90
+	result = kernel_thread_start_priority((thread_continue_t)thread_lock_unlock_kernel_primitive, &targs[1], 85, &thread1);
+	T_ASSERT(result == KERN_SUCCESS, "Starting thread1");
+
+	result = kernel_thread_start_priority((thread_continue_t)thread_lock_unlock_kernel_primitive, &targs[1], 90, &thread2);
+	T_ASSERT(result == KERN_SUCCESS, "Starting thread2");
+
+	wait_threads(&end_barrier, 3);
+
+	return KERN_SUCCESS;
+}
+
+#define MTX_LOCK 0
+#define RW_LOCK 1
+
+#define NUM_THREADS 4
+
+struct synch_test_common {
+	unsigned int nthreads;
+	thread_t *threads;
+	int max_pri;
+	int test_done;
+};
+
+static kern_return_t
+init_synch_test_common(struct synch_test_common *info, unsigned int nthreads)
+{
+	info->nthreads = nthreads;
+	info->threads = kalloc(sizeof(thread_t) * nthreads);
+	if (!info->threads) {
+		return ENOMEM;
+	}
+
+	return KERN_SUCCESS;
+}
+
+static void
+destroy_synch_test_common(struct synch_test_common *info)
+{
+	kfree(info->threads, sizeof(thread_t) * info->nthreads);
+}
+
+static void
+start_threads(thread_continue_t func, struct synch_test_common *info, bool sleep_after_first)
+{
+	thread_t thread;
+	kern_return_t result;
+	uint i;
+	int priority = 75;
+
+	info->test_done = 0;
+
+	for (i = 0; i < info->nthreads; i++) {
+		info->threads[i] = NULL;
+	}
+
+	info->max_pri = priority + (info->nthreads - 1) * 5;
+	if (info->max_pri > 95) {
+		info->max_pri = 95;
+	}
+
+	for (i = 0; i < info->nthreads; i++) {
+		result = kernel_thread_start_priority((thread_continue_t)func, info, priority, &thread);
+		os_atomic_store(&info->threads[i], thread, release);
+		T_ASSERT(result == KERN_SUCCESS, "Starting thread %d, priority %d, %p", i, priority, thread);
+
+		priority += 5;
+
+		if (i == 0 && sleep_after_first) {
+			IOSleep(100);
+		}
+	}
+}
+
+static unsigned int
+get_max_pri(struct synch_test_common * info)
+{
+	return info->max_pri;
+}
+
+static void
+wait_all_thread(struct synch_test_common * info)
+{
+	wait_threads(&info->test_done, info->nthreads);
+}
+
+static void
+notify_waiter(struct synch_test_common * info)
+{
+	wake_threads(&info->test_done);
+}
+
+static void
+wait_for_waiters(struct synch_test_common *info)
+{
+	uint i, j;
+	thread_t thread;
+
+	for (i = 0; i < info->nthreads; i++) {
+		j = 0;
+		while (os_atomic_load(&info->threads[i], acquire) == NULL) {
+			if (j % 100 == 0) {
+				IOSleep(10);
+			}
+			j++;
+		}
+
+		if (info->threads[i] != current_thread()) {
+			j = 0;
+			do {
+				thread = os_atomic_load(&info->threads[i], relaxed);
+				if (thread == (thread_t) 1) {
+					break;
+				}
+
+				if (!(thread->state & TH_RUN)) {
+					break;
+				}
+
+				if (j % 100 == 0) {
+					IOSleep(100);
+				}
+				j++;
+
+				if (thread->started == FALSE) {
+					continue;
+				}
+			} while (thread->state & TH_RUN);
+		}
+	}
+}
+
+static void
+exclude_current_waiter(struct synch_test_common *info)
+{
+	uint i, j;
+
+	for (i = 0; i < info->nthreads; i++) {
+		j = 0;
+		while (os_atomic_load(&info->threads[i], acquire) == NULL) {
+			if (j % 100 == 0) {
+				IOSleep(10);
+			}
+			j++;
+		}
+
+		if (os_atomic_load(&info->threads[i], acquire) == current_thread()) {
+			os_atomic_store(&info->threads[i], (thread_t)1, release);
+			return;
+		}
+	}
+}
+
+struct info_sleep_inheritor_test {
+	struct synch_test_common head;
+	lck_mtx_t mtx_lock;
+	lck_rw_t rw_lock;
+	decl_lck_mtx_gate_data(, gate);
+	boolean_t gate_closed;
+	int prim_type;
+	boolean_t work_to_do;
+	unsigned int max_pri;
+	unsigned int steal_pri;
+	int synch_value;
+	int synch;
+	int value;
+	int handoff_failure;
+	thread_t thread_inheritor;
+};
+
+static void
+primitive_lock(struct info_sleep_inheritor_test *info)
+{
+	switch (info->prim_type) {
+	case MTX_LOCK:
+		lck_mtx_lock(&info->mtx_lock);
+		break;
+	case RW_LOCK:
+		lck_rw_lock(&info->rw_lock, LCK_RW_TYPE_EXCLUSIVE);
+		break;
+	default:
+		panic("invalid type %d", info->prim_type);
+	}
+}
+
+static void
+primitive_unlock(struct info_sleep_inheritor_test *info)
+{
+	switch (info->prim_type) {
+	case MTX_LOCK:
+		lck_mtx_unlock(&info->mtx_lock);
+		break;
+	case RW_LOCK:
+		lck_rw_unlock(&info->rw_lock, LCK_RW_TYPE_EXCLUSIVE);
+		break;
+	default:
+		panic("invalid type %d", info->prim_type);
+	}
+}
+
+static wait_result_t
+primitive_sleep_with_inheritor(struct info_sleep_inheritor_test *info)
+{
+	wait_result_t ret = KERN_SUCCESS;
+	switch (info->prim_type) {
+	case MTX_LOCK:
+		ret = lck_mtx_sleep_with_inheritor(&info->mtx_lock, LCK_SLEEP_DEFAULT, (event_t) &info->thread_inheritor, info->thread_inheritor, THREAD_UNINT | THREAD_WAIT_NOREPORT_USER, TIMEOUT_WAIT_FOREVER);
+		break;
+	case RW_LOCK:
+		ret = lck_rw_sleep_with_inheritor(&info->rw_lock, LCK_SLEEP_DEFAULT, (event_t) &info->thread_inheritor, info->thread_inheritor, THREAD_UNINT | THREAD_WAIT_NOREPORT_USER, TIMEOUT_WAIT_FOREVER);
+		break;
+	default:
+		panic("invalid type %d", info->prim_type);
+	}
+
+	return ret;
+}
+
+static void
+primitive_wakeup_one_with_inheritor(struct info_sleep_inheritor_test *info)
+{
+	switch (info->prim_type) {
+	case MTX_LOCK:
+	case RW_LOCK:
+		wakeup_one_with_inheritor((event_t) &info->thread_inheritor, THREAD_AWAKENED, LCK_WAKE_DEFAULT, &info->thread_inheritor);
+		break;
+	default:
+		panic("invalid type %d", info->prim_type);
+	}
+}
+
+static void
+primitive_wakeup_all_with_inheritor(struct info_sleep_inheritor_test *info)
+{
+	switch (info->prim_type) {
+	case MTX_LOCK:
+	case RW_LOCK:
+		wakeup_all_with_inheritor((event_t) &info->thread_inheritor, THREAD_AWAKENED);
+		break;
+	default:
+		panic("invalid type %d", info->prim_type);
+	}
+	return;
+}
+
+static void
+primitive_change_sleep_inheritor(struct info_sleep_inheritor_test *info)
+{
+	switch (info->prim_type) {
+	case MTX_LOCK:
+	case RW_LOCK:
+		change_sleep_inheritor((event_t) &info->thread_inheritor, info->thread_inheritor);
+		break;
+	default:
+		panic("invalid type %d", info->prim_type);
+	}
+	return;
+}
+
+static kern_return_t
+primitive_gate_try_close(struct info_sleep_inheritor_test *info)
+{
+	kern_return_t ret = KERN_SUCCESS;
+	switch (info->prim_type) {
+	case MTX_LOCK:
+		ret = lck_mtx_gate_try_close(&info->mtx_lock, &info->gate);
+		break;
+	case RW_LOCK:
+		ret = lck_rw_gate_try_close(&info->rw_lock, &info->gate);
+		break;
+	default:
+		panic("invalid type %d", info->prim_type);
+	}
+	return ret;
+}
+
+static gate_wait_result_t
+primitive_gate_wait(struct info_sleep_inheritor_test *info)
+{
+	gate_wait_result_t ret = GATE_OPENED;
+	switch (info->prim_type) {
+	case MTX_LOCK:
+		ret = lck_mtx_gate_wait(&info->mtx_lock, &info->gate, LCK_SLEEP_DEFAULT, THREAD_UNINT | THREAD_WAIT_NOREPORT_USER, TIMEOUT_WAIT_FOREVER);
+		break;
+	case RW_LOCK:
+		ret = lck_rw_gate_wait(&info->rw_lock, &info->gate, LCK_SLEEP_DEFAULT, THREAD_UNINT | THREAD_WAIT_NOREPORT_USER, TIMEOUT_WAIT_FOREVER);
+		break;
+	default:
+		panic("invalid type %d", info->prim_type);
+	}
+	return ret;
+}
+
+static void
+primitive_gate_open(struct info_sleep_inheritor_test *info)
+{
+	switch (info->prim_type) {
+	case MTX_LOCK:
+		lck_mtx_gate_open(&info->mtx_lock, &info->gate);
+		break;
+	case RW_LOCK:
+		lck_rw_gate_open(&info->rw_lock, &info->gate);
+		break;
+	default:
+		panic("invalid type %d", info->prim_type);
+	}
+}
+
+static void
+primitive_gate_close(struct info_sleep_inheritor_test *info)
+{
+	switch (info->prim_type) {
+	case MTX_LOCK:
+		lck_mtx_gate_close(&info->mtx_lock, &info->gate);
+		break;
+	case RW_LOCK:
+		lck_rw_gate_close(&info->rw_lock, &info->gate);
+		break;
+	default:
+		panic("invalid type %d", info->prim_type);
+	}
+}
+
+static void
+primitive_gate_steal(struct info_sleep_inheritor_test *info)
+{
+	switch (info->prim_type) {
+	case MTX_LOCK:
+		lck_mtx_gate_steal(&info->mtx_lock, &info->gate);
+		break;
+	case RW_LOCK:
+		lck_rw_gate_steal(&info->rw_lock, &info->gate);
+		break;
+	default:
+		panic("invalid type %d", info->prim_type);
+	}
+}
+
+static kern_return_t
+primitive_gate_handoff(struct info_sleep_inheritor_test *info, int flags)
+{
+	kern_return_t ret = KERN_SUCCESS;
+	switch (info->prim_type) {
+	case MTX_LOCK:
+		ret = lck_mtx_gate_handoff(&info->mtx_lock, &info->gate, flags);
+		break;
+	case RW_LOCK:
+		ret = lck_rw_gate_handoff(&info->rw_lock, &info->gate, flags);
+		break;
+	default:
+		panic("invalid type %d", info->prim_type);
+	}
+	return ret;
+}
+
+static void
+primitive_gate_assert(struct info_sleep_inheritor_test *info, int type)
+{
+	switch (info->prim_type) {
+	case MTX_LOCK:
+		lck_mtx_gate_assert(&info->mtx_lock, &info->gate, type);
+		break;
+	case RW_LOCK:
+		lck_rw_gate_assert(&info->rw_lock, &info->gate, type);
+		break;
+	default:
+		panic("invalid type %d", info->prim_type);
+	}
+}
+
+static void
+primitive_gate_init(struct info_sleep_inheritor_test *info)
+{
+	switch (info->prim_type) {
+	case MTX_LOCK:
+		lck_mtx_gate_init(&info->mtx_lock, &info->gate);
+		break;
+	case RW_LOCK:
+		lck_rw_gate_init(&info->rw_lock, &info->gate);
+		break;
+	default:
+		panic("invalid type %d", info->prim_type);
+	}
+}
+
+static void
+primitive_gate_destroy(struct info_sleep_inheritor_test *info)
+{
+	switch (info->prim_type) {
+	case MTX_LOCK:
+		lck_mtx_gate_destroy(&info->mtx_lock, &info->gate);
+		break;
+	case RW_LOCK:
+		lck_rw_gate_destroy(&info->rw_lock, &info->gate);
+		break;
+	default:
+		panic("invalid type %d", info->prim_type);
+	}
+}
+
+static void
+thread_inheritor_like_mutex(
+	void *args,
+	__unused wait_result_t wr)
+{
+	wait_result_t wait;
+
+	struct info_sleep_inheritor_test *info = (struct info_sleep_inheritor_test*) args;
+	uint my_pri = current_thread()->sched_pri;
+
+	T_LOG("Started thread pri %d %p", my_pri, current_thread());
+
+	/*
+	 * spin here to start concurrently
+	 */
+	wake_threads(&info->synch);
+	wait_threads(&info->synch, info->synch_value);
+
+	primitive_lock(info);
+
+	if (info->thread_inheritor == NULL) {
+		info->thread_inheritor = current_thread();
+	} else {
+		wait = primitive_sleep_with_inheritor(info);
+		T_ASSERT(wait == THREAD_AWAKENED || wait == THREAD_NOT_WAITING, "sleep_with_inheritor return");
+	}
+	primitive_unlock(info);
+
+	IOSleep(100);
+	info->value++;
+
+	primitive_lock(info);
+
+	T_ASSERT(info->thread_inheritor == current_thread(), "thread_inheritor is %p", info->thread_inheritor);
+	primitive_wakeup_one_with_inheritor(info);
+	T_LOG("woken up %p", info->thread_inheritor);
+
+	if (info->thread_inheritor == NULL) {
+		T_ASSERT(info->handoff_failure == 0, "handoff failures");
+		info->handoff_failure++;
+	} else {
+		T_ASSERT(info->thread_inheritor != current_thread(), "thread_inheritor is %p", info->thread_inheritor);
+		thread_deallocate(info->thread_inheritor);
+	}
+
+	primitive_unlock(info);
+
+	assert(current_thread()->kern_promotion_schedpri == 0);
+	notify_waiter((struct synch_test_common *)info);
+
+	thread_terminate_self();
+}
+
+static void
+thread_just_inheritor_do_work(
+	void *args,
+	__unused wait_result_t wr)
+{
+	struct info_sleep_inheritor_test *info = (struct info_sleep_inheritor_test*) args;
+	uint my_pri = current_thread()->sched_pri;
+	uint max_pri;
+
+	T_LOG("Started thread pri %d %p", my_pri, current_thread());
+	primitive_lock(info);
+
+	if (info->thread_inheritor == NULL) {
+		info->thread_inheritor = current_thread();
+		primitive_unlock(info);
+		T_LOG("Thread pri %d first to run %p", my_pri, current_thread());
+
+		wait_threads(&info->synch, info->synch_value - 1);
+
+		wait_for_waiters((struct synch_test_common *)info);
+
+		max_pri = get_max_pri((struct synch_test_common *) info);
+		T_ASSERT((uint) current_thread()->sched_pri == max_pri, "sleep_inheritor inheritor priority current is %d, should be %d", current_thread()->sched_pri, max_pri);
+
+		os_atomic_store(&info->synch, 0, relaxed);
+		primitive_lock(info);
+		primitive_wakeup_all_with_inheritor(info);
+	} else {
+		wake_threads(&info->synch);
+		primitive_sleep_with_inheritor(info);
+	}
+
+	primitive_unlock(info);
+
+	assert(current_thread()->kern_promotion_schedpri == 0);
+	notify_waiter((struct synch_test_common *)info);
+
+	thread_terminate_self();
+}
+
+static void
+thread_steal_work(
+	void *args,
+	__unused wait_result_t wr)
+{
+	struct info_sleep_inheritor_test *info = (struct info_sleep_inheritor_test*) args;
+	uint my_pri = current_thread()->sched_pri;
+
+	T_LOG("Started thread pri %d %p", my_pri, current_thread());
+	primitive_lock(info);
+
+	if (info->thread_inheritor == NULL) {
+		info->thread_inheritor = current_thread();
+		exclude_current_waiter((struct synch_test_common *)info);
+
+		T_LOG("Thread pri %d first to run %p", my_pri, current_thread());
+		primitive_unlock(info);
+
+		wait_threads(&info->synch, info->synch_value - 2);
+
+		wait_for_waiters((struct synch_test_common *)info);
+		T_LOG("Thread pri %d first to run %p", my_pri, current_thread());
+		primitive_lock(info);
+		if (info->thread_inheritor == current_thread()) {
+			primitive_wakeup_all_with_inheritor(info);
+		}
+	} else {
+		if (info->steal_pri == 0) {
+			info->steal_pri = my_pri;
+			info->thread_inheritor = current_thread();
+			primitive_change_sleep_inheritor(info);
+			exclude_current_waiter((struct synch_test_common *)info);
+
+			primitive_unlock(info);
+
+			wait_threads(&info->synch, info->synch_value - 2);
+
+			T_LOG("Thread pri %d stole push %p", my_pri, current_thread());
+			wait_for_waiters((struct synch_test_common *)info);
+
+			T_ASSERT((uint) current_thread()->sched_pri == info->steal_pri, "sleep_inheritor inheritor priority current is %d, should be %d", current_thread()->sched_pri, info->steal_pri);
+
+			primitive_lock(info);
+			primitive_wakeup_all_with_inheritor(info);
+		} else {
+			if (my_pri > info->steal_pri) {
+				info->steal_pri = my_pri;
+			}
+			wake_threads(&info->synch);
+			primitive_sleep_with_inheritor(info);
+			exclude_current_waiter((struct synch_test_common *)info);
+		}
+	}
+	primitive_unlock(info);
+
+	assert(current_thread()->kern_promotion_schedpri == 0);
+	notify_waiter((struct synch_test_common *)info);
+
+	thread_terminate_self();
+}
+
+static void
+thread_no_inheritor_work(
+	void *args,
+	__unused wait_result_t wr)
+{
+	struct info_sleep_inheritor_test *info = (struct info_sleep_inheritor_test*) args;
+	uint my_pri = current_thread()->sched_pri;
+
+	T_LOG("Started thread pri %d %p", my_pri, current_thread());
+	primitive_lock(info);
+
+	info->value--;
+	if (info->value == 0) {
+		primitive_wakeup_all_with_inheritor(info);
+	} else {
+		info->thread_inheritor = NULL;
+		primitive_sleep_with_inheritor(info);
+	}
+
+	primitive_unlock(info);
+
+	assert(current_thread()->kern_promotion_schedpri == 0);
+	notify_waiter((struct synch_test_common *)info);
+
+	thread_terminate_self();
+}
+
+static void
+thread_mtx_work(
+	void *args,
+	__unused wait_result_t wr)
+{
+	struct info_sleep_inheritor_test *info = (struct info_sleep_inheritor_test*) args;
+	uint my_pri = current_thread()->sched_pri;
+	int i;
+	u_int8_t rand;
+	unsigned int mod_rand;
+	uint max_pri;
+
+	T_LOG("Started thread pri %d %p", my_pri, current_thread());
+
+	for (i = 0; i < 10; i++) {
+		lck_mtx_lock(&info->mtx_lock);
+		if (info->thread_inheritor == NULL) {
+			info->thread_inheritor = current_thread();
+			lck_mtx_unlock(&info->mtx_lock);
+
+			T_LOG("Thread pri %d first to run %p", my_pri, current_thread());
+
+			wait_threads(&info->synch, info->synch_value - 1);
+			wait_for_waiters((struct synch_test_common *)info);
+			max_pri = get_max_pri((struct synch_test_common *) info);
+			T_ASSERT((uint) current_thread()->sched_pri == max_pri, "sleep_inheritor inheritor priority current is %d, should be %d", current_thread()->sched_pri, max_pri);
+
+			os_atomic_store(&info->synch, 0, relaxed);
+
+			lck_mtx_lock(&info->mtx_lock);
+			info->thread_inheritor = NULL;
+			wakeup_all_with_inheritor((event_t) &info->thread_inheritor, THREAD_AWAKENED);
+			lck_mtx_unlock(&info->mtx_lock);
+			continue;
+		}
+
+		read_random(&rand, sizeof(rand));
+		mod_rand = rand % 2;
+
+		wake_threads(&info->synch);
+		switch (mod_rand) {
+		case 0:
+			lck_mtx_sleep_with_inheritor(&info->mtx_lock, LCK_SLEEP_DEFAULT, (event_t) &info->thread_inheritor, info->thread_inheritor, THREAD_UNINT | THREAD_WAIT_NOREPORT_USER, TIMEOUT_WAIT_FOREVER);
+			lck_mtx_unlock(&info->mtx_lock);
+			break;
+		case 1:
+			lck_mtx_sleep_with_inheritor(&info->mtx_lock, LCK_SLEEP_UNLOCK, (event_t) &info->thread_inheritor, info->thread_inheritor, THREAD_UNINT | THREAD_WAIT_NOREPORT_USER, TIMEOUT_WAIT_FOREVER);
+			break;
+		default:
+			panic("rand()mod4 returned %u (random %u)", mod_rand, rand);
+		}
+	}
+
+	/*
+	 * spin here to stop using the lock as mutex
+	 */
+	wake_threads(&info->synch);
+	wait_threads(&info->synch, info->synch_value);
+
+	for (i = 0; i < 10; i++) {
+		/* read_random might sleep so read it before acquiring the mtx as spin */
+		read_random(&rand, sizeof(rand));
+
+		lck_mtx_lock_spin(&info->mtx_lock);
+		if (info->thread_inheritor == NULL) {
+			info->thread_inheritor = current_thread();
+			lck_mtx_unlock(&info->mtx_lock);
+
+			T_LOG("Thread pri %d first to run %p", my_pri, current_thread());
+			wait_for_waiters((struct synch_test_common *)info);
+			max_pri = get_max_pri((struct synch_test_common *) info);
+			T_ASSERT((uint) current_thread()->sched_pri == max_pri, "sleep_inheritor inheritor priority current is %d, should be %d", current_thread()->sched_pri, max_pri);
+
+			lck_mtx_lock_spin(&info->mtx_lock);
+			info->thread_inheritor = NULL;
+			wakeup_all_with_inheritor((event_t) &info->thread_inheritor, THREAD_AWAKENED);
+			lck_mtx_unlock(&info->mtx_lock);
+			continue;
+		}
+
+		mod_rand = rand % 2;
+		switch (mod_rand) {
+		case 0:
+			lck_mtx_sleep_with_inheritor(&info->mtx_lock, LCK_SLEEP_SPIN, (event_t) &info->thread_inheritor, info->thread_inheritor, THREAD_UNINT | THREAD_WAIT_NOREPORT_USER, TIMEOUT_WAIT_FOREVER);
+			lck_mtx_unlock(&info->mtx_lock);
+			break;
+		case 1:
+			lck_mtx_sleep_with_inheritor(&info->mtx_lock, LCK_SLEEP_SPIN_ALWAYS, (event_t) &info->thread_inheritor, info->thread_inheritor, THREAD_UNINT | THREAD_WAIT_NOREPORT_USER, TIMEOUT_WAIT_FOREVER);
+			lck_mtx_unlock(&info->mtx_lock);
+			break;
+		default:
+			panic("rand()mod4 returned %u (random %u)", mod_rand, rand);
+		}
+	}
+	assert(current_thread()->kern_promotion_schedpri == 0);
+	notify_waiter((struct synch_test_common *)info);
+
+	thread_terminate_self();
+}
+
+static void
+thread_rw_work(
+	void *args,
+	__unused wait_result_t wr)
+{
+	struct info_sleep_inheritor_test *info = (struct info_sleep_inheritor_test*) args;
+	uint my_pri = current_thread()->sched_pri;
+	int i;
+	lck_rw_type_t type;
+	u_int8_t rand;
+	unsigned int mod_rand;
+	uint max_pri;
+
+	T_LOG("Started thread pri %d %p", my_pri, current_thread());
+
+	for (i = 0; i < 10; i++) {
+try_again:
+		type = LCK_RW_TYPE_SHARED;
+		lck_rw_lock(&info->rw_lock, type);
+		if (info->thread_inheritor == NULL) {
+			type = LCK_RW_TYPE_EXCLUSIVE;
+
+			if (lck_rw_lock_shared_to_exclusive(&info->rw_lock)) {
+				if (info->thread_inheritor == NULL) {
+					info->thread_inheritor = current_thread();
+					lck_rw_unlock(&info->rw_lock, type);
+					wait_threads(&info->synch, info->synch_value - 1);
+
+					T_LOG("Thread pri %d first to run %p", my_pri, current_thread());
+					wait_for_waiters((struct synch_test_common *)info);
+					max_pri = get_max_pri((struct synch_test_common *) info);
+					T_ASSERT((uint) current_thread()->sched_pri == max_pri, "sleep_inheritor inheritor priority current is %d, should be %d", current_thread()->sched_pri, max_pri);
+
+					os_atomic_store(&info->synch, 0, relaxed);
+
+					lck_rw_lock(&info->rw_lock, type);
+					info->thread_inheritor = NULL;
+					wakeup_all_with_inheritor((event_t) &info->thread_inheritor, THREAD_AWAKENED);
+					lck_rw_unlock(&info->rw_lock, type);
+					continue;
+				}
+			} else {
+				goto try_again;
+			}
+		}
+
+		read_random(&rand, sizeof(rand));
+		mod_rand = rand % 4;
+
+		wake_threads(&info->synch);
+		switch (mod_rand) {
+		case 0:
+			lck_rw_sleep_with_inheritor(&info->rw_lock, LCK_SLEEP_DEFAULT, (event_t) &info->thread_inheritor, info->thread_inheritor, THREAD_UNINT | THREAD_WAIT_NOREPORT_USER, TIMEOUT_WAIT_FOREVER);
+			lck_rw_unlock(&info->rw_lock, type);
+			break;
+		case 1:
+			lck_rw_sleep_with_inheritor(&info->rw_lock, LCK_SLEEP_UNLOCK, (event_t) &info->thread_inheritor, info->thread_inheritor, THREAD_UNINT | THREAD_WAIT_NOREPORT_USER, TIMEOUT_WAIT_FOREVER);
+			break;
+		case 2:
+			lck_rw_sleep_with_inheritor(&info->rw_lock, LCK_SLEEP_SHARED, (event_t) &info->thread_inheritor, info->thread_inheritor, THREAD_UNINT | THREAD_WAIT_NOREPORT_USER, TIMEOUT_WAIT_FOREVER);
+			lck_rw_unlock(&info->rw_lock, LCK_RW_TYPE_SHARED);
+			break;
+		case 3:
+			lck_rw_sleep_with_inheritor(&info->rw_lock, LCK_SLEEP_EXCLUSIVE, (event_t) &info->thread_inheritor, info->thread_inheritor, THREAD_UNINT | THREAD_WAIT_NOREPORT_USER, TIMEOUT_WAIT_FOREVER);
+			lck_rw_unlock(&info->rw_lock, LCK_RW_TYPE_EXCLUSIVE);
+			break;
+		default:
+			panic("rand()mod4 returned %u (random %u)", mod_rand, rand);
+		}
+	}
+
+	assert(current_thread()->kern_promotion_schedpri == 0);
+	notify_waiter((struct synch_test_common *)info);
+
+	thread_terminate_self();
+}
+
+static void
+test_sleep_with_wake_all(struct info_sleep_inheritor_test *info, int prim_type)
+{
+	info->prim_type = prim_type;
+	info->synch = 0;
+	info->synch_value = info->head.nthreads;
+
+	info->thread_inheritor = NULL;
+
+	start_threads((thread_continue_t)thread_just_inheritor_do_work, (struct synch_test_common *)info, TRUE);
+	wait_all_thread((struct synch_test_common *)info);
+}
+
+static void
+test_sleep_with_wake_one(struct info_sleep_inheritor_test *info, int prim_type)
+{
+	info->prim_type = prim_type;
+
+	info->synch = 0;
+	info->synch_value = info->head.nthreads;
+	info->value = 0;
+	info->handoff_failure = 0;
+	info->thread_inheritor = NULL;
+
+	start_threads((thread_continue_t)thread_inheritor_like_mutex, (struct synch_test_common *)info, FALSE);
+	wait_all_thread((struct synch_test_common *)info);
+
+	T_ASSERT(info->value == (int)info->head.nthreads, "value protected by sleep");
+	T_ASSERT(info->handoff_failure == 1, "handoff failures");
+}
+
+static void
+test_change_sleep_inheritor(struct info_sleep_inheritor_test *info, int prim_type)
+{
+	info->prim_type = prim_type;
+
+	info->thread_inheritor = NULL;
+	info->steal_pri = 0;
+	info->synch = 0;
+	info->synch_value = info->head.nthreads;
+
+	start_threads((thread_continue_t)thread_steal_work, (struct synch_test_common *)info, FALSE);
+	wait_all_thread((struct synch_test_common *)info);
+}
+
+static void
+test_no_inheritor(struct info_sleep_inheritor_test *info, int prim_type)
+{
+	info->prim_type = prim_type;
+	info->synch = 0;
+	info->synch_value = info->head.nthreads;
+
+	info->thread_inheritor = NULL;
+	info->value = info->head.nthreads;
+
+	start_threads((thread_continue_t)thread_no_inheritor_work, (struct synch_test_common *)info, FALSE);
+	wait_all_thread((struct synch_test_common *)info);
+}
+
+static void
+test_rw_lock(struct info_sleep_inheritor_test *info)
+{
+	info->thread_inheritor = NULL;
+	info->value = info->head.nthreads;
+	info->synch = 0;
+	info->synch_value = info->head.nthreads;
+
+	start_threads((thread_continue_t)thread_rw_work, (struct synch_test_common *)info, FALSE);
+	wait_all_thread((struct synch_test_common *)info);
+}
+
+static void
+test_mtx_lock(struct info_sleep_inheritor_test *info)
+{
+	info->thread_inheritor = NULL;
+	info->value = info->head.nthreads;
+	info->synch = 0;
+	info->synch_value = info->head.nthreads;
+
+	start_threads((thread_continue_t)thread_mtx_work, (struct synch_test_common *)info, FALSE);
+	wait_all_thread((struct synch_test_common *)info);
+}
+
+kern_return_t
+ts_kernel_sleep_inheritor_test(void)
+{
+	struct info_sleep_inheritor_test info = {};
+
+	init_synch_test_common((struct synch_test_common *)&info, NUM_THREADS);
+
+	lck_attr_t* lck_attr = lck_attr_alloc_init();
+	lck_grp_attr_t* lck_grp_attr = lck_grp_attr_alloc_init();
+	lck_grp_t* lck_grp = lck_grp_alloc_init("test sleep_inheritor", lck_grp_attr);
+
+	lck_mtx_init(&info.mtx_lock, lck_grp, lck_attr);
+	lck_rw_init(&info.rw_lock, lck_grp, lck_attr);
+
+	/*
+	 * Testing lck_mtx_sleep_with_inheritor and wakeup_all_with_inheritor
+	 */
+	T_LOG("Testing mtx sleep with inheritor and wake_all_with_inheritor");
+	test_sleep_with_wake_all(&info, MTX_LOCK);
+
+	/*
+	 * Testing rw_mtx_sleep_with_inheritor and wakeup_all_with_inheritor
+	 */
+	T_LOG("Testing rw sleep with inheritor and wake_all_with_inheritor");
+	test_sleep_with_wake_all(&info, RW_LOCK);
+
+	/*
+	 * Testing lck_mtx_sleep_with_inheritor and wakeup_one_with_inheritor
+	 */
+	T_LOG("Testing mtx sleep with inheritor and wake_one_with_inheritor");
+	test_sleep_with_wake_one(&info, MTX_LOCK);
+
+	/*
+	 * Testing lck_rw_sleep_with_inheritor and wakeup_one_with_inheritor
+	 */
+	T_LOG("Testing rw sleep with inheritor and wake_one_with_inheritor");
+	test_sleep_with_wake_one(&info, RW_LOCK);
+
+	/*
+	 * Testing lck_mtx_sleep_with_inheritor and wakeup_all_with_inheritor
+	 * and change_sleep_inheritor
+	 */
+	T_LOG("Testing change_sleep_inheritor with mxt sleep");
+	test_change_sleep_inheritor(&info, MTX_LOCK);
+
+	/*
+	 * Testing lck_mtx_sleep_with_inheritor and wakeup_all_with_inheritor
+	 * and change_sleep_inheritor
+	 */
+	T_LOG("Testing change_sleep_inheritor with rw sleep");
+	test_change_sleep_inheritor(&info, RW_LOCK);
+
+	/*
+	 * Testing lck_mtx_sleep_with_inheritor and wakeup_all_with_inheritor
+	 * with inheritor NULL
+	 */
+	T_LOG("Testing inheritor NULL");
+	test_no_inheritor(&info, MTX_LOCK);
+
+	/*
+	 * Testing lck_mtx_sleep_with_inheritor and wakeup_all_with_inheritor
+	 * with inheritor NULL
+	 */
+	T_LOG("Testing inheritor NULL");
+	test_no_inheritor(&info, RW_LOCK);
+
+	/*
+	 * Testing mtx locking combinations
+	 */
+	T_LOG("Testing mtx locking combinations");
+	test_mtx_lock(&info);
+
+	/*
+	 * Testing rw locking combinations
+	 */
+	T_LOG("Testing rw locking combinations");
+	test_rw_lock(&info);
+
+	destroy_synch_test_common((struct synch_test_common *)&info);
+
+	lck_attr_free(lck_attr);
+	lck_grp_attr_free(lck_grp_attr);
+	lck_rw_destroy(&info.rw_lock, lck_grp);
+	lck_mtx_destroy(&info.mtx_lock, lck_grp);
+	lck_grp_free(lck_grp);
+
+	return KERN_SUCCESS;
+}
+
+static void
+thread_gate_aggressive(
+	void *args,
+	__unused wait_result_t wr)
+{
+	struct info_sleep_inheritor_test *info = (struct info_sleep_inheritor_test*) args;
+	uint my_pri = current_thread()->sched_pri;
+
+	T_LOG("Started thread pri %d %p", my_pri, current_thread());
+
+	primitive_lock(info);
+	if (info->thread_inheritor == NULL) {
+		info->thread_inheritor = current_thread();
+		primitive_gate_assert(info, GATE_ASSERT_OPEN);
+		primitive_gate_close(info);
+		exclude_current_waiter((struct synch_test_common *)info);
+
+		primitive_unlock(info);
+
+		wait_threads(&info->synch, info->synch_value - 2);
+		wait_for_waiters((struct synch_test_common *)info);
+		T_LOG("Thread pri %d first to run %p", my_pri, current_thread());
+
+		primitive_lock(info);
+		if (info->thread_inheritor == current_thread()) {
+			primitive_gate_open(info);
+		}
+	} else {
+		if (info->steal_pri == 0) {
+			info->steal_pri = my_pri;
+			info->thread_inheritor = current_thread();
+			primitive_gate_steal(info);
+			exclude_current_waiter((struct synch_test_common *)info);
+
+			primitive_unlock(info);
+			wait_threads(&info->synch, info->synch_value - 2);
+
+			T_LOG("Thread pri %d stole push %p", my_pri, current_thread());
+			wait_for_waiters((struct synch_test_common *)info);
+			T_ASSERT((uint) current_thread()->sched_pri == info->steal_pri, "gate keeper priority current is %d, should be %d", current_thread()->sched_pri, info->steal_pri);
+
+			primitive_lock(info);
+			primitive_gate_open(info);
+		} else {
+			if (my_pri > info->steal_pri) {
+				info->steal_pri = my_pri;
+			}
+			wake_threads(&info->synch);
+			primitive_gate_wait(info);
+			exclude_current_waiter((struct synch_test_common *)info);
+		}
+	}
+	primitive_unlock(info);
+
+	assert(current_thread()->kern_promotion_schedpri == 0);
+	notify_waiter((struct synch_test_common *)info);
+
+	thread_terminate_self();
+}
+
+static void
+thread_gate_like_mutex(
+	void *args,
+	__unused wait_result_t wr)
+{
+	gate_wait_result_t wait;
+	kern_return_t ret;
+	uint my_pri = current_thread()->sched_pri;
+
+	struct info_sleep_inheritor_test *info = (struct info_sleep_inheritor_test*) args;
+
+	T_LOG("Started thread pri %d %p", my_pri, current_thread());
+
+	/*
+	 * spin here to start concurrently
+	 */
+	wake_threads(&info->synch);
+	wait_threads(&info->synch, info->synch_value);
+
+	primitive_lock(info);
+
+	if (primitive_gate_try_close(info) != KERN_SUCCESS) {
+		wait = primitive_gate_wait(info);
+		T_ASSERT(wait == GATE_HANDOFF, "gate_wait return");
+	}
+
+	primitive_gate_assert(info, GATE_ASSERT_HELD);
+
+	primitive_unlock(info);
+
+	IOSleep(100);
+	info->value++;
+
+	primitive_lock(info);
+
+	ret = primitive_gate_handoff(info, GATE_HANDOFF_DEFAULT);
+	if (ret == KERN_NOT_WAITING) {
+		T_ASSERT(info->handoff_failure == 0, "handoff failures");
+		primitive_gate_handoff(info, GATE_HANDOFF_OPEN_IF_NO_WAITERS);
+		info->handoff_failure++;
+	}
+
+	primitive_unlock(info);
+	notify_waiter((struct synch_test_common *)info);
+
+	thread_terminate_self();
+}
+
+static void
+thread_just_one_do_work(
+	void *args,
+	__unused wait_result_t wr)
+{
+	struct info_sleep_inheritor_test *info = (struct info_sleep_inheritor_test*) args;
+	uint my_pri = current_thread()->sched_pri;
+	uint max_pri;
+
+	T_LOG("Started thread pri %d %p", my_pri, current_thread());
+
+	primitive_lock(info);
+check_again:
+	if (info->work_to_do) {
+		if (primitive_gate_try_close(info) == KERN_SUCCESS) {
+			primitive_gate_assert(info, GATE_ASSERT_HELD);
+			primitive_unlock(info);
+
+			T_LOG("Thread pri %d acquired the gate %p", my_pri, current_thread());
+			wait_threads(&info->synch, info->synch_value - 1);
+			wait_for_waiters((struct synch_test_common *)info);
+			max_pri = get_max_pri((struct synch_test_common *) info);
+			T_ASSERT((uint) current_thread()->sched_pri == max_pri, "gate owner priority current is %d, should be %d", current_thread()->sched_pri, max_pri);
+			os_atomic_store(&info->synch, 0, relaxed);
+
+			primitive_lock(info);
+			info->work_to_do = FALSE;
+			primitive_gate_open(info);
+		} else {
+			primitive_gate_assert(info, GATE_ASSERT_CLOSED);
+			wake_threads(&info->synch);
+			primitive_gate_wait(info);
+			goto check_again;
+		}
+	}
+	primitive_unlock(info);
+
+	assert(current_thread()->kern_promotion_schedpri == 0);
+	notify_waiter((struct synch_test_common *)info);
+	thread_terminate_self();
+}
+
+static void
+test_gate_push(struct info_sleep_inheritor_test *info, int prim_type)
+{
+	info->prim_type = prim_type;
+
+	primitive_gate_init(info);
+	info->work_to_do = TRUE;
+	info->synch = 0;
+	info->synch_value = NUM_THREADS;
+
+	start_threads((thread_continue_t)thread_just_one_do_work, (struct synch_test_common *) info, TRUE);
+	wait_all_thread((struct synch_test_common *)info);
+
+	primitive_gate_destroy(info);
+}
+
+static void
+test_gate_handoff(struct info_sleep_inheritor_test *info, int prim_type)
+{
+	info->prim_type = prim_type;
+
+	primitive_gate_init(info);
+
+	info->synch = 0;
+	info->synch_value = NUM_THREADS;
+	info->value = 0;
+	info->handoff_failure = 0;
+
+	start_threads((thread_continue_t)thread_gate_like_mutex, (struct synch_test_common *)info, false);
+	wait_all_thread((struct synch_test_common *)info);
+
+	T_ASSERT(info->value == NUM_THREADS, "value protected by gate");
+	T_ASSERT(info->handoff_failure == 1, "handoff failures");
+
+	primitive_gate_destroy(info);
+}
+
+static void
+test_gate_steal(struct info_sleep_inheritor_test *info, int prim_type)
+{
+	info->prim_type = prim_type;
+
+	primitive_gate_init(info);
+
+	info->synch = 0;
+	info->synch_value = NUM_THREADS;
+	info->thread_inheritor = NULL;
+	info->steal_pri = 0;
+
+	start_threads((thread_continue_t)thread_gate_aggressive, (struct synch_test_common *)info, FALSE);
+	wait_all_thread((struct synch_test_common *)info);
+
+	primitive_gate_destroy(info);
+}
+
+kern_return_t
+ts_kernel_gate_test(void)
+{
+	struct info_sleep_inheritor_test info = {};
+
+	T_LOG("Testing gate primitive");
+
+	init_synch_test_common((struct synch_test_common *)&info, NUM_THREADS);
+
+	lck_attr_t* lck_attr = lck_attr_alloc_init();
+	lck_grp_attr_t* lck_grp_attr = lck_grp_attr_alloc_init();
+	lck_grp_t* lck_grp = lck_grp_alloc_init("test gate", lck_grp_attr);
+
+	lck_mtx_init(&info.mtx_lock, lck_grp, lck_attr);
+	lck_rw_init(&info.rw_lock, lck_grp, lck_attr);
+
+	/*
+	 * Testing the priority inherited by the keeper
+	 * lck_mtx_gate_try_close, lck_mtx_gate_open, lck_mtx_gate_wait
+	 */
+	T_LOG("Testing gate push, lck");
+	test_gate_push(&info, MTX_LOCK);
+
+	T_LOG("Testing gate push, rw");
+	test_gate_push(&info, RW_LOCK);
+
+	/*
+	 * Testing the handoff
+	 * lck_mtx_gate_wait, lck_mtx_gate_handoff
+	 */
+	T_LOG("Testing gate handoff, lck");
+	test_gate_handoff(&info, MTX_LOCK);
+
+	T_LOG("Testing gate handoff, rw");
+	test_gate_handoff(&info, RW_LOCK);
+
+	/*
+	 * Testing the steal
+	 * lck_mtx_gate_close, lck_mtx_gate_wait, lck_mtx_gate_steal, lck_mtx_gate_handoff
+	 */
+	T_LOG("Testing gate steal, lck");
+	test_gate_steal(&info, MTX_LOCK);
+
+	T_LOG("Testing gate steal, rw");
+	test_gate_steal(&info, RW_LOCK);
+
+	destroy_synch_test_common((struct synch_test_common *)&info);
+
+	lck_attr_free(lck_attr);
+	lck_grp_attr_free(lck_grp_attr);
+	lck_mtx_destroy(&info.mtx_lock, lck_grp);
+	lck_grp_free(lck_grp);
+
+	return KERN_SUCCESS;
+}
+
+#define NUM_THREAD_CHAIN 6
+
+struct turnstile_chain_test {
+	struct synch_test_common head;
+	lck_mtx_t mtx_lock;
+	int synch_value;
+	int synch;
+	int synch2;
+	gate_t gates[NUM_THREAD_CHAIN];
+};
+
+static void
+thread_sleep_gate_chain_work(
+	void *args,
+	__unused wait_result_t wr)
+{
+	struct turnstile_chain_test *info = (struct turnstile_chain_test*) args;
+	thread_t self = current_thread();
+	uint my_pri = self->sched_pri;
+	uint max_pri;
+	uint i;
+	thread_t inheritor = NULL, woken_up;
+	event_t wait_event, wake_event;
+	kern_return_t ret;
+
+	T_LOG("Started thread pri %d %p", my_pri, self);
+
+	/*
+	 * Need to use the threads ids, wait for all of them to be populated
+	 */
+
+	while (os_atomic_load(&info->head.threads[info->head.nthreads - 1], acquire) == NULL) {
+		IOSleep(10);
+	}
+
+	max_pri = get_max_pri((struct synch_test_common *) info);
+
+	for (i = 0; i < info->head.nthreads; i = i + 2) {
+		// even threads will close a gate
+		if (info->head.threads[i] == self) {
+			lck_mtx_lock(&info->mtx_lock);
+			lck_mtx_gate_close(&info->mtx_lock, &info->gates[i]);
+			lck_mtx_unlock(&info->mtx_lock);
+			break;
+		}
+	}
+
+	wake_threads(&info->synch2);
+	wait_threads(&info->synch2, info->synch_value);
+
+	if (self == os_atomic_load(&info->head.threads[0], acquire)) {
+		wait_threads(&info->synch, info->synch_value - 1);
+		wait_for_waiters((struct synch_test_common *)info);
+
+		T_ASSERT((uint) self->sched_pri == max_pri, "sleep_inheritor inheritor priority current is %d, should be %d", self->sched_pri, max_pri);
+
+		lck_mtx_lock(&info->mtx_lock);
+		lck_mtx_gate_open(&info->mtx_lock, &info->gates[0]);
+		lck_mtx_unlock(&info->mtx_lock);
+	} else {
+		wait_event = NULL;
+		wake_event = NULL;
+		for (i = 0; i < info->head.nthreads; i++) {
+			if (info->head.threads[i] == self) {
+				inheritor = info->head.threads[i - 1];
+				wait_event = (event_t) &info->head.threads[i - 1];
+				wake_event = (event_t) &info->head.threads[i];
+				break;
+			}
+		}
+		assert(wait_event != NULL);
+
+		lck_mtx_lock(&info->mtx_lock);
+		wake_threads(&info->synch);
+
+		if (i % 2 != 0) {
+			lck_mtx_gate_wait(&info->mtx_lock, &info->gates[i - 1], LCK_SLEEP_UNLOCK, THREAD_UNINT | THREAD_WAIT_NOREPORT_USER, TIMEOUT_WAIT_FOREVER);
+			T_ASSERT((uint) self->sched_pri == max_pri, "sleep_inheritor inheritor priority current is %d, should be %d", self->sched_pri, max_pri);
+
+			ret = wakeup_one_with_inheritor(wake_event, THREAD_AWAKENED, LCK_WAKE_DO_NOT_TRANSFER_PUSH, &woken_up);
+			if (ret == KERN_SUCCESS) {
+				T_ASSERT(i != (info->head.nthreads - 1), "thread id");
+				T_ASSERT(woken_up == info->head.threads[i + 1], "wakeup_one_with_inheritor woke next");
+			} else {
+				T_ASSERT(i == (info->head.nthreads - 1), "thread id");
+			}
+
+			// i am still the inheritor, wake all to drop inheritership
+			ret = wakeup_all_with_inheritor(wake_event, LCK_WAKE_DEFAULT);
+			T_ASSERT(ret == KERN_NOT_WAITING, "waiters on event");
+		} else {
+			// I previously closed a gate
+			lck_mtx_sleep_with_inheritor(&info->mtx_lock, LCK_SLEEP_UNLOCK, wait_event, inheritor, THREAD_UNINT | THREAD_WAIT_NOREPORT_USER, TIMEOUT_WAIT_FOREVER);
+			T_ASSERT((uint) self->sched_pri == max_pri, "sleep_inheritor inheritor priority current is %d, should be %d", self->sched_pri, max_pri);
+
+			lck_mtx_lock(&info->mtx_lock);
+			lck_mtx_gate_open(&info->mtx_lock, &info->gates[i]);
+			lck_mtx_unlock(&info->mtx_lock);
+		}
+	}
+
+	assert(current_thread()->kern_promotion_schedpri == 0);
+	notify_waiter((struct synch_test_common *)info);
+
+	thread_terminate_self();
+}
+
+static void
+thread_gate_chain_work(
+	void *args,
+	__unused wait_result_t wr)
+{
+	struct turnstile_chain_test *info = (struct turnstile_chain_test*) args;
+	thread_t self = current_thread();
+	uint my_pri = self->sched_pri;
+	uint max_pri;
+	uint i;
+	T_LOG("Started thread pri %d %p", my_pri, self);
+
+
+	/*
+	 * Need to use the threads ids, wait for all of them to be populated
+	 */
+	while (os_atomic_load(&info->head.threads[info->head.nthreads - 1], acquire) == NULL) {
+		IOSleep(10);
+	}
+
+	max_pri = get_max_pri((struct synch_test_common *) info);
+
+	for (i = 0; i < info->head.nthreads; i++) {
+		if (info->head.threads[i] == self) {
+			lck_mtx_lock(&info->mtx_lock);
+			lck_mtx_gate_close(&info->mtx_lock, &info->gates[i]);
+			lck_mtx_unlock(&info->mtx_lock);
+			break;
+		}
+	}
+	assert(i != info->head.nthreads);
+
+	wake_threads(&info->synch2);
+	wait_threads(&info->synch2, info->synch_value);
+
+	if (self == os_atomic_load(&info->head.threads[0], acquire)) {
+		wait_threads(&info->synch, info->synch_value - 1);
+
+		wait_for_waiters((struct synch_test_common *)info);
+
+		T_ASSERT((uint) self->sched_pri == max_pri, "sleep_inheritor inheritor priority current is %d, should be %d", self->sched_pri, max_pri);
+
+		lck_mtx_lock(&info->mtx_lock);
+		lck_mtx_gate_open(&info->mtx_lock, &info->gates[0]);
+		lck_mtx_unlock(&info->mtx_lock);
+	} else {
+		lck_mtx_lock(&info->mtx_lock);
+		wake_threads(&info->synch);
+		lck_mtx_gate_wait(&info->mtx_lock, &info->gates[i - 1], LCK_SLEEP_UNLOCK, THREAD_UNINT | THREAD_WAIT_NOREPORT_USER, TIMEOUT_WAIT_FOREVER);
+
+		T_ASSERT((uint) self->sched_pri == max_pri, "sleep_inheritor inheritor priority current is %d, should be %d", self->sched_pri, max_pri);
+
+		lck_mtx_lock(&info->mtx_lock);
+		lck_mtx_gate_open(&info->mtx_lock, &info->gates[i]);
+		lck_mtx_unlock(&info->mtx_lock);
+	}
+
+	assert(current_thread()->kern_promotion_schedpri == 0);
+	notify_waiter((struct synch_test_common *)info);
+
+	thread_terminate_self();
+}
+
+static void
+thread_sleep_chain_work(
+	void *args,
+	__unused wait_result_t wr)
+{
+	struct turnstile_chain_test *info = (struct turnstile_chain_test*) args;
+	thread_t self = current_thread();
+	uint my_pri = self->sched_pri;
+	uint max_pri;
+	event_t wait_event, wake_event;
+	uint i;
+	thread_t inheritor = NULL, woken_up = NULL;
+	kern_return_t ret;
+
+	T_LOG("Started thread pri %d %p", my_pri, self);
+
+	/*
+	 * Need to use the threads ids, wait for all of them to be populated
+	 */
+	while (os_atomic_load(&info->head.threads[info->head.nthreads - 1], acquire) == NULL) {
+		IOSleep(10);
+	}
+
+	max_pri = get_max_pri((struct synch_test_common *) info);
+
+	if (self == os_atomic_load(&info->head.threads[0], acquire)) {
+		wait_threads(&info->synch, info->synch_value - 1);
+
+		wait_for_waiters((struct synch_test_common *)info);
+
+		T_ASSERT((uint) self->sched_pri == max_pri, "sleep_inheritor inheritor priority current is %d, should be %d", self->sched_pri, max_pri);
+
+		ret = wakeup_one_with_inheritor((event_t) &info->head.threads[0], THREAD_AWAKENED, LCK_WAKE_DO_NOT_TRANSFER_PUSH, &woken_up);
+		T_ASSERT(ret == KERN_SUCCESS, "wakeup_one_with_inheritor woke next");
+		T_ASSERT(woken_up == info->head.threads[1], "thread woken up");
+
+		// i am still the inheritor, wake all to drop inheritership
+		ret = wakeup_all_with_inheritor((event_t) &info->head.threads[0], LCK_WAKE_DEFAULT);
+		T_ASSERT(ret == KERN_NOT_WAITING, "waiters on event");
+	} else {
+		wait_event = NULL;
+		wake_event = NULL;
+		for (i = 0; i < info->head.nthreads; i++) {
+			if (info->head.threads[i] == self) {
+				inheritor = info->head.threads[i - 1];
+				wait_event = (event_t) &info->head.threads[i - 1];
+				wake_event = (event_t) &info->head.threads[i];
+				break;
+			}
+		}
+
+		assert(wait_event != NULL);
+		lck_mtx_lock(&info->mtx_lock);
+		wake_threads(&info->synch);
+
+		lck_mtx_sleep_with_inheritor(&info->mtx_lock, LCK_SLEEP_UNLOCK, wait_event, inheritor, THREAD_UNINT | THREAD_WAIT_NOREPORT_USER, TIMEOUT_WAIT_FOREVER);
+
+		T_ASSERT((uint) self->sched_pri == max_pri, "sleep_inheritor inheritor priority current is %d, should be %d", self->sched_pri, max_pri);
+
+		ret = wakeup_one_with_inheritor(wake_event, THREAD_AWAKENED, LCK_WAKE_DO_NOT_TRANSFER_PUSH, &woken_up);
+		if (ret == KERN_SUCCESS) {
+			T_ASSERT(i != (info->head.nthreads - 1), "thread id");
+			T_ASSERT(woken_up == info->head.threads[i + 1], "wakeup_one_with_inheritor woke next");
+		} else {
+			T_ASSERT(i == (info->head.nthreads - 1), "thread id");
+		}
+
+		// i am still the inheritor, wake all to drop inheritership
+		ret = wakeup_all_with_inheritor(wake_event, LCK_WAKE_DEFAULT);
+		T_ASSERT(ret == KERN_NOT_WAITING, "waiters on event");
+	}
+
+	assert(current_thread()->kern_promotion_schedpri == 0);
+	notify_waiter((struct synch_test_common *)info);
+
+	thread_terminate_self();
+}
+
+static void
+test_sleep_chain(struct turnstile_chain_test *info)
+{
+	info->synch = 0;
+	info->synch_value = info->head.nthreads;
+
+	start_threads((thread_continue_t)thread_sleep_chain_work, (struct synch_test_common *)info, FALSE);
+	wait_all_thread((struct synch_test_common *)info);
+}
+
+static void
+test_gate_chain(struct turnstile_chain_test *info)
+{
+	info->synch = 0;
+	info->synch2 = 0;
+	info->synch_value = info->head.nthreads;
+
+	start_threads((thread_continue_t)thread_gate_chain_work, (struct synch_test_common *)info, FALSE);
+	wait_all_thread((struct synch_test_common *)info);
+}
+
+static void
+test_sleep_gate_chain(struct turnstile_chain_test *info)
+{
+	info->synch = 0;
+	info->synch2 = 0;
+	info->synch_value = info->head.nthreads;
+
+	start_threads((thread_continue_t)thread_sleep_gate_chain_work, (struct synch_test_common *)info, FALSE);
+	wait_all_thread((struct synch_test_common *)info);
+}
+
+kern_return_t
+ts_kernel_turnstile_chain_test(void)
+{
+	struct turnstile_chain_test info = {};
+	int i;
+
+	init_synch_test_common((struct synch_test_common *)&info, NUM_THREAD_CHAIN);
+	lck_attr_t* lck_attr = lck_attr_alloc_init();
+	lck_grp_attr_t* lck_grp_attr = lck_grp_attr_alloc_init();
+	lck_grp_t* lck_grp = lck_grp_alloc_init("test gate", lck_grp_attr);
+
+	lck_mtx_init(&info.mtx_lock, lck_grp, lck_attr);
+	for (i = 0; i < NUM_THREAD_CHAIN; i++) {
+		lck_mtx_gate_init(&info.mtx_lock, &info.gates[i]);
+	}
+
+	T_LOG("Testing sleep chain, lck");
+	test_sleep_chain(&info);
+
+	T_LOG("Testing gate chain, lck");
+	test_gate_chain(&info);
+
+	T_LOG("Testing sleep and gate chain, lck");
+	test_sleep_gate_chain(&info);
+
+	destroy_synch_test_common((struct synch_test_common *)&info);
+	for (i = 0; i < NUM_THREAD_CHAIN; i++) {
+		lck_mtx_gate_destroy(&info.mtx_lock, &info.gates[i]);
+	}
+	lck_attr_free(lck_attr);
+	lck_grp_attr_free(lck_grp_attr);
+	lck_mtx_destroy(&info.mtx_lock, lck_grp);
+	lck_grp_free(lck_grp);
+
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+ts_kernel_timingsafe_bcmp_test(void)
+{
+	int i, buf_size;
+	char *buf = NULL;
+
+	// empty
+	T_ASSERT(timingsafe_bcmp(NULL, NULL, 0) == 0, NULL);
+	T_ASSERT(timingsafe_bcmp("foo", "foo", 0) == 0, NULL);
+	T_ASSERT(timingsafe_bcmp("foo", "bar", 0) == 0, NULL);
+
+	// equal
+	T_ASSERT(timingsafe_bcmp("foo", "foo", strlen("foo")) == 0, NULL);
+
+	// unequal
+	T_ASSERT(timingsafe_bcmp("foo", "bar", strlen("foo")) == 1, NULL);
+	T_ASSERT(timingsafe_bcmp("foo", "goo", strlen("foo")) == 1, NULL);
+	T_ASSERT(timingsafe_bcmp("foo", "fpo", strlen("foo")) == 1, NULL);
+	T_ASSERT(timingsafe_bcmp("foo", "fop", strlen("foo")) == 1, NULL);
+
+	// all possible bitwise differences
+	for (i = 1; i < 256; i += 1) {
+		unsigned char a = 0;
+		unsigned char b = (unsigned char)i;
+
+		T_ASSERT(timingsafe_bcmp(&a, &b, sizeof(a)) == 1, NULL);
+	}
+
+	// large
+	buf_size = 1024 * 16;
+	buf = kalloc(buf_size);
+	T_EXPECT_NOTNULL(buf, "kalloc of buf");
+
+	read_random(buf, buf_size);
+	T_ASSERT(timingsafe_bcmp(buf, buf, buf_size) == 0, NULL);
+	T_ASSERT(timingsafe_bcmp(buf, buf + 1, buf_size - 1) == 1, NULL);
+	T_ASSERT(timingsafe_bcmp(buf, buf + 128, 128) == 1, NULL);
+
+	memcpy(buf + 128, buf, 128);
+	T_ASSERT(timingsafe_bcmp(buf, buf + 128, 128) == 0, NULL);
+
+	kfree(buf, buf_size);
+
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+kprintf_hhx_test(void)
+{
+	printf("POST hhx test %hx%hx%hx%hx %hhx%hhx%hhx%hhx - %llx",
+	    (unsigned short)0xfeed, (unsigned short)0xface,
+	    (unsigned short)0xabad, (unsigned short)0xcafe,
+	    (unsigned char)'h', (unsigned char)'h', (unsigned char)'x',
+	    (unsigned char)'!',
+	    0xfeedfaceULL);
+	return KERN_SUCCESS;
+}

@@ -29,7 +29,7 @@ EXPINC_SUBDIRS = ${INSTINC_SUBDIRS}
 # Kernel.framework/Headers/IOKit AND Kernel.framework/PrivateHeaders/IOKit.
 # This is so the files with #ifdef ...PRIVATE portions can be processed.
 # xnu/README documents the INSTALL* and EXPORT_MI_DIR lists.
-ALL_HEADERS = $(shell (cd $(SOURCE); echo *.h))
+ALL_HEADERS = $(notdir $(wildcard $(SOURCE)*.h))
 
 # Do not install these headers (anywhere).
 NOT_EXPORT_HEADERS = IOInterruptAccountingPrivate.h
@@ -44,10 +44,11 @@ NOT_KF_MI_HEADERS  = $(NOT_EXPORT_HEADERS)			\
 		     IOKernelReporters.h			\
 		     IOInterruptAccounting.h
 
+
 # These should be additionally installed in IOKit.framework's public Headers
 INSTALL_MI_LIST	= IOBSD.h IOKitKeys.h IOKitServer.h IOReturn.h	    \
 		  IOSharedLock.h IOTypes.h OSMessageNotification.h  \
-		  IODataQueueShared.h IOMessage.h
+		  IODataQueueShared.h IOMessage.h IORPC.h IOUserServer.h
 
 # These should be additionally installed in IOKit.framework's PrivateHeaders
 INSTALL_MI_LCL_LIST = IOKitKeysPrivate.h IOHibernatePrivate.h   \

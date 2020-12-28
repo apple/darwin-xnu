@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -86,33 +86,36 @@
 #include <kern/arithmetic_128.h>
 #include <os/log.h>
 
-uint32_t	hz_tick_interval = 1;
+uint32_t        hz_tick_interval = 1;
+#if !HAS_CONTINUOUS_HWCLOCK
 static uint64_t has_monotonic_clock = 0;
+#endif
 
-decl_simple_lock_data(,clock_lock)
+decl_simple_lock_data(, clock_lock);
 lck_grp_attr_t * settime_lock_grp_attr;
 lck_grp_t * settime_lock_grp;
 lck_attr_t * settime_lock_attr;
 lck_mtx_t settime_lock;
 
-#define clock_lock()	\
-	simple_lock(&clock_lock)
+#define clock_lock()    \
+	simple_lock(&clock_lock, LCK_GRP_NULL)
 
-#define clock_unlock()	\
+#define clock_unlock()  \
 	simple_unlock(&clock_lock)
 
-#define clock_lock_init()	\
+#define clock_lock_init()       \
 	simple_lock_init(&clock_lock, 0)
 
 #ifdef kdp_simple_lock_is_acquired
-boolean_t kdp_clock_is_locked()
+boolean_t
+kdp_clock_is_locked()
 {
 	return kdp_simple_lock_is_acquired(&clock_lock);
 }
 #endif
 
 struct bintime {
-	time_t	sec;
+	time_t  sec;
 	uint64_t frac;
 };
 
@@ -123,8 +126,9 @@ bintime_addx(struct bintime *_bt, uint64_t _x)
 
 	_u = _bt->frac;
 	_bt->frac += _x;
-	if (_u > _bt->frac)
+	if (_u > _bt->frac) {
 		_bt->sec++;
+	}
 }
 
 static __inline void
@@ -134,14 +138,15 @@ bintime_subx(struct bintime *_bt, uint64_t _x)
 
 	_u = _bt->frac;
 	_bt->frac -= _x;
-	if (_u < _bt->frac)
+	if (_u < _bt->frac) {
 		_bt->sec--;
+	}
 }
 
 static __inline void
 bintime_addns(struct bintime *bt, uint64_t ns)
 {
-	bt->sec += ns/ (uint64_t)NSEC_PER_SEC;
+	bt->sec += ns / (uint64_t)NSEC_PER_SEC;
 	ns = ns % (uint64_t)NSEC_PER_SEC;
 	if (ns) {
 		/* 18446744073 = int(2^64 / NSEC_PER_SEC) */
@@ -153,7 +158,7 @@ bintime_addns(struct bintime *bt, uint64_t ns)
 static __inline void
 bintime_subns(struct bintime *bt, uint64_t ns)
 {
-	bt->sec -= ns/ (uint64_t)NSEC_PER_SEC;
+	bt->sec -= ns / (uint64_t)NSEC_PER_SEC;
 	ns = ns % (uint64_t)NSEC_PER_SEC;
 	if (ns) {
 		/* 18446744073 = int(2^64 / NSEC_PER_SEC) */
@@ -165,19 +170,20 @@ bintime_subns(struct bintime *bt, uint64_t ns)
 static __inline void
 bintime_addxns(struct bintime *bt, uint64_t a, int64_t xns)
 {
-	uint64_t uxns = (xns > 0)?(uint64_t )xns:(uint64_t)-xns;
+	uint64_t uxns = (xns > 0)?(uint64_t)xns:(uint64_t)-xns;
 	uint64_t ns = multi_overflow(a, uxns);
 	if (xns > 0) {
-		if (ns)
+		if (ns) {
 			bintime_addns(bt, ns);
+		}
 		ns = (a * uxns) / (uint64_t)NSEC_PER_SEC;
 		bintime_addx(bt, ns);
-	}
-	else{
-		if (ns)
+	} else {
+		if (ns) {
 			bintime_subns(bt, ns);
+		}
 		ns = (a * uxns) / (uint64_t)NSEC_PER_SEC;
-		bintime_subx(bt,ns);
+		bintime_subx(bt, ns);
 	}
 }
 
@@ -189,8 +195,9 @@ bintime_add(struct bintime *_bt, const struct bintime *_bt2)
 
 	_u = _bt->frac;
 	_bt->frac += _bt2->frac;
-	if (_u > _bt->frac)
+	if (_u > _bt->frac) {
 		_bt->sec++;
+	}
 	_bt->sec += _bt2->sec;
 }
 
@@ -201,15 +208,15 @@ bintime_sub(struct bintime *_bt, const struct bintime *_bt2)
 
 	_u = _bt->frac;
 	_bt->frac -= _bt2->frac;
-	if (_u < _bt->frac)
+	if (_u < _bt->frac) {
 		_bt->sec--;
+	}
 	_bt->sec -= _bt2->sec;
 }
 
 static __inline void
 clock2bintime(const clock_sec_t *secs, const clock_usec_t *microsecs, struct bintime *_bt)
 {
-
 	_bt->sec = *secs;
 	/* 18446744073709 = int(2^64 / 1000000) */
 	_bt->frac = *microsecs * (uint64_t)18446744073709LL;
@@ -218,7 +225,6 @@ clock2bintime(const clock_sec_t *secs, const clock_usec_t *microsecs, struct bin
 static __inline void
 bintime2usclock(const struct bintime *_bt, clock_sec_t *secs, clock_usec_t *microsecs)
 {
-
 	*secs = _bt->sec;
 	*microsecs = ((uint64_t)USEC_PER_SEC * (uint32_t)(_bt->frac >> 32)) >> 32;
 }
@@ -226,11 +232,11 @@ bintime2usclock(const struct bintime *_bt, clock_sec_t *secs, clock_usec_t *micr
 static __inline void
 bintime2nsclock(const struct bintime *_bt, clock_sec_t *secs, clock_usec_t *nanosecs)
 {
-
 	*secs = _bt->sec;
 	*nanosecs = ((uint64_t)NSEC_PER_SEC * (uint32_t)(_bt->frac >> 32)) >> 32;
 }
 
+#if !defined(HAS_CONTINUOUS_HWCLOCK)
 static __inline void
 bintime2absolutetime(const struct bintime *_bt, uint64_t *abs)
 {
@@ -240,13 +246,14 @@ bintime2absolutetime(const struct bintime *_bt, uint64_t *abs)
 }
 
 struct latched_time {
-        uint64_t monotonic_time_usec;
-        uint64_t mach_time;
+	uint64_t monotonic_time_usec;
+	uint64_t mach_time;
 };
 
 extern int
 kernel_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
 
+#endif
 /*
  *	Time of day (calendar) variables.
  *
@@ -255,19 +262,21 @@ kernel_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, s
  *	TOD <- bintime + delta*scale
  *
  *	where :
- * 	bintime is a cumulative offset that includes bootime and scaled time elapsed betweed bootime and last scale update.
+ *      bintime is a cumulative offset that includes bootime and scaled time elapsed betweed bootime and last scale update.
  *	delta is ticks elapsed since last scale update.
  *	scale is computed according to an adjustment provided by ntp_kern.
  */
 static struct clock_calend {
-	uint64_t		s_scale_ns; /* scale to apply for each second elapsed, it converts in ns */
-	int64_t			s_adj_nsx; /* additional adj to apply for each second elapsed, it is expressed in 64 bit frac of ns */
-	uint64_t		tick_scale_x; /* scale to apply for each tick elapsed, it converts in 64 bit frac of s */
-	uint64_t 		offset_count; /* abs time from which apply current scales */
-	struct bintime		offset; /* cumulative offset expressed in (sec, 64 bits frac of a second) */
-	struct bintime		bintime; /* cumulative offset (it includes bootime) expressed in (sec, 64 bits frac of a second) */
-	struct bintime		boottime; /* boot time expressed in (sec, 64 bits frac of a second) */
-	struct bintime		basesleep;
+	uint64_t                s_scale_ns; /* scale to apply for each second elapsed, it converts in ns */
+	int64_t                 s_adj_nsx; /* additional adj to apply for each second elapsed, it is expressed in 64 bit frac of ns */
+	uint64_t                tick_scale_x; /* scale to apply for each tick elapsed, it converts in 64 bit frac of s */
+	uint64_t                offset_count; /* abs time from which apply current scales */
+	struct bintime          offset; /* cumulative offset expressed in (sec, 64 bits frac of a second) */
+	struct bintime          bintime; /* cumulative offset (it includes bootime) expressed in (sec, 64 bits frac of a second) */
+	struct bintime          boottime; /* boot time expressed in (sec, 64 bits frac of a second) */
+#if !HAS_CONTINUOUS_HWCLOCK
+	struct bintime          basesleep;
+#endif
 } clock_calend;
 
 static uint64_t ticks_per_sec; /* ticks in a second (expressed in abs time) */
@@ -282,7 +291,7 @@ static void print_all_clock_variables_internal(const char *, struct clock_calend
 #define print_all_clock_variables_internal(...) do { } while (0)
 #endif
 
-#if	CONFIG_DTRACE
+#if     CONFIG_DTRACE
 
 
 /*
@@ -292,13 +301,13 @@ static void print_all_clock_variables_internal(const char *, struct clock_calend
  *
  *	The trick is to use a generation count and set the low bit when it is
  *	being updated/read; by doing this, we guarantee, through use of the
- *	hw_atomic functions, that the generation is incremented when the bit
+ *	os_atomic functions, that the generation is incremented when the bit
  *	is cleared atomically (by using a 1 bit add).
  */
 static struct unlocked_clock_calend {
-	struct clock_calend	calend;		/* copy of calendar */
-	uint32_t		gen;		/* generation count */
-} flipflop[ 2];
+	struct clock_calend     calend;         /* copy of calendar */
+	uint32_t                gen;            /* generation count */
+} flipflop[2];
 
 static void clock_track_calend_nowait(void);
 
@@ -311,22 +320,22 @@ void _clock_delay_until_deadline_with_leeway(uint64_t interval, uint64_t deadlin
 static uint64_t clock_boottime;
 static uint32_t clock_boottime_usec;
 
-#define TIME_ADD(rsecs, secs, rfrac, frac, unit)	\
-MACRO_BEGIN											\
-	if (((rfrac) += (frac)) >= (unit)) {			\
-		(rfrac) -= (unit);							\
-		(rsecs) += 1;								\
-	}												\
-	(rsecs) += (secs);								\
+#define TIME_ADD(rsecs, secs, rfrac, frac, unit)        \
+MACRO_BEGIN                                                                                     \
+	if (((rfrac) += (frac)) >= (unit)) {                    \
+	        (rfrac) -= (unit);                                                      \
+	        (rsecs) += 1;                                                           \
+	}                                                                                               \
+	(rsecs) += (secs);                                                              \
 MACRO_END
 
-#define TIME_SUB(rsecs, secs, rfrac, frac, unit)	\
-MACRO_BEGIN											\
-	if ((int)((rfrac) -= (frac)) < 0) {				\
-		(rfrac) += (unit);							\
-		(rsecs) -= 1;								\
-	}												\
-	(rsecs) -= (secs);								\
+#define TIME_SUB(rsecs, secs, rfrac, frac, unit)        \
+MACRO_BEGIN                                                                                     \
+	if ((int)((rfrac) -= (frac)) < 0) {                             \
+	        (rfrac) += (unit);                                                      \
+	        (rsecs) -= 1;                                                           \
+	}                                                                                               \
+	(rsecs) -= (secs);                                                              \
 MACRO_END
 
 /*
@@ -337,7 +346,6 @@ MACRO_END
 void
 clock_config(void)
 {
-
 	clock_lock_init();
 
 	settime_lock_grp_attr = lck_grp_attr_alloc_init();
@@ -374,7 +382,7 @@ clock_init(void)
 void
 clock_timebase_init(void)
 {
-	uint64_t	abstime;
+	uint64_t        abstime;
 
 	nanoseconds_to_absolutetime(NSEC_PER_SEC / 100, &abstime);
 	hz_tick_interval = (uint32_t)abstime;
@@ -391,14 +399,14 @@ kern_return_t
 mach_timebase_info_trap(
 	struct mach_timebase_info_trap_args *args)
 {
-	mach_vm_address_t 			out_info_addr = args->info;
-	mach_timebase_info_data_t	info = {};
+	mach_vm_address_t                       out_info_addr = args->info;
+	mach_timebase_info_data_t       info = {};
 
 	clock_timebase_info(&info);
 
-	copyout((void *)&info, out_info_addr, sizeof (info));
+	copyout((void *)&info, out_info_addr, sizeof(info));
 
-	return (KERN_SUCCESS);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -413,8 +421,8 @@ mach_timebase_info_trap(
  */
 void
 clock_get_calendar_microtime(
-	clock_sec_t		*secs,
-	clock_usec_t		*microsecs)
+	clock_sec_t             *secs,
+	clock_usec_t            *microsecs)
 {
 	clock_get_calendar_absolute_and_microtime(secs, microsecs, NULL);
 }
@@ -479,7 +487,7 @@ get_scale_factors_from_adj(int64_t adjustment, uint64_t* tick_scale_x, uint64_t*
 	 * Keep it as additional adjustment for the next sec.
 	 */
 	frac = (adjustment > 0)? ((uint32_t) adjustment) : -((uint32_t) (-adjustment));
-	*s_adj_nsx = (frac>0)? frac << 32 : -( (-frac) << 32);
+	*s_adj_nsx = (frac > 0)? frac << 32 : -((-frac) << 32);
 
 	return;
 }
@@ -506,18 +514,18 @@ scale_delta(uint64_t delta, uint64_t tick_scale_x, uint64_t s_scale_ns, int64_t 
 	 * s_adj_nsx -> additional adj expressed in 64 bit frac of ns to apply to each sec.
 	 */
 	if (delta > ticks_per_sec) {
-		sec = (delta/ticks_per_sec);
+		sec = (delta / ticks_per_sec);
 		new_ns = sec * s_scale_ns;
 		bintime_addns(&bt, new_ns);
 		if (s_adj_nsx) {
 			if (sec == 1) {
 				/* shortcut, no overflow can occur */
-				if (s_adj_nsx > 0)
-					bintime_addx(&bt, (uint64_t)s_adj_nsx/ (uint64_t)NSEC_PER_SEC);
-				else
-					bintime_subx(&bt, (uint64_t)-s_adj_nsx/ (uint64_t)NSEC_PER_SEC);
-			}
-			else{
+				if (s_adj_nsx > 0) {
+					bintime_addx(&bt, (uint64_t)s_adj_nsx / (uint64_t)NSEC_PER_SEC);
+				} else {
+					bintime_subx(&bt, (uint64_t)-s_adj_nsx / (uint64_t)NSEC_PER_SEC);
+				}
+			} else {
 				/*
 				 * s_adj_nsx is 64 bit frac of ns.
 				 * sec*s_adj_nsx might overflow in int64_t.
@@ -527,10 +535,10 @@ scale_delta(uint64_t delta, uint64_t tick_scale_x, uint64_t s_scale_ns, int64_t 
 			}
 		}
 		delta = (delta % ticks_per_sec);
-        }
+	}
 
 	over = multi_overflow(tick_scale_x, delta);
-	if(over){
+	if (over) {
 		bt.sec += over;
 	}
 
@@ -564,16 +572,17 @@ get_scaled_time(uint64_t now)
 
 static void
 clock_get_calendar_absolute_and_microtime_locked(
-	clock_sec_t		*secs,
-	clock_usec_t		*microsecs,
-	uint64_t    		*abstime)
+	clock_sec_t             *secs,
+	clock_usec_t            *microsecs,
+	uint64_t                *abstime)
 {
 	uint64_t now;
 	struct bintime bt;
 
 	now  = mach_absolute_time();
-	if (abstime)
+	if (abstime) {
 		*abstime = now;
+	}
 
 	bt = get_scaled_time(now);
 	bintime_add(&bt, &clock_calend.bintime);
@@ -582,16 +591,17 @@ clock_get_calendar_absolute_and_microtime_locked(
 
 static void
 clock_get_calendar_absolute_and_nanotime_locked(
-	clock_sec_t		*secs,
-	clock_usec_t		*nanosecs,
-	uint64_t    		*abstime)
+	clock_sec_t             *secs,
+	clock_usec_t            *nanosecs,
+	uint64_t                *abstime)
 {
 	uint64_t now;
 	struct bintime bt;
 
 	now  = mach_absolute_time();
-	if (abstime)
+	if (abstime) {
 		*abstime = now;
+	}
 
 	bt = get_scaled_time(now);
 	bintime_add(&bt, &clock_calend.bintime);
@@ -608,11 +618,11 @@ clock_get_calendar_absolute_and_nanotime_locked(
  */
 void
 clock_get_calendar_absolute_and_microtime(
-	clock_sec_t		*secs,
-	clock_usec_t		*microsecs,
-	uint64_t    		*abstime)
+	clock_sec_t             *secs,
+	clock_usec_t            *microsecs,
+	uint64_t                *abstime)
 {
-	spl_t			s;
+	spl_t                   s;
 
 	s = splclock();
 	clock_lock();
@@ -635,10 +645,10 @@ clock_get_calendar_absolute_and_microtime(
  */
 void
 clock_get_calendar_nanotime(
-	clock_sec_t		*secs,
-	clock_nsec_t		*nanosecs)
+	clock_sec_t             *secs,
+	clock_nsec_t            *nanosecs)
 {
-	spl_t			s;
+	spl_t                   s;
 
 	s = splclock();
 	clock_lock();
@@ -662,21 +672,21 @@ clock_get_calendar_nanotime(
  */
 void
 clock_gettimeofday(
-	clock_sec_t	*secs,
-	clock_usec_t	*microsecs)
+	clock_sec_t     *secs,
+	clock_usec_t    *microsecs)
 {
 	clock_gettimeofday_and_absolute_time(secs, microsecs, NULL);
 }
 
 void
 clock_gettimeofday_and_absolute_time(
-	clock_sec_t	*secs,
-	clock_usec_t	*microsecs,
-	uint64_t	*mach_time)
+	clock_sec_t     *secs,
+	clock_usec_t    *microsecs,
+	uint64_t        *mach_time)
 {
-	uint64_t		now;
-	spl_t			s;
-	struct bintime 	bt;
+	uint64_t                now;
+	spl_t                   s;
+	struct bintime  bt;
 
 	s = splclock();
 	clock_lock();
@@ -710,19 +720,19 @@ clock_gettimeofday_and_absolute_time(
  */
 void
 clock_set_calendar_microtime(
-	clock_sec_t		secs,
-	clock_usec_t		microsecs)
+	clock_sec_t             secs,
+	clock_usec_t            microsecs)
 {
-	uint64_t		absolutesys;
-	clock_sec_t		newsecs;
-	clock_sec_t		oldsecs;
-	clock_usec_t        	newmicrosecs;
-	clock_usec_t		oldmicrosecs;
-	uint64_t		commpage_value;
-	spl_t			s;
-	struct bintime		bt;
-	clock_sec_t		deltasecs;
-	clock_usec_t		deltamicrosecs;
+	uint64_t                absolutesys;
+	clock_sec_t             newsecs;
+	clock_sec_t             oldsecs;
+	clock_usec_t            newmicrosecs;
+	clock_usec_t            oldmicrosecs;
+	uint64_t                commpage_value;
+	spl_t                   s;
+	struct bintime          bt;
+	clock_sec_t             deltasecs;
+	clock_usec_t            deltamicrosecs;
 
 	newsecs = secs;
 	newmicrosecs = microsecs;
@@ -753,9 +763,9 @@ clock_set_calendar_microtime(
 #if DEVELOPMENT || DEBUG
 	if (g_should_log_clock_adjustments) {
 		os_log(OS_LOG_DEFAULT, "%s wall %lu s %d u computed with %llu abs\n",
-		       __func__, (unsigned long)oldsecs, oldmicrosecs, absolutesys);
+		    __func__, (unsigned long)oldsecs, oldmicrosecs, absolutesys);
 		os_log(OS_LOG_DEFAULT, "%s requested %lu s %d u\n",
-		       __func__,  (unsigned long)secs, microsecs );
+		    __func__, (unsigned long)secs, microsecs );
 	}
 #endif
 
@@ -865,7 +875,6 @@ clock_get_calendar_uptime(clock_sec_t *secs)
 void
 clock_update_calendar(void)
 {
-
 	uint64_t now, delta;
 	struct bintime bt;
 	spl_t s;
@@ -902,7 +911,7 @@ clock_update_calendar(void)
 		os_log(OS_LOG_DEFAULT, "%s adjustment %lld\n", __func__, adjustment);
 	}
 #endif
-	
+
 	/*
 	 * recomputing scale factors.
 	 */
@@ -917,13 +926,14 @@ clock_update_calendar(void)
 	clock_unlock();
 	splx(s);
 
-	print_all_clock_variables(__func__, NULL,NULL,NULL,NULL, &calend_cp);
+	print_all_clock_variables(__func__, NULL, NULL, NULL, NULL, &calend_cp);
 }
 
 
 #if DEVELOPMENT || DEBUG
 
-void print_all_clock_variables_internal(const char* func, struct clock_calend* clock_calend_cp)
+void
+print_all_clock_variables_internal(const char* func, struct clock_calend* clock_calend_cp)
 {
 	clock_sec_t     offset_secs;
 	clock_usec_t    offset_microsecs;
@@ -931,42 +941,46 @@ void print_all_clock_variables_internal(const char* func, struct clock_calend* c
 	clock_usec_t    bintime_microsecs;
 	clock_sec_t     bootime_secs;
 	clock_usec_t    bootime_microsecs;
-	
-	if (!g_should_log_clock_adjustments)
-                return;
+
+	if (!g_should_log_clock_adjustments) {
+		return;
+	}
 
 	bintime2usclock(&clock_calend_cp->offset, &offset_secs, &offset_microsecs);
 	bintime2usclock(&clock_calend_cp->bintime, &bintime_secs, &bintime_microsecs);
 	bintime2usclock(&clock_calend_cp->boottime, &bootime_secs, &bootime_microsecs);
 
 	os_log(OS_LOG_DEFAULT, "%s s_scale_ns %llu s_adj_nsx %lld tick_scale_x %llu offset_count %llu\n",
-	       func , clock_calend_cp->s_scale_ns, clock_calend_cp->s_adj_nsx,
-	       clock_calend_cp->tick_scale_x, clock_calend_cp->offset_count);
+	    func, clock_calend_cp->s_scale_ns, clock_calend_cp->s_adj_nsx,
+	    clock_calend_cp->tick_scale_x, clock_calend_cp->offset_count);
 	os_log(OS_LOG_DEFAULT, "%s offset.sec %ld offset.frac %llu offset_secs %lu offset_microsecs %d\n",
-	       func, clock_calend_cp->offset.sec, clock_calend_cp->offset.frac,
-	       (unsigned long)offset_secs, offset_microsecs);
+	    func, clock_calend_cp->offset.sec, clock_calend_cp->offset.frac,
+	    (unsigned long)offset_secs, offset_microsecs);
 	os_log(OS_LOG_DEFAULT, "%s bintime.sec %ld bintime.frac %llu bintime_secs %lu bintime_microsecs %d\n",
-	       func, clock_calend_cp->bintime.sec, clock_calend_cp->bintime.frac,
-	       (unsigned long)bintime_secs, bintime_microsecs);
+	    func, clock_calend_cp->bintime.sec, clock_calend_cp->bintime.frac,
+	    (unsigned long)bintime_secs, bintime_microsecs);
 	os_log(OS_LOG_DEFAULT, "%s bootime.sec %ld bootime.frac %llu bootime_secs %lu bootime_microsecs %d\n",
-	       func, clock_calend_cp->boottime.sec, clock_calend_cp->boottime.frac,
-	       (unsigned long)bootime_secs, bootime_microsecs);
+	    func, clock_calend_cp->boottime.sec, clock_calend_cp->boottime.frac,
+	    (unsigned long)bootime_secs, bootime_microsecs);
 
+#if !HAS_CONTINUOUS_HWCLOCK
 	clock_sec_t     basesleep_secs;
-        clock_usec_t    basesleep_microsecs;
-	
+	clock_usec_t    basesleep_microsecs;
+
 	bintime2usclock(&clock_calend_cp->basesleep, &basesleep_secs, &basesleep_microsecs);
 	os_log(OS_LOG_DEFAULT, "%s basesleep.sec %ld basesleep.frac %llu basesleep_secs %lu basesleep_microsecs %d\n",
-	       func, clock_calend_cp->basesleep.sec, clock_calend_cp->basesleep.frac,
-	       (unsigned long)basesleep_secs, basesleep_microsecs);
-
+	    func, clock_calend_cp->basesleep.sec, clock_calend_cp->basesleep.frac,
+	    (unsigned long)basesleep_secs, basesleep_microsecs);
+#endif
 }
 
 
-void print_all_clock_variables(const char* func, clock_sec_t* pmu_secs, clock_usec_t* pmu_usec, clock_sec_t* sys_secs, clock_usec_t* sys_usec, struct clock_calend* clock_calend_cp)
+void
+print_all_clock_variables(const char* func, clock_sec_t* pmu_secs, clock_usec_t* pmu_usec, clock_sec_t* sys_secs, clock_usec_t* sys_usec, struct clock_calend* clock_calend_cp)
 {
-	if (!g_should_log_clock_adjustments)
+	if (!g_should_log_clock_adjustments) {
 		return;
+	}
 
 	struct bintime  bt;
 	clock_sec_t     wall_secs;
@@ -975,7 +989,7 @@ void print_all_clock_variables(const char* func, clock_sec_t* pmu_secs, clock_us
 	uint64_t delta;
 
 	if (pmu_secs) {
-		os_log(OS_LOG_DEFAULT, "%s PMU %lu s %d u \n", func, (unsigned long)*pmu_secs, *pmu_usec); 
+		os_log(OS_LOG_DEFAULT, "%s PMU %lu s %d u \n", func, (unsigned long)*pmu_secs, *pmu_usec);
 	}
 	if (sys_secs) {
 		os_log(OS_LOG_DEFAULT, "%s sys %lu s %d u \n", func, (unsigned long)*sys_secs, *sys_usec);
@@ -984,14 +998,14 @@ void print_all_clock_variables(const char* func, clock_sec_t* pmu_secs, clock_us
 	print_all_clock_variables_internal(func, clock_calend_cp);
 
 	now = mach_absolute_time();
-        delta = now - clock_calend_cp->offset_count;
+	delta = now - clock_calend_cp->offset_count;
 
-        bt = scale_delta(delta, clock_calend_cp->tick_scale_x, clock_calend_cp->s_scale_ns, clock_calend_cp->s_adj_nsx);
+	bt = scale_delta(delta, clock_calend_cp->tick_scale_x, clock_calend_cp->s_scale_ns, clock_calend_cp->s_adj_nsx);
 	bintime_add(&bt, &clock_calend_cp->bintime);
 	bintime2usclock(&bt, &wall_secs, &wall_microsecs);
 
 	os_log(OS_LOG_DEFAULT, "%s wall %lu s %d u computed with %llu abs\n",
-	       func, (unsigned long)wall_secs, wall_microsecs, now);
+	    func, (unsigned long)wall_secs, wall_microsecs, now);
 }
 
 
@@ -1009,25 +1023,28 @@ void print_all_clock_variables(const char* func, clock_sec_t* pmu_secs, clock_us
 void
 clock_initialize_calendar(void)
 {
-	clock_sec_t		sys;  // sleepless time since boot in seconds
-	clock_sec_t		secs; // Current UTC time
-	clock_sec_t		utc_offset_secs; // Difference in current UTC time and sleepless time since boot
-	clock_usec_t		microsys;  
-	clock_usec_t		microsecs; 
-	clock_usec_t		utc_offset_microsecs; 
-	spl_t			s;
-	struct bintime 		bt;
-	struct bintime		monotonic_bt;
-	struct latched_time	monotonic_time;
-	uint64_t		monotonic_usec_total;
+	clock_sec_t             sys;  // sleepless time since boot in seconds
+	clock_sec_t             secs; // Current UTC time
+	clock_sec_t             utc_offset_secs; // Difference in current UTC time and sleepless time since boot
+	clock_usec_t            microsys;
+	clock_usec_t            microsecs;
+	clock_usec_t            utc_offset_microsecs;
+	spl_t                   s;
+	struct bintime          bt;
+#if !HAS_CONTINUOUS_HWCLOCK
+	struct bintime          monotonic_bt;
+	struct latched_time     monotonic_time;
+	uint64_t                monotonic_usec_total;
 	clock_sec_t             sys2, monotonic_sec;
-        clock_usec_t            microsys2, monotonic_usec;
-        size_t                  size;
+	clock_usec_t            microsys2, monotonic_usec;
+	size_t                  size;
 
+#endif
 	//Get the UTC time and corresponding sys time
 	PEGetUTCTimeOfDay(&secs, &microsecs);
 	clock_get_system_microtime(&sys, &microsys);
 
+#if !HAS_CONTINUOUS_HWCLOCK
 	/*
 	 * If the platform has a monotonic clock, use kern.monotonicclock_usecs
 	 * to estimate the sleep/wake time, otherwise use the UTC time to estimate
@@ -1043,6 +1060,7 @@ clock_initialize_calendar(void)
 		absolutetime_to_microtime(monotonic_time.mach_time, &sys2, &microsys2);
 		os_log(OS_LOG_DEFAULT, "%s system has monotonic clock\n", __func__);
 	}
+#endif
 
 	s = splclock();
 	clock_lock();
@@ -1062,7 +1080,7 @@ clock_initialize_calendar(void)
 	 */
 	if ((sys > secs) || ((sys == secs) && (microsys > microsecs))) {
 		os_log(OS_LOG_DEFAULT, "%s WARNING: UTC time is less then sys time, (%lu s %d u) UTC (%lu s %d u) sys\n",
-			__func__, (unsigned long) secs, microsecs, (unsigned long)sys, microsys);
+		    __func__, (unsigned long) secs, microsecs, (unsigned long)sys, microsys);
 		secs = utc_offset_secs = sys;
 		microsecs = utc_offset_microsecs = microsys;
 	}
@@ -1093,8 +1111,8 @@ clock_initialize_calendar(void)
 	clock_calend.s_scale_ns = NSEC_PER_SEC;
 	clock_calend.s_adj_nsx = 0;
 
+#if !HAS_CONTINUOUS_HWCLOCK
 	if (has_monotonic_clock) {
-
 		monotonic_sec = monotonic_usec_total / (clock_sec_t)USEC_PER_SEC;
 		monotonic_usec = monotonic_usec_total % (clock_usec_t)USEC_PER_SEC;
 
@@ -1106,6 +1124,7 @@ clock_initialize_calendar(void)
 		// set the baseleep as the difference between monotonic clock - sys
 		clock_calend.basesleep = monotonic_bt;
 	}
+#endif
 	commpage_update_mach_continuous_time(mach_absolutetime_asleep);
 
 #if DEVELOPMENT || DEBUG
@@ -1115,38 +1134,105 @@ clock_initialize_calendar(void)
 	clock_unlock();
 	splx(s);
 
-        print_all_clock_variables(__func__, &secs, &microsecs, &sys, &microsys, &clock_calend_cp);
+	print_all_clock_variables(__func__, &secs, &microsecs, &sys, &microsys, &clock_calend_cp);
 
 	/*
 	 *	Send host notifications.
 	 */
 	host_notify_calendar_change();
-	
+
 #if CONFIG_DTRACE
 	clock_track_calend_nowait();
 #endif
 }
 
+#if HAS_CONTINUOUS_HWCLOCK
+
+static void
+scale_sleep_time(void)
+{
+	/* Apply the current NTP frequency adjustment to the time slept.
+	 * The frequency adjustment remains stable between calls to ntp_adjtime(),
+	 * and should thus provide a reasonable approximation of the total adjustment
+	 * required for the time slept. */
+	struct bintime sleep_time;
+	uint64_t tick_scale_x, s_scale_ns;
+	int64_t s_adj_nsx;
+	int64_t sleep_adj = ntp_get_freq();
+	if (sleep_adj) {
+		get_scale_factors_from_adj(sleep_adj, &tick_scale_x, &s_scale_ns, &s_adj_nsx);
+		sleep_time = scale_delta(mach_absolutetime_last_sleep, tick_scale_x, s_scale_ns, s_adj_nsx);
+	} else {
+		tick_scale_x = (uint64_t)1 << 63;
+		tick_scale_x /= ticks_per_sec;
+		tick_scale_x *= 2;
+		sleep_time.sec = mach_absolutetime_last_sleep / ticks_per_sec;
+		sleep_time.frac = (mach_absolutetime_last_sleep % ticks_per_sec) * tick_scale_x;
+	}
+	bintime_add(&clock_calend.offset, &sleep_time);
+	bintime_add(&clock_calend.bintime, &sleep_time);
+}
 
 void
 clock_wakeup_calendar(void)
 {
-	clock_sec_t		wake_sys_sec;
+	spl_t   s;
+
+	s = splclock();
+	clock_lock();
+
+	commpage_disable_timestamp();
+
+	uint64_t abstime = mach_absolute_time();
+	uint64_t total_sleep_time = ml_get_hwclock() - abstime;
+
+	mach_absolutetime_last_sleep = total_sleep_time - mach_absolutetime_asleep;
+	mach_absolutetime_asleep = total_sleep_time;
+
+	scale_sleep_time();
+
+	KERNEL_DEBUG_CONSTANT(
+		MACHDBG_CODE(DBG_MACH_CLOCK, MACH_EPOCH_CHANGE) | DBG_FUNC_NONE,
+		(uintptr_t) mach_absolutetime_last_sleep,
+		(uintptr_t) mach_absolutetime_asleep,
+		(uintptr_t) (mach_absolutetime_last_sleep >> 32),
+		(uintptr_t) (mach_absolutetime_asleep >> 32),
+		0);
+
+	commpage_update_mach_continuous_time(mach_absolutetime_asleep);
+	adjust_cont_time_thread_calls();
+
+	clock_unlock();
+	splx(s);
+
+	host_notify_calendar_change();
+
+#if CONFIG_DTRACE
+	clock_track_calend_nowait();
+#endif
+}
+
+#else /* HAS_CONTINUOUS_HWCLOCK */
+
+void
+clock_wakeup_calendar(void)
+{
+	clock_sec_t             wake_sys_sec;
 	clock_usec_t            wake_sys_usec;
-	clock_sec_t		wake_sec;
-	clock_usec_t		wake_usec;
+	clock_sec_t             wake_sec;
+	clock_usec_t            wake_usec;
 	clock_sec_t             wall_time_sec;
 	clock_usec_t            wall_time_usec;
-	clock_sec_t 		diff_sec;
-        clock_usec_t 		diff_usec;
+	clock_sec_t             diff_sec;
+	clock_usec_t            diff_usec;
 	clock_sec_t             var_s;
 	clock_usec_t            var_us;
-	spl_t			s;
-	struct bintime		bt, last_sleep_bt;
+	spl_t                   s;
+	struct bintime          bt, last_sleep_bt;
 	struct latched_time     monotonic_time;
-	uint64_t		monotonic_usec_total;
-	uint64_t		wake_abs;
-	size_t 			size;
+	uint64_t                monotonic_usec_total;
+	uint64_t                wake_abs;
+	size_t                  size;
 
 	/*
 	 * If the platform has the monotonic clock use that to
@@ -1174,7 +1260,6 @@ clock_wakeup_calendar(void)
 	 * it is doing it only througth the settimeofday interface.
 	 */
 	if (has_monotonic_clock) {
-
 #if DEVELOPMENT || DEBUG
 		/*
 		 * Just for debugging, get the wake UTC time.
@@ -1204,15 +1289,15 @@ clock_wakeup_calendar(void)
 	}
 
 #if DEVELOPMENT || DEBUG
-        os_log(OS_LOG_DEFAULT, "time at wake %lu s %d u from %s clock, abs %llu\n", (unsigned long)wake_sec, wake_usec, (has_monotonic_clock)?"monotonic":"UTC", wake_abs);
-        if (has_monotonic_clock) {
-                os_log(OS_LOG_DEFAULT, "UTC time %lu s %d u\n", (unsigned long)var_s, var_us);
-        }
+	os_log(OS_LOG_DEFAULT, "time at wake %lu s %d u from %s clock, abs %llu\n", (unsigned long)wake_sec, wake_usec, (has_monotonic_clock)?"monotonic":"UTC", wake_abs);
+	if (has_monotonic_clock) {
+		os_log(OS_LOG_DEFAULT, "UTC time %lu s %d u\n", (unsigned long)var_s, var_us);
+	}
 #endif /* DEVELOPMENT || DEBUG */
 
 	s = splclock();
 	clock_lock();
-	
+
 	commpage_disable_timestamp();
 
 #if DEVELOPMENT || DEBUG
@@ -1255,7 +1340,6 @@ clock_wakeup_calendar(void)
 		 */
 		if ((bt.sec > clock_calend.basesleep.sec) ||
 		    ((bt.sec == clock_calend.basesleep.sec) && (bt.frac > clock_calend.basesleep.frac))) {
-
 			//last_sleep is the difference between (current monotonic - abs) and (last wake monotonic - abs)
 			last_sleep_bt = bt;
 			bintime_sub(&last_sleep_bt, &clock_calend.basesleep);
@@ -1272,7 +1356,6 @@ clock_wakeup_calendar(void)
 
 			bintime2usclock(&last_sleep_bt, &var_s, &var_us);
 			os_log(OS_LOG_DEFAULT, "time_slept (%lu s %d u)\n", (unsigned long) var_s, var_us);
-
 		} else {
 			bintime2usclock(&clock_calend.basesleep, &var_s, &var_us);
 			os_log_error(OS_LOG_DEFAULT, "WARNING: last wake monotonic-sys time (%lu s %d u) is greater then current monotonic-sys time(%lu s %d u), defaulting sleep time to zero\n", (unsigned long) var_s, var_us, (unsigned long) diff_sec, diff_usec);
@@ -1287,7 +1370,7 @@ clock_wakeup_calendar(void)
 		bintime_add(&bt, &clock_calend.bintime);
 		bintime2usclock(&bt, &wall_time_sec, &wall_time_usec);
 
-		if (wall_time_sec > wake_sec || (wall_time_sec == wake_sec && wall_time_usec > wake_usec) ) {
+		if (wall_time_sec > wake_sec || (wall_time_sec == wake_sec && wall_time_usec > wake_usec)) {
 			os_log(OS_LOG_DEFAULT, "WARNING: wall time (%lu s %d u) is greater than current UTC time (%lu s %d u), defaulting sleep time to zero\n", (unsigned long) wall_time_sec, wall_time_usec, (unsigned long) wake_sec, wake_usec);
 
 			mach_absolutetime_last_sleep = 0;
@@ -1315,12 +1398,12 @@ clock_wakeup_calendar(void)
 	}
 done:
 	KERNEL_DEBUG_CONSTANT(
-		  MACHDBG_CODE(DBG_MACH_CLOCK,MACH_EPOCH_CHANGE) | DBG_FUNC_NONE,
-		  (uintptr_t) mach_absolutetime_last_sleep,
-		  (uintptr_t) mach_absolutetime_asleep,
-		  (uintptr_t) (mach_absolutetime_last_sleep >> 32),
-		  (uintptr_t) (mach_absolutetime_asleep >> 32),
-		  0);
+		MACHDBG_CODE(DBG_MACH_CLOCK, MACH_EPOCH_CHANGE) | DBG_FUNC_NONE,
+		(uintptr_t) mach_absolutetime_last_sleep,
+		(uintptr_t) mach_absolutetime_asleep,
+		(uintptr_t) (mach_absolutetime_last_sleep >> 32),
+		(uintptr_t) (mach_absolutetime_asleep >> 32),
+		0);
 
 	commpage_update_mach_continuous_time(mach_absolutetime_asleep);
 	adjust_cont_time_thread_calls();
@@ -1346,6 +1429,7 @@ done:
 #endif
 }
 
+#endif /* !HAS_CONTINUOUS_HWCLOCK */
 
 /*
  *	clock_get_boottime_nanotime:
@@ -1354,10 +1438,10 @@ done:
  */
 void
 clock_get_boottime_nanotime(
-	clock_sec_t			*secs,
-	clock_nsec_t		*nanosecs)
+	clock_sec_t                     *secs,
+	clock_nsec_t            *nanosecs)
 {
-	spl_t	s;
+	spl_t   s;
 
 	s = splclock();
 	clock_lock();
@@ -1376,10 +1460,10 @@ clock_get_boottime_nanotime(
  */
 void
 clock_get_boottime_microtime(
-	clock_sec_t			*secs,
-	clock_usec_t		*microsecs)
+	clock_sec_t                     *secs,
+	clock_usec_t            *microsecs)
 {
-	spl_t	s;
+	spl_t   s;
 
 	s = splclock();
 	clock_lock();
@@ -1397,8 +1481,8 @@ clock_get_boottime_microtime(
  */
 static void
 mach_wait_until_continue(
-	__unused void	*parameter,
-	wait_result_t	wresult)
+	__unused void   *parameter,
+	wait_result_t   wresult)
 {
 	thread_syscall_return((wresult == THREAD_INTERRUPTED)? KERN_ABORTED: KERN_SUCCESS);
 	/*NOTREACHED*/
@@ -1410,32 +1494,34 @@ mach_wait_until_continue(
  * Parameters:    args->deadline          Amount of time to wait
  *
  * Returns:        0                      Success
- *                !0                      Not success           
+ *                !0                      Not success
  *
  */
 kern_return_t
 mach_wait_until_trap(
-	struct mach_wait_until_trap_args	*args)
+	struct mach_wait_until_trap_args        *args)
 {
-	uint64_t		deadline = args->deadline;
-	wait_result_t	wresult;
+	uint64_t                deadline = args->deadline;
+	wait_result_t   wresult;
 
 	wresult = assert_wait_deadline_with_leeway((event_t)mach_wait_until_trap, THREAD_ABORTSAFE,
-						   TIMEOUT_URGENCY_USER_NORMAL, deadline, 0);
-	if (wresult == THREAD_WAITING)
+	    TIMEOUT_URGENCY_USER_NORMAL, deadline, 0);
+	if (wresult == THREAD_WAITING) {
 		wresult = thread_block(mach_wait_until_continue);
+	}
 
-	return ((wresult == THREAD_INTERRUPTED)? KERN_ABORTED: KERN_SUCCESS);
+	return (wresult == THREAD_INTERRUPTED)? KERN_ABORTED: KERN_SUCCESS;
 }
 
 void
 clock_delay_until(
-	uint64_t		deadline)
+	uint64_t                deadline)
 {
-	uint64_t		now = mach_absolute_time();
+	uint64_t                now = mach_absolute_time();
 
-	if (now >= deadline)
+	if (now >= deadline) {
 		return;
+	}
 
 	_clock_delay_until_deadline(deadline - now, deadline);
 }
@@ -1446,8 +1532,8 @@ clock_delay_until(
  */
 void
 _clock_delay_until_deadline(
-	uint64_t		interval,
-	uint64_t		deadline)
+	uint64_t                interval,
+	uint64_t                deadline)
 {
 	_clock_delay_until_deadline_with_leeway(interval, deadline, 0);
 }
@@ -1458,17 +1544,17 @@ _clock_delay_until_deadline(
  */
 void
 _clock_delay_until_deadline_with_leeway(
-	uint64_t		interval,
-	uint64_t		deadline,
-	uint64_t		leeway)
+	uint64_t                interval,
+	uint64_t                deadline,
+	uint64_t                leeway)
 {
-
-	if (interval == 0)
+	if (interval == 0) {
 		return;
+	}
 
-	if (	ml_delay_should_spin(interval)	||
-			get_preemption_level() != 0				||
-			ml_get_interrupts_enabled() == FALSE	) {
+	if (ml_delay_should_spin(interval) ||
+	    get_preemption_level() != 0 ||
+	    ml_get_interrupts_enabled() == FALSE) {
 		machine_delay_until(interval, deadline);
 	} else {
 		/*
@@ -1488,10 +1574,10 @@ _clock_delay_until_deadline_with_leeway(
 
 void
 delay_for_interval(
-	uint32_t		interval,
-	uint32_t		scale_factor)
+	uint32_t                interval,
+	uint32_t                scale_factor)
 {
-	uint64_t		abstime;
+	uint64_t                abstime;
 
 	clock_interval_to_absolutetime_interval(interval, scale_factor, &abstime);
 
@@ -1500,12 +1586,12 @@ delay_for_interval(
 
 void
 delay_for_interval_with_leeway(
-	uint32_t		interval,
-	uint32_t		leeway,
-	uint32_t		scale_factor)
+	uint32_t                interval,
+	uint32_t                leeway,
+	uint32_t                scale_factor)
 {
-	uint64_t		abstime_interval;
-	uint64_t		abstime_leeway;
+	uint64_t                abstime_interval;
+	uint64_t                abstime_leeway;
 
 	clock_interval_to_absolutetime_interval(interval, scale_factor, &abstime_interval);
 	clock_interval_to_absolutetime_interval(leeway, scale_factor, &abstime_leeway);
@@ -1515,7 +1601,7 @@ delay_for_interval_with_leeway(
 
 void
 delay(
-	int		usec)
+	int             usec)
 {
 	delay_for_interval((usec < 0)? -usec: usec, NSEC_PER_USEC);
 }
@@ -1525,115 +1611,142 @@ delay(
  */
 void
 clock_interval_to_deadline(
-	uint32_t			interval,
-	uint32_t			scale_factor,
-	uint64_t			*result)
+	uint32_t                        interval,
+	uint32_t                        scale_factor,
+	uint64_t                        *result)
 {
-	uint64_t	abstime;
+	uint64_t        abstime;
 
 	clock_interval_to_absolutetime_interval(interval, scale_factor, &abstime);
 
-	*result = mach_absolute_time() + abstime;
+	if (os_add_overflow(mach_absolute_time(), abstime, result)) {
+		*result = UINT64_MAX;
+	}
 }
 
 void
 clock_absolutetime_interval_to_deadline(
-	uint64_t			abstime,
-	uint64_t			*result)
+	uint64_t                        abstime,
+	uint64_t                        *result)
 {
-	*result = mach_absolute_time() + abstime;
+	if (os_add_overflow(mach_absolute_time(), abstime, result)) {
+		*result = UINT64_MAX;
+	}
 }
 
 void
 clock_continuoustime_interval_to_deadline(
-	uint64_t			conttime,
-	uint64_t			*result)
+	uint64_t                        conttime,
+	uint64_t                        *result)
 {
-	*result = mach_continuous_time() + conttime;
+	if (os_add_overflow(mach_continuous_time(), conttime, result)) {
+		*result = UINT64_MAX;
+	}
 }
 
 void
 clock_get_uptime(
-	uint64_t	*result)
+	uint64_t        *result)
 {
 	*result = mach_absolute_time();
 }
 
 void
 clock_deadline_for_periodic_event(
-	uint64_t			interval,
-	uint64_t			abstime,
-	uint64_t			*deadline)
+	uint64_t                        interval,
+	uint64_t                        abstime,
+	uint64_t                        *deadline)
 {
 	assert(interval != 0);
 
-	*deadline += interval;
+	// *deadline += interval;
+	if (os_add_overflow(*deadline, interval, deadline)) {
+		*deadline = UINT64_MAX;
+	}
 
 	if (*deadline <= abstime) {
-		*deadline = abstime + interval;
-		abstime = mach_absolute_time();
+		// *deadline = abstime + interval;
+		if (os_add_overflow(abstime, interval, deadline)) {
+			*deadline = UINT64_MAX;
+		}
 
-		if (*deadline <= abstime)
-			*deadline = abstime + interval;
+		abstime = mach_absolute_time();
+		if (*deadline <= abstime) {
+			// *deadline = abstime + interval;
+			if (os_add_overflow(abstime, interval, deadline)) {
+				*deadline = UINT64_MAX;
+			}
+		}
 	}
 }
 
 uint64_t
 mach_continuous_time(void)
 {
-	while(1) {	
+#if HAS_CONTINUOUS_HWCLOCK
+	return ml_get_hwclock();
+#else
+	while (1) {
 		uint64_t read1 = mach_absolutetime_asleep;
 		uint64_t absolute = mach_absolute_time();
 		OSMemoryBarrier();
 		uint64_t read2 = mach_absolutetime_asleep;
 
-		if(__builtin_expect(read1 == read2, 1)) {
+		if (__builtin_expect(read1 == read2, 1)) {
 			return absolute + read1;
 		}
 	}
+#endif
 }
 
 uint64_t
 mach_continuous_approximate_time(void)
 {
-	while(1) {
+#if HAS_CONTINUOUS_HWCLOCK
+	return ml_get_hwclock();
+#else
+	while (1) {
 		uint64_t read1 = mach_absolutetime_asleep;
 		uint64_t absolute = mach_approximate_time();
 		OSMemoryBarrier();
 		uint64_t read2 = mach_absolutetime_asleep;
 
-		if(__builtin_expect(read1 == read2, 1)) {
+		if (__builtin_expect(read1 == read2, 1)) {
 			return absolute + read1;
 		}
 	}
+#endif
 }
 
 /*
  * continuoustime_to_absolutetime
  * Must be called with interrupts disabled
  * Returned value is only valid until the next update to
- * mach_continuous_time 
+ * mach_continuous_time
  */
 uint64_t
-continuoustime_to_absolutetime(uint64_t conttime) {
-	if (conttime <= mach_absolutetime_asleep)
+continuoustime_to_absolutetime(uint64_t conttime)
+{
+	if (conttime <= mach_absolutetime_asleep) {
 		return 0;
-	else
+	} else {
 		return conttime - mach_absolutetime_asleep;
+	}
 }
 
 /*
  * absolutetime_to_continuoustime
  * Must be called with interrupts disabled
  * Returned value is only valid until the next update to
- * mach_continuous_time 
+ * mach_continuous_time
  */
 uint64_t
-absolutetime_to_continuoustime(uint64_t abstime) {
+absolutetime_to_continuoustime(uint64_t abstime)
+{
 	return abstime + mach_absolutetime_asleep;
 }
 
-#if	CONFIG_DTRACE
+#if     CONFIG_DTRACE
 
 /*
  * clock_get_calendar_nanotime_nowait
@@ -1649,23 +1762,23 @@ absolutetime_to_continuoustime(uint64_t abstime) {
  */
 void
 clock_get_calendar_nanotime_nowait(
-	clock_sec_t			*secs,
-	clock_nsec_t		*nanosecs)
+	clock_sec_t                     *secs,
+	clock_nsec_t            *nanosecs)
 {
 	int i = 0;
-	uint64_t		now;
+	uint64_t                now;
 	struct unlocked_clock_calend stable;
 	struct bintime bt;
 
 	for (;;) {
-		stable = flipflop[i];		/* take snapshot */
+		stable = flipflop[i];           /* take snapshot */
 
 		/*
 		 * Use a barrier instructions to ensure atomicity.  We AND
 		 * off the "in progress" bit to get the current generation
 		 * count.
 		 */
-		(void)hw_atomic_and(&stable.gen, ~(uint32_t)1);
+		os_atomic_andnot(&stable.gen, 1, relaxed);
 
 		/*
 		 * If an update _is_ in progress, the generation count will be
@@ -1673,8 +1786,9 @@ clock_get_calendar_nanotime_nowait(
 		 * and if we caught it at a good time, it will be equal (and
 		 * our snapshot is threfore stable).
 		 */
-		if (flipflop[i].gen == stable.gen)
+		if (flipflop[i].gen == stable.gen) {
 			break;
+		}
 
 		/* Switch to the other element of the flipflop, and try again. */
 		i ^= 1;
@@ -1689,7 +1803,7 @@ clock_get_calendar_nanotime_nowait(
 	bintime2nsclock(&bt, secs, nanosecs);
 }
 
-static void 
+static void
 clock_track_calend_nowait(void)
 {
 	int i;
@@ -1703,7 +1817,7 @@ clock_track_calend_nowait(void)
 		 * will flag an update in progress to an async caller trying
 		 * to examine the contents.
 		 */
-		(void)hw_atomic_or(&flipflop[i].gen, 1);
+		os_atomic_or(&flipflop[i].gen, 1, relaxed);
 
 		flipflop[i].calend = tmp;
 
@@ -1713,9 +1827,8 @@ clock_track_calend_nowait(void)
 		 * count after taking a copy while in progress, the count
 		 * will be off by two.
 		 */
-		(void)hw_atomic_add(&flipflop[i].gen, 1);
+		os_atomic_inc(&flipflop[i].gen, relaxed);
 	}
 }
 
-#endif	/* CONFIG_DTRACE */
-
+#endif  /* CONFIG_DTRACE */

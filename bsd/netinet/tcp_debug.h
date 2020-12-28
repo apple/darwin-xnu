@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2015 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -62,46 +62,46 @@
  */
 
 #ifndef _NETINET_TCP_DEBUG_H_
-#define	_NETINET_TCP_DEBUG_H_
+#define _NETINET_TCP_DEBUG_H_
 #include <sys/appleapiopts.h>
 #ifdef PRIVATE
 
-struct	tcp_debug {
+struct  tcp_debug {
 	u_int32_t td_time;
-	short	td_act;
-	short	td_ostate;
-	caddr_t	td_tcb;
-	int	td_family;
+	short   td_act;
+	short   td_ostate;
+	caddr_t td_tcb;
+	int     td_family;
 	/*
 	 * Co-existense of td_ti and td_ti6 below is ugly, but it is necessary
 	 * to achieve backword compatibility to some extent.
 	 */
-	struct	tcpiphdr td_ti;
+	struct  tcpiphdr td_ti;
 	struct {
 #if !defined(KERNEL) && defined(INET6)
-		struct	ip6_hdr ip6;
+		struct  ip6_hdr ip6;
 #else
-		u_char	ip6buf[40]; /* sizeof(struct ip6_hdr) */
+		u_char  ip6buf[40]; /* sizeof(struct ip6_hdr) */
 #endif
-		struct	tcphdr th;
+		struct  tcphdr th;
 	} td_ti6;
-#define	td_ip6buf	td_ti6.ip6buf
-	short	td_req;
-	struct	tcpcb td_cb;
+#define td_ip6buf       td_ti6.ip6buf
+	short   td_req;
+	struct  tcpcb td_cb;
 };
 
-#define	TA_INPUT 	0
-#define	TA_OUTPUT	1
-#define	TA_USER		2
-#define	TA_RESPOND	3
-#define	TA_DROP		4
+#define TA_INPUT        0
+#define TA_OUTPUT       1
+#define TA_USER         2
+#define TA_RESPOND      3
+#define TA_DROP         4
 
 #ifdef TANAMES
-static char	*tanames[] =
-    { "input", "output", "user", "respond", "drop" };
+static char     *tanames[] =
+{ "input", "output", "user", "respond", "drop" };
 #endif
 
-#define	TCP_NDEBUG 100
+#define TCP_NDEBUG 100
 
 #endif /* PRIVATE */
 

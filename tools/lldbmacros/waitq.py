@@ -7,7 +7,7 @@ import sys
 def GetWaitqStateStr(waitq):
     wq_types = {
             0: 'INV',
-            1: '???',
+            1: ' TS',
             2: '  Q',
             3: 'SET'
     }

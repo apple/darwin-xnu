@@ -17,7 +17,7 @@ NOT_EXPORT_HEADERS = \
 	IOPMlog.h		\
 	IOPMPrivate.h
 
-ALL_HEADERS = $(shell (cd $(SOURCE); echo *.h))
+ALL_HEADERS = $(notdir $(wildcard $(SOURCE)*.h))
 
 INSTALL_MI_LIST	= IOPMLibDefs.h IOPM.h
 INSTALL_MI_LCL_LIST = IOPMPrivate.h

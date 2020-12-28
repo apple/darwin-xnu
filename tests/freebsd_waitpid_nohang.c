@@ -31,6 +31,8 @@
 #include <signal.h>
 #include <unistd.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 T_DECL(waitpid_nohang, "FreeBSDarwin--waitpid_nohang")
 {
 	pid_t child, pid;
@@ -57,6 +59,6 @@ T_DECL(waitpid_nohang, "FreeBSDarwin--waitpid_nohang")
 	status = -1;
 	pid = waitpid(child, &status, WNOHANG);
 	T_ASSERT_EQ(pid, child, "waitpid returns correct pid");
-	T_EXPECT_EQ(WIFSIGNALED(status), true, "child was signaled"); 
+	T_EXPECT_EQ(WIFSIGNALED(status), true, "child was signaled");
 	T_EXPECT_EQ(WTERMSIG(status), SIGTERM, "child was sent SIGTERM");
 }

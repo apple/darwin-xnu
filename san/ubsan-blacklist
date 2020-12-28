@@ -1,9 +1,15 @@
 [.*]
 src:./san/ubsan*
 
+[bounds]
+src:./osfmk/corecrypto/*
+
 [alignment]
 
 src:./libsa/bootstrap.cpp
 src:./bsd/net/necp_client.c
 src:./pexpert/arm/pe_identify_machine.c
+
+[object-size]
+src:./osfmk/i386/locks_i386.c
 
