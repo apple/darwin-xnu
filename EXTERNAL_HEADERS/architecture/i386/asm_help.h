@@ -79,6 +79,7 @@
  * registers and sets up a C frame.
  */
 #define NESTED_FUNCTION_PROLOGUE(localvarsize)			\
+	.cfi_startproc						;\
 	.set	__framesize,ROUND_TO_STACK(localvarsize)	;\
 	.set	__nested_function, 1				;\
 	CALL_MCOUNT						\
@@ -97,6 +98,7 @@
  * up a C frame.
  */
 #define LEAF_FUNCTION_PROLOGUE(localvarsize)			\
+	.cfi_startproc						;\
 	.set	__framesize,ROUND_TO_STACK(localvarsize)	;\
 	.set	__nested_function, 0				;\
 	CALL_MCOUNT						\
@@ -113,6 +115,7 @@
  * local registers they clobber.
  */
 #define FUNCTION_EPILOGUE					\
+	.cfi_startproc						;\
 	.if __nested_function					;\
 	  popl	%ebx						;\
 	  popl	%esi						;\
