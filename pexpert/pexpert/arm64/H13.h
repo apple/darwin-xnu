@@ -68,12 +68,6 @@
 /* Optional CPU features -- an SoC may #undef these */
 #define ARM_PARAMETERIZED_PMAP               1
 #define __ARM_MIXED_PAGE_SIZE__              1
-#define HAS_APCTL_EL1_USERKEYEN              1 /* Supports use of KernKey in EL0 */
-
-/*
- * APSTS_SUPPORTED: Pointer authentication status registers, MKEYVld flag moved here from APCTL on APPLELIGHTNING (H12)
- */
-#define __APSTS_SUPPORTED__                  1
 #define __ARM_RANGE_TLBI__                   1
 #define __ARM_E2H__                          1
 

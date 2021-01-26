@@ -528,10 +528,6 @@ IOSetRecoveryBoot(bsd_bootfail_mode_t mode, uuid_t volume_uuid, boolean_t reboot
 
 	// Clean up and reboot!
 do_reboot:
-	if (nvram != NULL) {
-		nvram->release();
-	}
-
 	if (boot_command_recover != NULL) {
 		boot_command_recover->release();
 	}

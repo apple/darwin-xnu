@@ -63,6 +63,7 @@
 #include <kern/task.h>
 
 #include <vm/vm_map.h>
+#include <vm/pmap.h>
 #include <vm/vm_kern.h>
 
 
@@ -231,6 +232,18 @@ cs_allow_invalid(struct proc *p)
 	if (p->p_csflags & CS_VALID) {
 		p->p_csflags |= CS_DEBUGGED;
 	}
+#if PMAP_CS
+	task_t procTask = proc_task(p);
+	if (procTask) {
+		vm_map_t proc_map = get_task_map_reference(procTask);
+		if (proc_map) {
+			if (vm_map_cs_wx_enable(proc_map) != KERN_SUCCESS) {
+				printf("CODE SIGNING: cs_allow_invalid() not allowed by pmap: pid %d\n", p->p_pid);
+			}
+			vm_map_deallocate(proc_map);
+		}
+	}
+#endif // MAP_CS
 	proc_unlock(p);
 
 	/* allow a debugged process to hide some (debug-only!) memory */

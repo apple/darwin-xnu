@@ -506,7 +506,7 @@ lf_setlock(struct lockf *lock, struct timespec *timeout)
 {
 	struct lockf *block;
 	struct lockf **head = lock->lf_head;
-	struct lockf **prev, *overlap, *ltmp;
+	struct lockf **prev, *overlap;
 	static const char lockstr[] = "lockf";
 	int priority, needtolink, error;
 	struct vnode *vp = lock->lf_vnode;
@@ -851,6 +851,7 @@ scan:
 				lf_wakelock(overlap, TRUE);
 			}
 			overlap->lf_type = lock->lf_type;
+			lf_move_blocked(overlap, lock);
 			FREE(lock, M_LOCKF);
 			lock = overlap; /* for lf_coalesce_adjacent() */
 			break;
@@ -860,6 +861,7 @@ scan:
 			 * Check for common starting point and different types.
 			 */
 			if (overlap->lf_type == lock->lf_type) {
+				lf_move_blocked(overlap, lock);
 				FREE(lock, M_LOCKF);
 				lock = overlap; /* for lf_coalesce_adjacent() */
 				break;
@@ -891,14 +893,7 @@ scan:
 			    overlap->lf_type == F_WRLCK) {
 				lf_wakelock(overlap, TRUE);
 			} else {
-				while (!TAILQ_EMPTY(&overlap->lf_blkhd)) {
-					ltmp = TAILQ_FIRST(&overlap->lf_blkhd);
-					TAILQ_REMOVE(&overlap->lf_blkhd, ltmp,
-					    lf_block);
-					TAILQ_INSERT_TAIL(&lock->lf_blkhd,
-					    ltmp, lf_block);
-					ltmp->lf_next = lock;
-				}
+				lf_move_blocked(lock, overlap);
 			}
 			/*
 			 * Add the new lock if necessary and delete the overlap.

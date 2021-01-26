@@ -65,6 +65,8 @@ COMP_SUBDIRS =
 
 %OBJS
 
+%LIBOBJS
+
 %CFILES
 
 %CXXFILES
@@ -606,6 +608,12 @@ $(COMPONENT).filelist: $(OBJS)
 		 $(ECHO) $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done > $(COMPONENT).filelist
 
+$(COMPONENT).libfilelist: $(LIBOBJS)
+	@$(LOG_LDFILELIST) "lib$(COMPONENT)"
+	$(_v)for obj in ${LIBOBJS}; do	\
+		 $(ECHO) $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
+	done > $(COMPONENT).libfilelist
+
 MAKESYSCALLS = $(SRCROOT)/bsd/kern/makesyscalls.sh
 
 init_sysent.c: $(TARGET)/bsd.syscalls.master
@@ -624,7 +632,11 @@ systrace_args.c: $(TARGET)/bsd.syscalls.master
 	@$(LOG_GENERATE) "$@$(Color0) from $(ColorF)$(<F)$(Color0)"
 	$(_v)$(MAKESYSCALLS) $< systrace > /dev/null
 
+ifeq ($(RC_ProjectName),xnu_libraries)
+do_all: $(COMPONENT).libfilelist
+else
 do_all: $(COMPONENT).filelist
+endif
 
 do_build_all:: do_all
 

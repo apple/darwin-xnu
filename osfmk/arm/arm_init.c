@@ -308,7 +308,7 @@ arm_init(
 	cpu_data_init(&BootCpuData);
 #if defined(HAS_APPLE_PAC)
 	/* bootstrap cpu process dependent key for kernel has been loaded by start.s */
-	BootCpuData.rop_key = KERNEL_ROP_ID;
+	BootCpuData.rop_key = ml_default_rop_pid();
 	BootCpuData.jop_key = ml_default_jop_pid();
 #endif /* defined(HAS_APPLE_PAC) */
 

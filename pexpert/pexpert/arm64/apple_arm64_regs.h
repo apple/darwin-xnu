@@ -350,18 +350,8 @@
 
 #if defined(HAS_APPLE_PAC)
 
-#ifdef ASSEMBLER
-#define ARM64_REG_APCTL_EL1            S3_4_c15_c0_4
-#define ARM64_REG_APSTS_EL1            S3_6_c15_c12_4
-#else /* ASSEMBLER */
-#define ARM64_REG_APCTL_EL1            "S3_4_c15_c0_4"
-#define ARM64_REG_APSTS_EL1            "S3_6_c15_c12_4"
-#endif /* ASSEMBLER */
 
 #if ASSEMBLER
-#define ARM64_REG_KERNELKEYLO_EL1      S3_4_c15_c1_0
-#define ARM64_REG_KERNELKEYHI_EL1      S3_4_c15_c1_1
-
 #define ARM64_REG_APIAKEYLO_EL1        S3_0_c2_c1_0
 #define ARM64_REG_APIAKEYHI_EL1        S3_0_c2_c1_1
 #define ARM64_REG_APIBKEYLO_EL1        S3_0_c2_c1_2
@@ -375,11 +365,6 @@
 #define ARM64_REG_APGAKEYLO_EL1        S3_0_c2_c3_0
 #define ARM64_REG_APGAKEYHI_EL1        S3_0_c2_c3_1
 #else /* ASSEMBLER */
-#define ARM64_REG_APCTL_EL1            "S3_4_c15_c0_4"
-
-#define ARM64_REG_KERNELKEYLO_EL1      "S3_4_c15_c1_0"
-#define ARM64_REG_KERNELKEYHI_EL1      "S3_4_c15_c1_1"
-
 #define ARM64_REG_APIAKEYLO_EL1        "S3_0_c2_c1_0"
 #define ARM64_REG_APIAKEYHI_EL1        "S3_0_c2_c1_1"
 #define ARM64_REG_APIBKEYLO_EL1        "S3_0_c2_c1_2"

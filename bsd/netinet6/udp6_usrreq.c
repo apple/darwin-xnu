@@ -927,7 +927,7 @@ do_flow_divert:
 		    inp->in6p_flags & IN6P_AUTOFLOWLABEL) {
 			inp->inp_flow &= ~IPV6_FLOWLABEL_MASK;
 			inp->inp_flow |=
-			    (htonl(inp->inp_flowhash) & IPV6_FLOWLABEL_MASK);
+			    (htonl(ip6_randomflowlabel()) & IPV6_FLOWLABEL_MASK);
 		}
 	}
 	return error;

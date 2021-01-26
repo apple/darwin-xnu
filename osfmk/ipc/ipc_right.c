@@ -2024,13 +2024,14 @@ ipc_right_copyin(
 		}
 
 		/*
-		 * Disallow moving receive-right kobjects, e.g. mk_timer ports
+		 * Disallow moving receive-right kobjects/kolabel, e.g. mk_timer ports
 		 * The ipc_port structure uses the kdata union of kobject and
 		 * imp_task exclusively. Thus, general use of a kobject port as
 		 * a receive right can cause type confusion in the importance
 		 * code.
 		 */
-		if (io_kotype(entry->ie_object) != IKOT_NONE) {
+		if (io_is_kobject(entry->ie_object) ||
+		    io_is_kolabeled(entry->ie_object)) {
 			/*
 			 * Distinguish an invalid right, e.g., trying to move
 			 * a send right as a receive right, from this
@@ -2049,7 +2050,7 @@ ipc_right_copyin(
 		assert(port->ip_receiver_name == name);
 		assert(port->ip_receiver == space);
 
-		if (port->ip_immovable_receive) {
+		if (port->ip_immovable_receive || port->ip_specialreply) {
 			assert(port->ip_receiver != ipc_space_kernel);
 			ip_unlock(port);
 			assert(current_task() != kernel_task);
@@ -2717,6 +2718,14 @@ ipc_right_copyout(
 
 		assert(port->ip_mscount == 0);
 		assert(port->ip_receiver_name == MACH_PORT_NULL);
+
+		/*
+		 * Don't copyout kobjects or kolabels as receive right
+		 */
+		if (io_is_kobject(entry->ie_object) ||
+		    io_is_kolabeled(entry->ie_object)) {
+			panic("ipc_right_copyout: Copyout kobject/kolabel as receive right");
+		}
 
 		imq_lock(&port->ip_messages);
 		dest = port->ip_destination;

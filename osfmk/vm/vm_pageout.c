@@ -7055,7 +7055,7 @@ process_upl_to_enter:
 	if (upl->flags & UPL_SHADOWED) {
 		offset = 0;
 	} else {
-		offset = upl_adjusted_offset(upl, VM_MAP_PAGE_MASK(map)) + upl->map_object->paging_offset;
+		offset = upl_adjusted_offset(upl, VM_MAP_PAGE_MASK(map)) - upl->map_object->paging_offset;
 	}
 
 	size = upl_adjusted_size(upl, VM_MAP_PAGE_MASK(map));

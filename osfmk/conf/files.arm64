@@ -42,7 +42,7 @@ osfmk/arm64/lowmem_vectors.c	standard
 osfmk/arm64/sleh.c			standard
 osfmk/arm64/start.s	optional nos_arm_asm
 osfmk/arm64/pinst.s	optional nos_arm_asm
-osfmk/arm64/cswitch.s	standard
+osfmk/arm64/cswitch.s	optional nos_arm_asm
 osfmk/arm/machine_cpuid.c	standard
 osfmk/arm/machine_routines_common.c		standard
 osfmk/arm64/machine_routines.c		standard

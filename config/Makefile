@@ -85,6 +85,7 @@ $(OBJPATH)/symbolsets.plist: $(SYMBOL_SET_PLIST_BUILD)
 	$(_v)$(SOURCE)/generate_combined_symbolsets_plist.sh $@ $^ $(_vstdout)
 	$(_v)$(PLUTIL) -convert binary1 -s $@
 
+ifneq ($(RC_ProjectName),xnu_libraries)
 $(OBJPATH)/allsymbols: $(OBJPATH)/$(KERNEL_FILE_NAME)
 	$(_v)$(NM) -gj $< | sort -u > $@
 
@@ -119,6 +120,9 @@ build_symbol_sets: check_all_exports $(SYMBOL_SET_BUILD) $(OBJPATH)/allsymbols \
 			$(OBJPATH)/$(MI_SUPPORTED_KPI_FILENAME)
 
 do_config_all::	build_symbol_sets
+else
+# We are building XNU as a static library - avoid creating symbol sets
+endif
 
 # There's no simple static pattern rule for these paths, so hardcode dependencies in the command list
 $(SYMROOT_INSTALL_KEXT_MACHO_FILES): ALWAYS
@@ -155,12 +159,14 @@ $(DSTROOT)/$(KRESDIR)/$(MD_SUPPORTED_KPI_FILENAME) $(DSTROOT)/$(KRESDIR)/$(MI_SU
 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
 
 ifneq ($(INSTALL_KASAN_ONLY),1)
+ifneq ($(BUILD_XNU_LIBRARY),1)
 do_config_install::	$(SYMROOT_INSTALL_KEXT_MACHO_FILES) \
 				$(SYMROOT_INSTALL_KEXT_PLISTS) \
 				$(DSTROOT_INSTALL_KEXT_MACHO_FILES) \
 				$(DSTROOT_INSTALL_KEXT_PLISTS) \
 				$(DSTROOT)/$(KRESDIR)/$(MD_SUPPORTED_KPI_FILENAME) \
 				$(DSTROOT)/$(KRESDIR)/$(MI_SUPPORTED_KPI_FILENAME)
+endif
 endif
 
 $(OBJPATH)/all-kpi.exp: $(EXPORTS_FILES)

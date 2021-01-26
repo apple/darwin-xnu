@@ -115,6 +115,11 @@ kern_return_t shared_region_pager_synchronize(memory_object_t mem_obj,
 kern_return_t shared_region_pager_map(memory_object_t mem_obj,
     vm_prot_t prot);
 kern_return_t shared_region_pager_last_unmap(memory_object_t mem_obj);
+boolean_t shared_region_pager_backing_object(
+	memory_object_t mem_obj,
+	memory_object_offset_t mem_obj_offset,
+	vm_object_t *backing_object,
+	vm_object_offset_t *backing_offset);
 
 /*
  * Vector of VM operations for this EMM.
@@ -133,6 +138,7 @@ const struct memory_object_pager_ops shared_region_pager_ops = {
 	.memory_object_map = shared_region_pager_map,
 	.memory_object_last_unmap = shared_region_pager_last_unmap,
 	.memory_object_data_reclaim = NULL,
+	.memory_object_backing_object = shared_region_pager_backing_object,
 	.memory_object_pager_name = "shared_region"
 };
 
@@ -1093,6 +1099,26 @@ shared_region_pager_last_unmap(
 	}
 
 	return KERN_SUCCESS;
+}
+
+boolean_t
+shared_region_pager_backing_object(
+	memory_object_t         mem_obj,
+	memory_object_offset_t  offset,
+	vm_object_t             *backing_object,
+	vm_object_offset_t      *backing_offset)
+{
+	shared_region_pager_t   pager;
+
+	PAGER_DEBUG(PAGER_ALL,
+	    ("shared_region_pager_backing_object: %p\n", mem_obj));
+
+	pager = shared_region_pager_lookup(mem_obj);
+
+	*backing_object = pager->srp_backing_object;
+	*backing_offset = pager->srp_backing_offset + offset;
+
+	return TRUE;
 }
 
 

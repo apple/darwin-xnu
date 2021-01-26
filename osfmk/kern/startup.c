@@ -933,6 +933,11 @@ load_context(
 	timer_start(&processor->system_state, processor->last_dispatch);
 	processor->current_state = &processor->system_state;
 
+#if __AMP__
+	if (processor->processor_set->pset_cluster_type == PSET_AMP_P) {
+		timer_start(&thread->ptime, processor->last_dispatch);
+	}
+#endif
 
 	cpu_quiescent_counter_join(processor->last_dispatch);
 

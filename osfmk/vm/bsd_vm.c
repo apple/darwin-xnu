@@ -109,6 +109,7 @@ const struct memory_object_pager_ops vnode_pager_ops = {
 	.memory_object_map = vnode_pager_map,
 	.memory_object_last_unmap = vnode_pager_last_unmap,
 	.memory_object_data_reclaim = NULL,
+	.memory_object_backing_object = NULL,
 	.memory_object_pager_name = "vnode pager"
 };
 

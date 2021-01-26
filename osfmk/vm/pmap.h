@@ -911,6 +911,8 @@ extern void pmap_ledger_alloc_init(size_t);
 extern ledger_t pmap_ledger_alloc(void);
 extern void pmap_ledger_free(ledger_t);
 
+extern kern_return_t pmap_cs_allow_invalid(pmap_t pmap);
+
 #if __arm64__
 extern bool pmap_is_exotic(pmap_t pmap);
 #else /* __arm64__ */

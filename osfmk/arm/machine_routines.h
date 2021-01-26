@@ -1269,6 +1269,7 @@ uint32_t ml_update_cluster_wfe_recommendation(uint32_t wfe_cluster_id, uint64_t 
 #define UNSIGN_PTR(p) \
 	SIGN(p) ? ((p) | PAC_MASK) : ((p) & ~PAC_MASK)
 
+uint64_t ml_default_rop_pid(void);
 uint64_t ml_default_jop_pid(void);
 void ml_task_set_rop_pid(task_t task, task_t parent_task, boolean_t inherit);
 void ml_task_set_jop_pid(task_t task, task_t parent_task, boolean_t inherit);

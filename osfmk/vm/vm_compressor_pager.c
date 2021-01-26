@@ -133,6 +133,7 @@ const struct memory_object_pager_ops compressor_pager_ops = {
 	.memory_object_map = compressor_memory_object_map,
 	.memory_object_last_unmap = compressor_memory_object_last_unmap,
 	.memory_object_data_reclaim = compressor_memory_object_data_reclaim,
+	.memory_object_backing_object = NULL,
 	.memory_object_pager_name = "compressor pager"
 };
 

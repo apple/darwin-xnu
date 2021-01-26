@@ -83,6 +83,7 @@ struct file_list {
  */
 #define CONFIGDEP       0x01    /* obsolete? */
 #define OPTIONSDEF      0x02    /* options definition entry */
+#define LIBRARYDEP      0x04    /* include file in library build */
 
 struct device {
 	int     d_type;                 /* CONTROLLER, DEVICE, bus adaptor */

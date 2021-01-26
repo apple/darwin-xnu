@@ -7384,7 +7384,7 @@ done:
 
 		cfc->cf_flags |= CFF_FLOW_CONTROLLED;
 
-		cfil_rw_unlock_exclusive(&cfil_lck_rw);
+		cfil_rw_lock_exclusive_to_shared(&cfil_lck_rw);
 	} else if (error != 0) {
 		OSIncrementAtomic(&cfil_stats.cfs_stats_event_fail);
 	}

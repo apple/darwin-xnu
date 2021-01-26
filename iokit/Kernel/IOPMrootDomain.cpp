@@ -3060,6 +3060,15 @@ IOPMrootDomain::powerChangeDone( unsigned long previousPowerState )
 			isRTCAlarmWake = true;
 			fullWakeReason = kFullWakeReasonLocalUser;
 			requestUserActive(this, "RTC debug alarm");
+		} else {
+#if HIBERNATION
+			OSSharedPtr<OSObject> hibOptionsProp = copyProperty(kIOHibernateOptionsKey);
+			OSNumber * hibOptions = OSDynamicCast(OSNumber, hibOptionsProp.get());
+			if (hibOptions && !(hibOptions->unsigned32BitValue() & kIOHibernateOptionDarkWake)) {
+				fullWakeReason = kFullWakeReasonLocalUser;
+				requestUserActive(this, "hibernate user wake");
+			}
+#endif
 		}
 
 		// stay awake for at least 30 seconds

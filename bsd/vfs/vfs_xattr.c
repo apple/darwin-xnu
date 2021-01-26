@@ -2463,7 +2463,8 @@ open_xattrfile(vnode_t vp, int fileflags, vnode_t *xvpp, vfs_context_t context)
 	char smallname[64];
 	char *filename = NULL;
 	const char *basename = NULL;
-	size_t len;
+	size_t alloc_len;
+	size_t copy_len;
 	errno_t error;
 	int opened = 0;
 	int referenced = 0;
@@ -2493,11 +2494,11 @@ open_xattrfile(vnode_t vp, int fileflags, vnode_t *xvpp, vfs_context_t context)
 		goto out;
 	}
 	filename = &smallname[0];
-	len = snprintf(filename, sizeof(smallname), "%s%s", ATTR_FILE_PREFIX, basename);
-	if (len >= sizeof(smallname)) {
-		len++;  /* snprintf result doesn't include '\0' */
-		filename = kheap_alloc(KHEAP_TEMP, len, Z_WAITOK);
-		len = snprintf(filename, len, "%s%s", ATTR_FILE_PREFIX, basename);
+	alloc_len = snprintf(filename, sizeof(smallname), "%s%s", ATTR_FILE_PREFIX, basename);
+	if (alloc_len >= sizeof(smallname)) {
+		alloc_len++;  /* snprintf result doesn't include '\0' */
+		filename = kheap_alloc(KHEAP_TEMP, alloc_len, Z_WAITOK);
+		copy_len = snprintf(filename, alloc_len, "%s%s", ATTR_FILE_PREFIX, basename);
 	}
 	/*
 	 * Note that the lookup here does not authorize.  Since we are looking
@@ -2687,7 +2688,7 @@ out:
 		vnode_putname(basename);
 	}
 	if (filename && filename != &smallname[0]) {
-		kheap_free(KHEAP_TEMP, filename, len);
+		kheap_free(KHEAP_TEMP, filename, alloc_len);
 	}
 
 	*xvpp = xvp;  /* return a referenced vnode */

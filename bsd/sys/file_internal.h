@@ -123,9 +123,6 @@ struct fileproc {
 
 #define FILEPROC_TYPE(fp)       ((fp)->fp_flags & FP_TYPEMASK)
 
-#define FP_ISGUARDED(fp, attribs)  \
-	        ((FILEPROC_TYPE(fp) == FTYPE_GUARDED) ? fp_isguarded(fp, attribs) : 0)
-
 typedef enum {
 	FTYPE_SIMPLE    = 0,
 	FTYPE_GUARDED   = (1 << _FP_TYPESHIFT)

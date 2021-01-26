@@ -691,12 +691,6 @@ extern vm_offset_t   segPPLDATAB;
 extern unsigned long segSizePPLDATA;
 extern vm_offset_t   segPPLTEXTB;
 extern unsigned long segSizePPLTEXT;
-#if __APRR_SUPPORTED__
-extern vm_offset_t   segPPLTRAMPB;
-extern unsigned long segSizePPLTRAMP;
-extern void ppl_trampoline_start;
-extern void ppl_trampoline_end;
-#endif
 extern vm_offset_t   segPPLDATACONSTB;
 extern unsigned long segSizePPLDATACONST;
 
@@ -1943,10 +1937,6 @@ static void pmap_unpin_kernel_pages(vm_offset_t kva, size_t nbytes);
 static void pmap_trim_self(pmap_t pmap);
 static void pmap_trim_subord(pmap_t subord);
 
-#if __APRR_SUPPORTED__
-static uint64_t pte_to_xprr_perm(pt_entry_t pte);
-static pt_entry_t xprr_perm_to_pte(uint64_t perm);
-#endif /* __APRR_SUPPORTED__*/
 
 /*
  * Temporary prototypes, while we wait for pmap_enter to move to taking an
@@ -4094,111 +4084,9 @@ pmap_pte(
 
 #endif
 
-#if __APRR_SUPPORTED__
-/*
- * Indicates whether the given PTE has special restrictions due to the current
- * APRR settings.
- */
-static boolean_t
-is_pte_aprr_protected(pt_entry_t pte)
-{
-	uint64_t aprr_el0_value;
-	uint64_t aprr_el1_value;
-	uint64_t aprr_index;
-
-	MRS(aprr_el0_value, APRR_EL0);
-	MRS(aprr_el1_value, APRR_EL1);
-	aprr_index = PTE_TO_APRR_INDEX(pte);
-
-	/* Check to see if this mapping had APRR restrictions. */
-	if ((APRR_EXTRACT_IDX_ATTR(aprr_el0_value, aprr_index) != APRR_EXTRACT_IDX_ATTR(APRR_EL0_RESET, aprr_index)) ||
-	    (APRR_EXTRACT_IDX_ATTR(aprr_el1_value, aprr_index) != APRR_EXTRACT_IDX_ATTR(APRR_EL1_RESET, aprr_index))
-	    ) {
-		return TRUE;
-	}
-
-	return FALSE;
-}
-#endif /* __APRR_SUPPORTED__ */
 
 
-#if __APRR_SUPPORTED__
-static boolean_t
-is_pte_xprr_protected(pmap_t pmap __unused, pt_entry_t pte)
-{
-#if __APRR_SUPPORTED__
-	return is_pte_aprr_protected(pte);
-#else /* __APRR_SUPPORTED__ */
-#error "XPRR configuration error"
-#endif /* __APRR_SUPPORTED__ */
-}
-#endif /* __APRR_SUPPORTED__*/
 
-#if __APRR_SUPPORTED__
-static uint64_t
-__unused pte_to_xprr_perm(pt_entry_t pte)
-{
-#if   __APRR_SUPPORTED__
-	switch (PTE_TO_APRR_INDEX(pte)) {
-	case APRR_FIRM_RX_INDEX:  return XPRR_FIRM_RX_PERM;
-	case APRR_FIRM_RO_INDEX:  return XPRR_FIRM_RO_PERM;
-	case APRR_PPL_RW_INDEX:   return XPRR_PPL_RW_PERM;
-	case APRR_KERN_RW_INDEX:  return XPRR_KERN_RW_PERM;
-	case APRR_FIRM_RW_INDEX:  return XPRR_FIRM_RW_PERM;
-	case APRR_KERN0_RW_INDEX: return XPRR_KERN0_RW_PERM;
-	case APRR_USER_JIT_INDEX: return XPRR_USER_JIT_PERM;
-	case APRR_USER_RW_INDEX:  return XPRR_USER_RW_PERM;
-	case APRR_PPL_RX_INDEX:   return XPRR_PPL_RX_PERM;
-	case APRR_KERN_RX_INDEX:  return XPRR_KERN_RX_PERM;
-	case APRR_USER_XO_INDEX:  return XPRR_USER_XO_PERM;
-	case APRR_KERN_RO_INDEX:  return XPRR_KERN_RO_PERM;
-	case APRR_KERN0_RX_INDEX: return XPRR_KERN0_RO_PERM;
-	case APRR_KERN0_RO_INDEX: return XPRR_KERN0_RO_PERM;
-	case APRR_USER_RX_INDEX:  return XPRR_USER_RX_PERM;
-	case APRR_USER_RO_INDEX:  return XPRR_USER_RO_PERM;
-	default:                  return XPRR_MAX_PERM;
-	}
-#else
-#error "XPRR configuration error"
-#endif /**/
-}
-
-#if __APRR_SUPPORTED__
-static uint64_t
-xprr_perm_to_aprr_index(uint64_t perm)
-{
-	switch (perm) {
-	case XPRR_FIRM_RX_PERM:  return APRR_FIRM_RX_INDEX;
-	case XPRR_FIRM_RO_PERM:  return APRR_FIRM_RO_INDEX;
-	case XPRR_PPL_RW_PERM:   return APRR_PPL_RW_INDEX;
-	case XPRR_KERN_RW_PERM:  return APRR_KERN_RW_INDEX;
-	case XPRR_FIRM_RW_PERM:  return APRR_FIRM_RW_INDEX;
-	case XPRR_KERN0_RW_PERM: return APRR_KERN0_RW_INDEX;
-	case XPRR_USER_JIT_PERM: return APRR_USER_JIT_INDEX;
-	case XPRR_USER_RW_PERM:  return APRR_USER_RW_INDEX;
-	case XPRR_PPL_RX_PERM:   return APRR_PPL_RX_INDEX;
-	case XPRR_KERN_RX_PERM:  return APRR_KERN_RX_INDEX;
-	case XPRR_USER_XO_PERM:  return APRR_USER_XO_INDEX;
-	case XPRR_KERN_RO_PERM:  return APRR_KERN_RO_INDEX;
-	case XPRR_KERN0_RX_PERM: return APRR_KERN0_RO_INDEX;
-	case XPRR_KERN0_RO_PERM: return APRR_KERN0_RO_INDEX;
-	case XPRR_USER_RX_PERM:  return APRR_USER_RX_INDEX;
-	case XPRR_USER_RO_PERM:  return APRR_USER_RO_INDEX;
-	default:                 return APRR_MAX_INDEX;
-	}
-}
-#endif /* __APRR_SUPPORTED__ */
-
-static pt_entry_t
-__unused xprr_perm_to_pte(uint64_t perm)
-{
-#if   __APRR_SUPPORTED__
-	return APRR_INDEX_TO_PTE(xprr_perm_to_aprr_index(perm));
-#else
-#error "XPRR configuration error"
-#endif /**/
-}
-#endif /* __APRR_SUPPORTED__*/
 
 
 /*
@@ -4712,21 +4600,6 @@ pmap_bootstrap(
 	}
 #endif /* CONFIG_CSR_FROM_DT */
 
-#if __APRR_SUPPORTED__
-	if (((uintptr_t)(&ppl_trampoline_start)) % PAGE_SIZE) {
-		panic("%s: ppl_trampoline_start is not page aligned, "
-		    "vstart=%#lx",
-		    __FUNCTION__,
-		    vstart);
-	}
-
-	if (((uintptr_t)(&ppl_trampoline_end)) % PAGE_SIZE) {
-		panic("%s: ppl_trampoline_end is not page aligned, "
-		    "vstart=%#lx",
-		    __FUNCTION__,
-		    vstart);
-	}
-#endif /* __APRR_SUPPORTED__ */
 #endif /* XNU_MONITOR */
 
 #if DEVELOPMENT || DEBUG
@@ -5035,16 +4908,6 @@ pmap_static_allocations_done(void)
 	/* PPL text is RX for the PPL, RO for the kernel. */
 	pa_set_range_xprr_perm(monitor_start_pa, monitor_end_pa, XPRR_KERN_RX_PERM, XPRR_PPL_RX_PERM);
 
-#if __APRR_SUPPORTED__
-	monitor_start_pa = kvtophys(segPPLTRAMPB);
-	monitor_end_pa = monitor_start_pa + segSizePPLTRAMP;
-
-	/*
-	 * The PPLTRAMP pages will be a mix of PPL RX/kernel RO and
-	 * PPL RX/kernel RX.  However, all of these pages belong to the PPL.
-	 */
-	pa_set_range_monitor(monitor_start_pa, monitor_end_pa);
-#endif
 
 	/*
 	 * In order to support DTrace, the save areas for the PPL must be
@@ -5058,10 +4921,6 @@ pmap_static_allocations_done(void)
 		pmap_set_range_xprr_perm(monitor_start_va, monitor_end_va, XPRR_PPL_RW_PERM, XPRR_KERN_RW_PERM);
 	}
 
-#if __APRR_SUPPORTED__
-	/* The trampoline must also be specially protected. */
-	pmap_set_range_xprr_perm((vm_offset_t)&ppl_trampoline_start, (vm_offset_t)&ppl_trampoline_end, XPRR_KERN_RX_PERM, XPRR_PPL_RX_PERM);
-#endif
 
 	if (segSizePPLDATACONST > 0) {
 		monitor_start_pa = kvtophys(segPPLDATACONSTB);
@@ -5086,13 +4945,7 @@ pmap_lockdown_ppl(void)
 {
 	/* Mark the PPL as being locked down. */
 
-#if __APRR_SUPPORTED__
-	pmap_ppl_locked_down = TRUE;
-	/* Force a trap into to the PPL to update APRR_EL1. */
-	pmap_return(FALSE, FALSE);
-#else
 #error "XPRR configuration error"
-#endif /* __APRR_SUPPORTED__ */
 
 }
 #endif /* XNU_MONITOR */
@@ -6654,7 +6507,7 @@ pmap_remove_range_options(
 		pt_entry_t      spte;
 		boolean_t       managed = FALSE;
 
-		spte = *cpte;
+		spte = *((volatile pt_entry_t*)cpte);
 
 #if CONFIG_PGTRACE
 		if (pgtrace_enabled) {
@@ -6689,7 +6542,7 @@ pmap_remove_range_options(
 				if (OSAddAtomic16(-1, (SInt16 *) &(ptep_get_info(cpte)->refcnt)) <= 0) {
 					panic("pmap_remove_range_options: over-release of ptdp %p for pte %p", ptep_get_ptd(cpte), cpte);
 				}
-				spte = *cpte;
+				spte = *((volatile pt_entry_t*)cpte);
 			}
 			/*
 			 * It may be possible for the pte to transition from managed
@@ -6713,7 +6566,7 @@ pmap_remove_range_options(
 			}
 			pai = (int)pa_index(pa);
 			LOCK_PVH(pai);
-			spte = *cpte;
+			spte = *((volatile pt_entry_t*)cpte);
 			pa = pte_to_pa(spte);
 			if (pai == (int)pa_index(pa)) {
 				managed = TRUE;
@@ -7469,30 +7322,6 @@ pmap_page_protect_options_with_flush_range(
 				tmplate |= pt_attr_leaf_xn(pt_attr);
 			}
 
-#if __APRR_SUPPORTED__
-			/**
-			 * Enforce the policy that PPL xPRR mappings can't have their permissions changed after the fact.
-			 *
-			 * Certain userspace applications (e.g., CrashReporter and debuggers) have a need to remap JIT mappings to
-			 * RO/RX, so we explicitly allow that. This doesn't compromise the security of the PPL since this only
-			 * affects userspace mappings, so allow reducing permissions on JIT mappings to RO/RX. This is similar for
-			 * user execute-only mappings.
-			 */
-			if (__improbable(is_pte_xprr_protected(pmap, spte) && (pte_to_xprr_perm(spte) != XPRR_USER_JIT_PERM)
-			    && (pte_to_xprr_perm(spte) != XPRR_USER_XO_PERM))) {
-				panic("%s: modifying an xPRR mapping pte_p=%p pmap=%p prot=%d options=%u, pv_h=%p, pveh_p=%p, pve_p=%p, pte=0x%llx, tmplate=0x%llx, va=0x%llx ppnum: 0x%x",
-				    __func__, pte_p, pmap, prot, options, pv_h, pveh_p, pve_p, (uint64_t)spte, (uint64_t)tmplate, (uint64_t)va, ppnum);
-			}
-
-			/**
-			 * Enforce the policy that we can't create a new PPL protected mapping here except for user execute-only
-			 * mappings (which doesn't compromise the security of the PPL since it's userspace-specific).
-			 */
-			if (__improbable(is_pte_xprr_protected(pmap, tmplate) && (pte_to_xprr_perm(tmplate) != XPRR_USER_XO_PERM))) {
-				panic("%s: creating an xPRR mapping pte_p=%p pmap=%p prot=%d options=%u, pv_h=%p, pveh_p=%p, pve_p=%p, pte=0x%llx, tmplate=0x%llx, va=0x%llx ppnum: 0x%x",
-				    __func__, pte_p, pmap, prot, options, pv_h, pveh_p, pve_p, (uint64_t)spte, (uint64_t)tmplate, (uint64_t)va, ppnum);
-			}
-#endif /* __APRR_SUPPORTED__*/
 
 			if (*pte_p != ARM_PTE_TYPE_FAULT &&
 			    !ARM_PTE_IS_COMPRESSED(*pte_p, pte_p) &&
@@ -7612,6 +7441,7 @@ pmap_disable_user_jop_internal(pmap_t pmap)
 	if (pmap == kernel_pmap) {
 		panic("%s: called with kernel_pmap\n", __func__);
 	}
+	VALIDATE_PMAP(pmap);
 	pmap->disable_jop = true;
 }
 
@@ -7739,7 +7569,7 @@ pmap_protect_options_internal(
 			boolean_t  force_write = FALSE;
 #endif
 
-			spte = *pte_p;
+			spte = *((volatile pt_entry_t*)pte_p);
 
 			if ((spte == ARM_PTE_TYPE_FAULT) ||
 			    ARM_PTE_IS_COMPRESSED(spte, pte_p)) {
@@ -7763,7 +7593,7 @@ pmap_protect_options_internal(
 				}
 				pai = (int)pa_index(pa);
 				LOCK_PVH(pai);
-				spte = *pte_p;
+				spte = *((volatile pt_entry_t*)pte_p);
 				pa = pte_to_pa(spte);
 				if (pai == (int)pa_index(pa)) {
 					managed = TRUE;
@@ -7871,30 +7701,6 @@ pmap_protect_options_internal(
 			/* We do not expect to write fast fault the entry. */
 			pte_set_was_writeable(tmplate, false);
 
-#if __APRR_SUPPORTED__
-			/**
-			 * Enforce the policy that PPL xPRR mappings can't have their permissions changed after the fact.
-			 *
-			 * Certain userspace applications (e.g., CrashReporter and debuggers) have a need to remap JIT mappings to
-			 * RO/RX, so we explicitly allow that. This doesn't compromise the security of the PPL since this only
-			 * affects userspace mappings, so allow reducing permissions on JIT mappings to RO/RX/XO. This is similar
-			 * for user execute-only mappings.
-			 */
-			if (__improbable(is_pte_xprr_protected(pmap, spte) && (pte_to_xprr_perm(spte) != XPRR_USER_JIT_PERM)
-			    && (pte_to_xprr_perm(spte) != XPRR_USER_XO_PERM))) {
-				panic("%s: modifying a PPL mapping pte_p=%p pmap=%p prot=%d options=%u, pte=0x%llx, tmplate=0x%llx",
-				    __func__, pte_p, pmap, prot, options, (uint64_t)spte, (uint64_t)tmplate);
-			}
-
-			/**
-			 * Enforce the policy that we can't create a new PPL protected mapping here except for user execute-only
-			 * mappings (which doesn't compromise the security of the PPL since it's userspace-specific).
-			 */
-			if (__improbable(is_pte_xprr_protected(pmap, tmplate) && (pte_to_xprr_perm(tmplate) != XPRR_USER_XO_PERM))) {
-				panic("%s: creating an xPRR mapping pte_p=%p pmap=%p prot=%d options=%u, pte=0x%llx, tmplate=0x%llx",
-				    __func__, pte_p, pmap, prot, options, (uint64_t)spte, (uint64_t)tmplate);
-			}
-#endif /* __APRR_SUPPORTED__*/
 			WRITE_PTE_FAST(pte_p, tmplate);
 
 			if (managed) {
@@ -8834,14 +8640,28 @@ pmap_change_wiring_internal(
 	const pt_attr_t * pt_attr = pmap_get_pt_attr(pmap);
 
 	pte_p = pmap_pte(pmap, v);
-	assert(pte_p != PT_ENTRY_NULL);
-	pa = pte_to_pa(*pte_p);
+	if (pte_p == PT_ENTRY_NULL) {
+		if (!wired) {
+			/*
+			 * The PTE may have already been cleared by a disconnect/remove operation, and the L3 table
+			 * may have been freed by a remove operation.
+			 */
+			goto pmap_change_wiring_return;
+		} else {
+			panic("%s: Attempt to wire nonexistent PTE for pmap %p", __func__, pmap);
+		}
+	}
+	/*
+	 * Use volatile loads to prevent the compiler from collapsing references to 'pa' back to loads of pte_p
+	 * until we've grabbed the final PVH lock; PTE contents may change during this time.
+	 */
+	pa = pte_to_pa(*((volatile pt_entry_t*)pte_p));
 
 	while (pa_valid(pa)) {
 		pmap_paddr_t new_pa;
 
 		LOCK_PVH((int)pa_index(pa));
-		new_pa = pte_to_pa(*pte_p);
+		new_pa = pte_to_pa(*((volatile pt_entry_t*)pte_p));
 
 		if (pa == new_pa) {
 			break;
@@ -8851,6 +8671,18 @@ pmap_change_wiring_internal(
 		pa = new_pa;
 	}
 
+	/* PTE checks must be performed after acquiring the PVH lock (if applicable for the PA) */
+	if ((*pte_p == ARM_PTE_EMPTY) || (ARM_PTE_IS_COMPRESSED(*pte_p, pte_p))) {
+		if (!wired) {
+			/* PTE cleared by prior remove/disconnect operation */
+			goto pmap_change_wiring_cleanup;
+		} else {
+			panic("%s: Attempt to wire empty/compressed PTE %p (=0x%llx) for pmap %p",
+			    __func__, pte_p, (uint64_t)*pte_p, pmap);
+		}
+	}
+
+	assertf((*pte_p & ARM_PTE_TYPE_VALID) == ARM_PTE_TYPE, "invalid pte %p (=0x%llx)", pte_p, (uint64_t)*pte_p);
 	if (wired != pte_is_wired(*pte_p)) {
 		pte_set_wired(pmap, pte_p, wired);
 		if (pmap != kernel_pmap) {
@@ -8865,10 +8697,12 @@ pmap_change_wiring_internal(
 		}
 	}
 
+pmap_change_wiring_cleanup:
 	if (pa_valid(pa)) {
 		UNLOCK_PVH((int)pa_index(pa));
 	}
 
+pmap_change_wiring_return:
 	pmap_unlock(pmap);
 }
 
@@ -8980,12 +8814,7 @@ kvtophys(
 	if (pa) {
 		return pa;
 	}
-	pa = ((pmap_paddr_t)pmap_vtophys(kernel_pmap, va)) << PAGE_SHIFT;
-	if (pa) {
-		pa |= (va & PAGE_MASK);
-	}
-
-	return (pmap_paddr_t)pa;
+	return pmap_vtophys(kernel_pmap, va);
 }
 
 pmap_paddr_t
@@ -9601,7 +9430,7 @@ phys_attribute_clear_twig_internal(
 		end_pte_p = start_pte_p + ((end - start) >> pt_attr_leaf_shift(pt_attr));
 		assert(end_pte_p >= start_pte_p);
 		for (curr_pte_p = start_pte_p; curr_pte_p < end_pte_p; curr_pte_p++) {
-			pmap_paddr_t pa = pte_to_pa(*curr_pte_p);
+			pmap_paddr_t pa = pte_to_pa(*((volatile pt_entry_t*)curr_pte_p));
 			if (pa_valid(pa)) {
 				ppnum_t pn = (ppnum_t) atop(pa);
 				phys_attribute_clear_with_flush_range(pn, bits, options, NULL, flush_range);
@@ -10128,23 +9957,6 @@ pmap_switch_user_ttb_internal(
 		pmap_clear_user_ttb_internal();
 	}
 
-#if defined(HAS_APPLE_PAC) && (__APCFG_SUPPORTED__ || __APSTS_SUPPORTED__)
-	if (!arm_user_jop_disabled()) {
-		uint64_t sctlr = __builtin_arm_rsr64("SCTLR_EL1");
-		bool jop_enabled = sctlr & SCTLR_JOP_KEYS_ENABLED;
-		if (!jop_enabled && !pmap->disable_jop) {
-			// turn on JOP
-			sctlr |= SCTLR_JOP_KEYS_ENABLED;
-			__builtin_arm_wsr64("SCTLR_EL1", sctlr);
-			arm_context_switch_requires_sync();
-		} else if (jop_enabled && pmap->disable_jop) {
-			// turn off JOP
-			sctlr &= ~SCTLR_JOP_KEYS_ENABLED;
-			__builtin_arm_wsr64("SCTLR_EL1", sctlr);
-			arm_context_switch_requires_sync();
-		}
-	}
-#endif /* HAS_APPLE_PAC && (__APCFG_SUPPORTED__ || __APSTS_SUPPORTED__) */
 #endif /* (__ARM_VMSA__ == 7) */
 }
 
@@ -10630,7 +10442,7 @@ arm_fast_fault_internal(
 	ptep = pmap_pte(pmap, va);
 	if (ptep != PT_ENTRY_NULL) {
 		while (true) {
-			spte = *ptep;
+			spte = *((volatile pt_entry_t*)ptep);
 
 			pa = pte_to_pa(spte);
 
@@ -10651,42 +10463,13 @@ arm_fast_fault_internal(
 			}
 			pai = (int)pa_index(pa);
 			LOCK_PVH(pai);
-#if __APRR_SUPPORTED__
-			if (*ptep == spte) {
-				/*
-				 * Double-check the spte value, as we care
-				 * about the AF bit.
-				 */
-				break;
-			}
-			UNLOCK_PVH(pai);
-#else /* !(__APRR_SUPPORTED__*/
 			break;
-#endif /* !(__APRR_SUPPORTED__*/
 		}
 	} else {
 		pmap_unlock(pmap);
 		return result;
 	}
 
-#if __APRR_SUPPORTED__
-	/* Check to see if this mapping had APRR restrictions. */
-	if (is_pte_xprr_protected(pmap, spte)) {
-		/*
-		 * We have faulted on an XPRR managed mapping; decide if the access should be
-		 * reattempted or if it should cause an exception. Now that all JIT entitled
-		 * task threads always have MPRR enabled we're only here because of
-		 * an AF fault or an actual permission fault. AF faults will have result
-		 * changed to KERN_SUCCESS below upon arm_clear_fast_fault return.
-		 */
-		if (was_af_fault && (spte & ARM_PTE_AF)) {
-			result = KERN_SUCCESS;
-			goto out;
-		} else {
-			result = KERN_PROTECTION_FAILURE;
-		}
-	}
-#endif /* __APRR_SUPPORTED__*/
 
 	if ((IS_REFFAULT_PAGE(pai)) ||
 	    ((fault_type & VM_PROT_WRITE) && IS_MODFAULT_PAGE(pai))) {
@@ -10717,9 +10500,6 @@ arm_fast_fault_internal(
 		}
 	}
 
-#if __APRR_SUPPORTED__
-out:
-#endif /* __APRR_SUPPORTED__*/
 	UNLOCK_PVH(pai);
 	pmap_unlock(pmap);
 	return result;
@@ -11971,7 +11751,7 @@ pmap_unnest_options_internal(
 
 					if ((*cpte != ARM_PTE_TYPE_FAULT)
 					    && (!ARM_PTE_IS_COMPRESSED(*cpte, cpte))) {
-						spte = *cpte;
+						spte = *((volatile pt_entry_t*)cpte);
 						while (!managed) {
 							pa = pte_to_pa(spte);
 							if (!pa_valid(pa)) {
@@ -11979,7 +11759,7 @@ pmap_unnest_options_internal(
 							}
 							pai = (int)pa_index(pa);
 							LOCK_PVH(pai);
-							spte = *cpte;
+							spte = *((volatile pt_entry_t*)cpte);
 							pa = pte_to_pa(spte);
 							if (pai == (int)pa_index(pa)) {
 								managed = TRUE;
@@ -14694,7 +14474,7 @@ pmap_query_page_info_internal(
 		goto done;
 	}
 
-	pa = pte_to_pa(*pte);
+	pa = pte_to_pa(*((volatile pt_entry_t*)pte));
 	if (pa == 0) {
 		if (ARM_PTE_IS_COMPRESSED(*pte, pte)) {
 			disp |= PMAP_QUERY_PAGE_COMPRESSED;
@@ -15299,13 +15079,8 @@ pmap_test_test_config(unsigned int flags)
 	T_LOG("Make the first mapping XO.");
 	pmap_enter_addr(pmap, va_base, pa, VM_PROT_EXECUTE, VM_PROT_EXECUTE, 0, false);
 
-#if __APRR_SUPPORTED__
-	T_LOG("Validate that reads to our mapping fault.");
-	pmap_test_read(pmap, va_base, true);
-#else
 	T_LOG("Validate that reads to our mapping do not fault.");
 	pmap_test_read(pmap, va_base, false);
-#endif
 
 	T_LOG("Validate that writes to our mapping fault.");
 	pmap_test_write(pmap, va_base, true);

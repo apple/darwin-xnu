@@ -2727,7 +2727,17 @@ mach_make_memory_entry_internal(
 			required_protection = protections;
 		}
 		cur_prot = VM_PROT_ALL;
-		vmk_flags.vmkf_copy_pageable = TRUE;
+		if (target_map->pmap == kernel_pmap) {
+			/*
+			 * Get "reserved" map entries to avoid deadlocking
+			 * on the kernel map or a kernel submap if we
+			 * run out of VM map entries and need to refill that
+			 * zone.
+			 */
+			vmk_flags.vmkf_copy_pageable = FALSE;
+		} else {
+			vmk_flags.vmkf_copy_pageable = TRUE;
+		}
 		vmk_flags.vmkf_copy_same_map = FALSE;
 		assert(map_size != 0);
 		kr = vm_map_copy_extract(target_map,

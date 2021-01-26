@@ -166,6 +166,11 @@ typedef const struct memory_object_pager_ops {
 	kern_return_t (*memory_object_data_reclaim)(
 		memory_object_t mem_obj,
 		boolean_t reclaim_backing_store);
+	boolean_t (*memory_object_backing_object)(
+		memory_object_t mem_obj,
+		memory_object_offset_t mem_obj_offset,
+		vm_object_t *backing_object,
+		vm_object_offset_t *backing_offset);
 	const char *memory_object_pager_name;
 } * memory_object_pager_ops_t;
 
@@ -301,6 +306,11 @@ typedef struct old_memory_object_attr_info old_memory_object_attr_info_data_t;
 __BEGIN_DECLS
 extern void memory_object_reference(memory_object_t object);
 extern void memory_object_deallocate(memory_object_t object);
+extern boolean_t memory_object_backing_object(
+	memory_object_t mem_obj,
+	memory_object_offset_t offset,
+	vm_object_t *backing_object,
+	vm_object_offset_t *backing_offset);
 
 extern void memory_object_default_reference(memory_object_default_t);
 extern void memory_object_default_deallocate(memory_object_default_t);

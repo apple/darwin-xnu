@@ -2289,32 +2289,6 @@ ex_cb_invoke(
 }
 
 #if defined(HAS_APPLE_PAC)
-static inline bool
-cpu_supports_userkeyen()
-{
-#if defined(APPLEFIRESTORM)
-	return __builtin_arm_rsr64(ARM64_REG_APCTL_EL1) & APCTL_EL1_UserKeyEn;
-#elif HAS_APCTL_EL1_USERKEYEN
-	return true;
-#else
-	return false;
-#endif
-}
-
-/**
- * Returns the default JOP key.  Depending on how the CPU diversifies userspace
- * JOP keys, this value may reflect either KERNKeyLo or APIAKeyLo.
- */
-uint64_t
-ml_default_jop_pid(void)
-{
-	if (cpu_supports_userkeyen()) {
-		return KERNEL_KERNKEY_ID;
-	} else {
-		return KERNEL_JOP_ID;
-	}
-}
-
 void
 ml_task_set_disable_user_jop(task_t task, uint8_t disable_user_jop)
 {

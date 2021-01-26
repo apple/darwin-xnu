@@ -4990,7 +4990,8 @@ xattrfile_setattr(vnode_t dvp, const char * basename, struct vnode_attr * vap,
 	struct nameidata nd;
 	char smallname[64];
 	char *filename = NULL;
-	size_t len;
+	size_t alloc_len;
+	size_t copy_len;
 
 	if ((dvp == NULLVP) ||
 	    (basename == NULL) || (basename[0] == '\0') ||
@@ -4998,11 +4999,11 @@ xattrfile_setattr(vnode_t dvp, const char * basename, struct vnode_attr * vap,
 		return;
 	}
 	filename = &smallname[0];
-	len = snprintf(filename, sizeof(smallname), "._%s", basename);
-	if (len >= sizeof(smallname)) {
-		len++;  /* snprintf result doesn't include '\0' */
-		filename = kheap_alloc(KHEAP_TEMP, len, Z_WAITOK);
-		len = snprintf(filename, len, "._%s", basename);
+	alloc_len = snprintf(filename, sizeof(smallname), "._%s", basename);
+	if (alloc_len >= sizeof(smallname)) {
+		alloc_len++;  /* snprintf result doesn't include '\0' */
+		filename = kheap_alloc(KHEAP_TEMP, alloc_len, Z_WAITOK);
+		copy_len = snprintf(filename, alloc_len, "._%s", basename);
 	}
 	NDINIT(&nd, LOOKUP, OP_SETATTR, NOFOLLOW | USEDVP, UIO_SYSSPACE,
 	    CAST_USER_ADDR_T(filename), ctx);
@@ -5028,7 +5029,7 @@ xattrfile_setattr(vnode_t dvp, const char * basename, struct vnode_attr * vap,
 	vnode_put(xvp);
 out2:
 	if (filename && filename != &smallname[0]) {
-		kheap_free(KHEAP_TEMP, filename, len);
+		kheap_free(KHEAP_TEMP, filename, alloc_len);
 	}
 }
 #endif /* CONFIG_APPLEDOUBLE */
@@ -5436,7 +5437,8 @@ VNOP_ADVLOCK(struct vnode *vp, caddr_t id, int op, struct flock *fl, int flags, 
 			_err = (*vp->v_op[vnop_advlock_desc.vdesc_offset])(&a);
 		}
 		DTRACE_FSINFO(advlock, vnode_t, vp);
-		if (op == F_UNLCK && flags == F_FLOCK) {
+		if (op == F_UNLCK &&
+		    (flags & (F_FLOCK | F_OFD_LOCK)) != 0) {
 			post_event_if_success(vp, _err, NOTE_FUNLOCK);
 		}
 	}

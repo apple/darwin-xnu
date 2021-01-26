@@ -127,6 +127,7 @@ const struct memory_object_pager_ops swapfile_pager_ops = {
 	.memory_object_map = swapfile_pager_map,
 	.memory_object_last_unmap = swapfile_pager_last_unmap,
 	.memory_object_data_reclaim = NULL,
+	.memory_object_backing_object = NULL,
 	.memory_object_pager_name = "swapfile pager"
 };
 

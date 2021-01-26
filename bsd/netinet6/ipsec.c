@@ -2519,7 +2519,7 @@ ipsec64_encapsulate(struct mbuf *m, struct secasvar *sav)
 
 	/* construct new IPv4 header. see RFC 2401 5.1.2.1 */
 	/* ECN consideration. */
-	ip64_ecn_ingress(ip4_ipsec_ecn, &ip->ip_tos, &ip6i->ip6_flow);
+	ip64_ecn_ingress(ip4_ipsec_ecn, &ip->ip_tos, &ip6->ip6_flow);
 
 	if (plen + sizeof(struct ip) < IP_MAXPACKET) {
 		ip->ip_len = htons((u_int16_t)(plen + sizeof(struct ip)));
@@ -2784,7 +2784,7 @@ ipsec46_encapsulate(struct ipsec_output_state *state, struct secasvar *sav)
 
 	/* construct new IPv6 header. see RFC 2401 5.1.2.2 */
 	/* ECN consideration. */
-	ip46_ecn_ingress(ip6_ipsec_ecn, &ip6->ip6_flow, &oip->ip_tos);
+	ip46_ecn_ingress(ip6_ipsec_ecn, &ip6->ip6_flow, &ip->ip_tos);
 	if (plen < IPV6_MAXPACKET - sizeof(struct ip6_hdr)) {
 		ip6->ip6_plen = htons((u_int16_t)plen);
 	} else {

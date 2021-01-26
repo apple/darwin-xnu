@@ -1096,6 +1096,9 @@ rt_xaddrs(caddr_t cp, caddr_t cplim, struct rt_addrinfo *rtinfo)
 			rtinfo->rti_info[i] = &sa_zero;
 			return 0; /* should be EINVAL but for compat */
 		}
+		if (sa->sa_len < offsetof(struct sockaddr, sa_data)) {
+			return EINVAL;
+		}
 		/* accept it */
 		rtinfo->rti_info[i] = sa;
 		ADVANCE32(cp, sa);

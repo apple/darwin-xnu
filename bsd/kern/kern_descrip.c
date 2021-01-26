@@ -760,7 +760,7 @@ sys_dup(proc_t p, struct dup_args *uap, int32_t *retval)
 		proc_fdunlock(p);
 		return error;
 	}
-	if (FP_ISGUARDED(fp, GUARD_DUP)) {
+	if (fp_isguarded(fp, GUARD_DUP)) {
 		error = fp_guard_exception(p, old, fp, kGUARD_EXC_DUP);
 		(void) fp_drop(p, old, fp, 1);
 		proc_fdunlock(p);
@@ -820,7 +820,7 @@ startover:
 		proc_fdunlock(p);
 		return error;
 	}
-	if (FP_ISGUARDED(fp, GUARD_DUP)) {
+	if (fp_isguarded(fp, GUARD_DUP)) {
 		error = fp_guard_exception(p, old, fp, kGUARD_EXC_DUP);
 		(void) fp_drop(p, old, fp, 1);
 		proc_fdunlock(p);
@@ -861,7 +861,7 @@ closeit:
 		}
 
 		if ((nfp = fdp->fd_ofiles[new]) != NULL) {
-			if (FP_ISGUARDED(nfp, GUARD_CLOSE)) {
+			if (fp_isguarded(nfp, GUARD_CLOSE)) {
 				fp_drop(p, old, fp, 1);
 				error = fp_guard_exception(p,
 				    new, nfp, kGUARD_EXC_CLOSE);
@@ -1047,7 +1047,7 @@ sys_fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 	switch (uap->cmd) {
 	case F_DUPFD:
 	case F_DUPFD_CLOEXEC:
-		if (FP_ISGUARDED(fp, GUARD_DUP)) {
+		if (fp_isguarded(fp, GUARD_DUP)) {
 			error = fp_guard_exception(p, fd, fp, kGUARD_EXC_DUP);
 			goto out;
 		}
@@ -1075,7 +1075,7 @@ sys_fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 		if (uap->arg & FD_CLOEXEC) {
 			*pop |= UF_EXCLOSE;
 		} else {
-			if (FILEPROC_TYPE(fp) == FTYPE_GUARDED) {
+			if (fp_isguarded(fp, 0)) {
 				error = fp_guard_exception(p,
 				    fd, fp, kGUARD_EXC_NOCLOEXEC);
 				goto out;
@@ -3332,7 +3332,7 @@ close_nocancel(proc_t p, int fd)
 		return EBADF;
 	}
 
-	if (FP_ISGUARDED(fp, GUARD_CLOSE)) {
+	if (fp_isguarded(fp, GUARD_CLOSE)) {
 		int error = fp_guard_exception(p, fd, fp, kGUARD_EXC_CLOSE);
 		proc_fdunlock(p);
 		return error;
@@ -5290,7 +5290,7 @@ sys_fileport_makeport(proc_t p, struct fileport_makeport_args *uap,
 		goto out_unlock;
 	}
 
-	if (FP_ISGUARDED(fp, GUARD_FILEPORT)) {
+	if (fp_isguarded(fp, GUARD_FILEPORT)) {
 		err = fp_guard_exception(p, fd, fp, kGUARD_EXC_FILEPORT);
 		goto out_unlock;
 	}
@@ -5517,7 +5517,7 @@ dupfdopen(struct filedesc *fdp, int indx, int dfd, int flags, int error)
 	 */
 	switch (error) {
 	case ENODEV:
-		if (FP_ISGUARDED(wfp, GUARD_DUP)) {
+		if (fp_isguarded(wfp, GUARD_DUP)) {
 			proc_fdunlock(p);
 			return EPERM;
 		}

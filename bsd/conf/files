@@ -494,7 +494,7 @@ bsd/kern/mach_loader.c			standard
 bsd/kern/posix_sem.c			standard
 bsd/kern/posix_shm.c			standard
 # XXXdbg - I need this in the journaling and block cache code
-bsd/kern/qsort.c				standard
+bsd/kern/qsort.c				standard xnu-library
 bsd/kern/kpi_socket.c			optional sockets
 bsd/kern/kpi_socketfilter.c		optional sockets
 bsd/kern/proc_info.c			standard

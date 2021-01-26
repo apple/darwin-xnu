@@ -2916,14 +2916,23 @@ thread_set_mach_voucher(
 		return KERN_INVALID_ARGUMENT;
 	}
 
+	bank_get_bank_ledger_thread_group_and_persona(voucher, &bankledger, &banktg, &persona_id);
+
+	thread_mtx_lock(thread);
+	/*
+	 * Once the thread is started, we will look at `ith_voucher` without
+	 * holding any lock.
+	 *
+	 * Setting the voucher hence can only be done by current_thread() or
+	 * before it started. "started" flips under the thread mutex and must be
+	 * tested under it too.
+	 */
 	if (thread != current_thread() && thread->started) {
+		thread_mtx_unlock(thread);
 		return KERN_INVALID_ARGUMENT;
 	}
 
 	ipc_voucher_reference(voucher);
-	bank_get_bank_ledger_thread_group_and_persona(voucher, &bankledger, &banktg, &persona_id);
-
-	thread_mtx_lock(thread);
 	old_voucher = thread->ith_voucher;
 	thread->ith_voucher = voucher;
 	thread->ith_voucher_name = MACH_PORT_NULL;

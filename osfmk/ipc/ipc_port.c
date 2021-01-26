@@ -967,6 +967,15 @@ ipc_port_destroy(ipc_port_t port)
 	/* check for a backup port */
 	pdrequest = port->ip_pdrequest;
 
+	/*
+	 * Panic if a special reply has ip_pdrequest or ip_tempowner
+	 * set, as this causes a type confusion while accessing the
+	 * kdata union.
+	 */
+	if (special_reply && (pdrequest || port->ip_tempowner)) {
+		panic("ipc_port_destroy: invalid state");
+	}
+
 #if IMPORTANCE_INHERITANCE
 	/* determine how many assertions to drop and from whom */
 	if (port->ip_tempowner != 0) {

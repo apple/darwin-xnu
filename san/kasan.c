@@ -1466,6 +1466,7 @@ UNUSED_ABI(__asan_version_mismatch_check_apple_902, void);
 UNUSED_ABI(__asan_version_mismatch_check_apple_1000, void);
 UNUSED_ABI(__asan_version_mismatch_check_apple_1001, void);
 UNUSED_ABI(__asan_version_mismatch_check_apple_clang_1100, void);
+UNUSED_ABI(__asan_version_mismatch_check_apple_clang_1200, void);
 
 void OS_NORETURN UNSUPPORTED_API(__asan_init_v5, void);
 void OS_NORETURN UNSUPPORTED_API(__asan_register_globals, uptr a, uptr b);

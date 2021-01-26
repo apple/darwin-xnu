@@ -46,13 +46,22 @@ endif
 # Rules for the highly parallel "build" phase, where each build configuration
 # writes into their own $(TARGET) independent of other build configs
 #
-# There are 4 primary build outputs:
+# There are 5 primary build outputs:
 # 1) $(KERNEL_FILE_NAME).unstripped    (raw linked kernel, unstripped)
 # 2) $(KERNEL_FILE_NAME)               (stripped kernel, with optional CTF data)
 # 3) $(KERNEL_FILE_NAME).dSYM          (dSYM)
 # 4) $(KERNEL_FILE_NAME).link          (bits for static linking)
+# 5) lib$(KERNEL_FILE_NAME).a          (static archive for testing)
 
 ifeq ($(BUILD_STATIC_LINK),1)
+ifeq ($(BUILD_XNU_LIBRARY),1)
+
+KERNEL_STATIC_LINK_TARGETS = \
+	$(TARGET)/lib$(KERNEL_FILE_NAME).a
+KERNEL_STATIC_LINK_DST = \
+	$(DSTROOT)/$(INSTALL_KERNEL_DIR)/lib$(KERNEL_FILE_NAME).a
+
+else
 
 KERNEL_STATIC_LINK_TARGETS = \
 	$(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).a
@@ -67,10 +76,16 @@ KERNEL_STATIC_LINK_DST = \
 			$(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/$(KERNEL_LLDBBOOTSTRAP_NAME)
 
 endif
+endif
 
 do_build_all:: do_build_kernel
 
 .PHONY: do_build_kernel
+
+ifeq ($(BUILD_XNU_LIBRARY),1)
+do_build_kernel: $(KERNEL_STATIC_LINK_TARGETS)
+
+else
 
 do_build_kernel: $(TARGET)/$(KERNEL_FILE_NAME) $(TARGET)/$(KERNEL_FILE_NAME).unstripped $(KERNEL_STATIC_LINK_TARGETS)
 	@:
@@ -83,6 +98,8 @@ endif
 
 do_build_kernel_dSYM: $(TARGET)/$(KERNEL_FILE_NAME).dSYM
 	@:
+
+endif
 
 .LDFLAGS: ALWAYS
 	$(_v)$(REPLACECONTENTS) $@ $(LD) $(LDFLAGS_KERNEL) $(LDFLAGS_KERNEL_ONLY) $(LD_KERNEL_LIBS)
@@ -112,6 +129,15 @@ $(TARGET)/$(KERNEL_FILE_NAME).dSYM: $(TARGET)/$(KERNEL_FILE_NAME).unstripped
 	$(_v)bash -c "$(DSYMUTIL) $(DSYMUTIL_FLAGS) $< -o $@ $(_vstdout) 2> >(grep -v '^warning:.*could not find object file symbol for symbol' 1>&2)"
 	$(_v)$(MV) $@/$(DSYMDWARFDIR)/$(KERNEL_FILE_NAME).unstripped $@/$(DSYMDWARFDIR)/$(KERNEL_FILE_NAME)
 	$(_v)$(TOUCH) $@
+
+ifeq ($(BUILD_XNU_LIBRARY),1)
+$(TARGET)/lib$(KERNEL_FILE_NAME).a: $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST),$(component)/$(CURRENT_KERNEL_CONFIG)/$(component).libfilelist)) nonlto.o $(SRCROOT)/config/version.c $(SRCROOT)/config/MasterVersion .LDFLAGS $(filter %/MakeInc.kernel,$(MAKEFILE_LIST))
+	$(_v)${MAKE} -f $(firstword $(MAKEFILE_LIST)) version.o
+	@$(LOG_LIBTOOL) "$(@F)"
+	$(_v)$(CAT) $(filter %.libfilelist,$+) < /dev/null > link.filelist
+	$(_v)$(LIBTOOL) -static -csD -filelist link.filelist -o $@
+	$(_v)$(LN) $(call function_convert_build_config_to_objdir,$(CURRENT_BUILD_CONFIG))/lib$(KERNEL_FILE_NAME).a $(OBJROOT)/lib$(KERNEL_FILE_NAME).a
+endif
 
 $(TARGET)/$(KERNEL_FILE_NAME).unstripped: $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST),$(component)/$(CURRENT_KERNEL_CONFIG)/$(component).filelist)) lastkerneldataconst.o lastkernelconstructor.o nonlto.o $(SRCROOT)/config/version.c $(SRCROOT)/config/MasterVersion .LDFLAGS $(filter %/MakeInc.kernel,$(MAKEFILE_LIST))
 	$(_v)${MAKE} -f $(firstword $(MAKEFILE_LIST)) version.o
@@ -242,6 +268,7 @@ do_build_install_non_primary:: do_install_machine_specific_KDK_dSYM
 endif
 endif
 
+ifneq ($(BUILD_XNU_LIBRARY),1)
 ifeq ($(INSTALL_XNU_DEBUG_FILES),1)
 do_build_install_primary:: do_install_xnu_debug_files
 endif
@@ -250,6 +277,7 @@ endif
 
 do_install_xnu_debug_files:	$(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)/README.DEBUG-kernel.txt
 	@:
+endif
 
 #
 # If the timestamp indicates the DSTROOT kernel is out of
@@ -273,7 +301,14 @@ $(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME): $(TARGET)/$(KERNEL_FILE_NA
 	exit $$cmdstatus
 
 ifeq ($(BUILD_STATIC_LINK),1)
+ifeq ($(BUILD_XNU_LIBRARY),1)
 
+$(DSTROOT)/$(INSTALL_KERNEL_DIR)/lib$(KERNEL_FILE_NAME).a: $(TARGET)/lib$(KERNEL_FILE_NAME).a ALWAYS
+	$(_v)$(MKDIR) $(dir $@)
+	@$(LOG_INSTALL) "$(@F)"
+	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
+
+else
 $(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).a: $(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).a ALWAYS
 	$(_v)$(MKDIR) $(dir $@)
 	@$(LOG_INSTALL) "$(@F)"
@@ -298,6 +333,7 @@ $(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).al
 	$(_v)$(MKDIR) $(dir $@)
 	@$(LOG_INSTALL) "$(@F)"
 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
+endif
 
 # BUILD_STATIC_LINK
 endif
@@ -355,6 +391,16 @@ $(SYMROOT)/$(KERNEL_FILE_NAME).dSYM/$(DSYMDWARFDIR)/$(KERNEL_FILE_NAME) $(DSTROO
 	exit $$cmdstatus
 
 .PHONY: do_install_machine_specific_kernel do_install_machine_specific_kernel_dSYM
+.PHONY: do_install_machine_specific_KDK_dSYM
+
+ifeq ($(BUILD_XNU_LIBRARY),1)
+
+do_install_machine_specific_kernel: $(KERNEL_STATIC_LINK_DST)
+	@:
+do_install_machine_specific_kernel_dSYM:
+	@:
+
+else
 
 do_install_machine_specific_kernel: $(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME)                \
 			$(SYMROOT)/$(KERNEL_FILE_NAME)                                                              \
@@ -368,14 +414,14 @@ do_install_machine_specific_kernel_dSYM: \
 			$(SYMROOT)/$(KERNEL_FILE_NAME).dSYM/$(DSYMDWARFDIR)/$(KERNEL_FILE_NAME)
 	@:
 
-.PHONY: do_install_machine_specific_KDK_dSYM
-
 do_install_machine_specific_KDK_dSYM: \
 			$(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(KERNEL_FILE_NAME).dSYM/$(DSYMINFODIR)/Info.plist \
 			$(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/lldbmacros \
 			$(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/$(KERNEL_LLDBBOOTSTRAP_NAME) \
 			$(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(KERNEL_FILE_NAME).dSYM/$(DSYMDWARFDIR)/$(KERNEL_FILE_NAME)
 	@:
+
+endif
 
 # The $(RM) is needed so that the $(LN) doesn't dereference an existing
 # symlink during incremental builds and create a new symlink inside

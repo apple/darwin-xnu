@@ -3288,6 +3288,13 @@ pmap_lockdown_image4_slab(__unused vm_offset_t slab, __unused vm_size_t slab_len
 	// Unsupported on this architecture.
 }
 
+kern_return_t
+pmap_cs_allow_invalid(__unused pmap_t pmap)
+{
+	// Unsupported on this architecture.
+	return KERN_SUCCESS;
+}
+
 void *
 pmap_claim_reserved_ppl_page(void)
 {

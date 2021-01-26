@@ -57,9 +57,6 @@
 
 #if defined(CPU_HAS_APPLE_PAC) && defined(__arm64e__)
 #define HAS_APPLE_PAC                        1 /* Has Apple ARMv8.3a pointer authentication */
-#define KERNEL_ROP_ID 0xfeedfacefeedfacf /* placeholder static kernel ROP diversifier */
-#define KERNEL_KERNKEY_ID (KERNEL_ROP_ID + 4)
-#define KERNEL_JOP_ID (KERNEL_KERNKEY_ID + 2)
 #endif
 
 #include <pexpert/arm64/apple_arm64_regs.h>

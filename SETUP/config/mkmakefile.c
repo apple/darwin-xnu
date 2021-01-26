@@ -65,7 +65,7 @@ static char sccsid[] __attribute__((used)) = "@(#)mkmakefile.c	5.21 (Berkeley) 6
 #include "config.h"
 
 void    read_files(void);
-void    do_objs(FILE *fp, const char *msg, int ext);
+void    do_objs(FILE *fp, const char *msg, int ext, int flags);
 void    do_files(FILE *fp, const char *msg, char ext);
 void    do_machdep(FILE *ofp);
 void    do_rules(FILE *f);
@@ -243,16 +243,18 @@ makefile(void)
 		continue;
 percent:
 		if (eq(line, "%OBJS\n")) {
-			do_objs(ofp, "OBJS=", -1);
+			do_objs(ofp, "OBJS=", -1, 0);
+		} else if (eq(line, "%LIBOBJS\n")) {
+			do_objs(ofp, "LIBOBJS=", -1, LIBRARYDEP);
 		} else if (eq(line, "%CFILES\n")) {
 			do_files(ofp, "CFILES=", 'c');
-			do_objs(ofp, "COBJS=", 'c');
+			do_objs(ofp, "COBJS=", 'c', 0);
 		} else if (eq(line, "%CXXFILES\n")) {
 			do_files(ofp, "CXXFILES=", 'p');
-			do_objs(ofp, "CXXOBJS=", 'p');
+			do_objs(ofp, "CXXOBJS=", 'p', 0);
 		} else if (eq(line, "%SFILES\n")) {
 			do_files(ofp, "SFILES=", 's');
-			do_objs(ofp, "SOBJS=", 's');
+			do_objs(ofp, "SOBJS=", 's', 0);
 		} else if (eq(line, "%MACHDEP\n")) {
 			do_machdep(ofp);
 		} else if (eq(line, "%RULES\n")) {
@@ -287,6 +289,7 @@ read_files(void)
 	const char *devorprof;
 	int options;
 	int not_option;
+	int for_xnu_lib;
 	char pname[BUFSIZ];
 	char fname[1024];
 	char *rest = (char *) 0;
@@ -346,6 +349,7 @@ next:
 	nreqs = 0;
 	devorprof = "";
 	needs = 0;
+	for_xnu_lib = 0;
 	if (eq(wd, "standard")) {
 		goto checkdev;
 	}
@@ -370,6 +374,10 @@ nextopt:
 	if (eq(wd, "device-driver") || eq(wd, "profiling-routine")) {
 		next_word(fp, wd);
 		goto save;
+	}
+	if (eq(wd, "xnu-library")) {
+		for_xnu_lib = 1;
+		goto nextopt;
 	}
 	nreqs++;
 	if (needs == 0 && nreqs == 1) {
@@ -469,6 +477,10 @@ checkdev:
 			goto getrest;
 		}
 		next_word(fp, wd);
+		if (wd && eq(wd, "xnu-library")) {
+			for_xnu_lib = 1;
+			next_word(fp, wd);
+		}
 		if (wd) {
 			devorprof = wd;
 			next_word(fp, wd);
@@ -508,6 +520,9 @@ getrest:
 	if (pf && pf->f_type == INVISIBLE) {
 		pf->f_flags = 1;                /* mark as duplicate */
 	}
+	if (for_xnu_lib) {
+		tp->f_flags |= LIBRARYDEP;
+	}
 	goto next;
 }
 
@@ -541,7 +556,7 @@ put_source_file_name(FILE *fp, struct file_list *tp)
 }
 
 void
-do_objs(FILE *fp, const char *msg, int ext)
+do_objs(FILE *fp, const char *msg, int ext, int flags)
 {
 	struct file_list *tp;
 	int lpos, len;
@@ -553,6 +568,13 @@ do_objs(FILE *fp, const char *msg, int ext)
 	lpos = strlen(msg);
 	for (tp = ftab; tp != 0; tp = tp->f_next) {
 		if (tp->f_type == INVISIBLE) {
+			continue;
+		}
+
+		/*
+		 * Check flags (if any)
+		 */
+		if (flags && ((tp->f_flags & flags) != flags)) {
 			continue;
 		}
 

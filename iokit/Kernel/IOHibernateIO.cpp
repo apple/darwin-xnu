@@ -201,7 +201,17 @@ static uuid_string_t            gIOHibernateBridgeBootSessionUUIDString;
 
 static uint32_t                 gIOHibernateFreeRatio = 0;       // free page target (percent)
 uint32_t                        gIOHibernateFreeTime  = 0 * 1000;  // max time to spend freeing pages (ms)
-static uint64_t                 gIOHibernateCompression = 0x80;  // default compression 50%
+
+enum {
+	HIB_COMPR_RATIO_ARM64  = (0xa5),  // compression ~65%. Since we don't support retries we start higher.
+	HIB_COMPR_RATIO_INTEL  = (0x80)   // compression 50%
+};
+
+#if defined(__arm64__)
+static uint64_t                 gIOHibernateCompression = HIB_COMPR_RATIO_ARM64;
+#else
+static uint64_t                 gIOHibernateCompression = HIB_COMPR_RATIO_INTEL;
+#endif /* __arm64__ */
 boolean_t                       gIOHibernateStandbyDisabled;
 
 static IODTNVRAM *              gIOOptionsEntry;
@@ -2179,6 +2189,18 @@ hibernate_write_image(void)
 		header->sleepTime    = gIOLastSleepTime.tv_sec;
 
 		header->compression     = ((uint32_t)((compressedSize << 8) / uncompressedSize));
+#if defined(__arm64__)
+		/*
+		 * We don't support retry on hibernation failure and so
+		 * we don't want to set this value to anything smaller
+		 * just because we may have been lucky this time around.
+		 * Though we'll let it go higher.
+		 */
+		if (header->compression < HIB_COMPR_RATIO_ARM64) {
+			header->compression  = HIB_COMPR_RATIO_ARM64;
+		}
+#endif /* __arm64__ */
+
 		gIOHibernateCompression = header->compression;
 
 		count = vars->fileVars->fileExtents->getLength();

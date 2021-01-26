@@ -113,6 +113,11 @@ kern_return_t apple_protect_pager_synchronize(memory_object_t mem_obj,
 kern_return_t apple_protect_pager_map(memory_object_t mem_obj,
     vm_prot_t prot);
 kern_return_t apple_protect_pager_last_unmap(memory_object_t mem_obj);
+boolean_t apple_protect_pager_backing_object(
+	memory_object_t mem_obj,
+	memory_object_offset_t mem_obj_offset,
+	vm_object_t *backing_object,
+	vm_object_offset_t *backing_offset);
 
 #define CRYPT_INFO_DEBUG 0
 void crypt_info_reference(struct pager_crypt_info *crypt_info);
@@ -135,6 +140,7 @@ const struct memory_object_pager_ops apple_protect_pager_ops = {
 	.memory_object_map = apple_protect_pager_map,
 	.memory_object_last_unmap = apple_protect_pager_last_unmap,
 	.memory_object_data_reclaim = NULL,
+	.memory_object_backing_object = apple_protect_pager_backing_object,
 	.memory_object_pager_name = "apple_protect"
 };
 
@@ -992,6 +998,25 @@ apple_protect_pager_last_unmap(
 	return KERN_SUCCESS;
 }
 
+boolean_t
+apple_protect_pager_backing_object(
+	memory_object_t mem_obj,
+	memory_object_offset_t offset,
+	vm_object_t *backing_object,
+	vm_object_offset_t *backing_offset)
+{
+	apple_protect_pager_t   pager;
+
+	PAGER_DEBUG(PAGER_ALL,
+	    ("apple_protect_pager_backing_object: %p\n", mem_obj));
+
+	pager = apple_protect_pager_lookup(mem_obj);
+
+	*backing_object = pager->backing_object;
+	*backing_offset = pager->backing_offset + offset;
+
+	return TRUE;
+}
 
 /*
  *

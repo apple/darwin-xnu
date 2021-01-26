@@ -58,6 +58,7 @@ SYMROOT_KEXT += $(SYMROOT_KEXT_PATH)/Kasan_kasan
 SYMBOL_SET_BUILD += $(OBJPATH)/Kasan_kasan.symbolset
 endif
 
+ifneq ($(RC_ProjectName),xnu_libraries)
 # Our external dependency on allsymbols is fine because this runs in a later phase (config_install vs. config_all)
 $(OBJPATH)/%.symbolset: $(SOURCE)/%.exports
 	@$(LOG_SYMBOLSET) "$*$(Color0) ($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))"
@@ -85,7 +86,9 @@ $(SYMROOT_KEXT): $(SYMBOL_SET_BUILD) ALWAYS
 	exit $$cmdstatus
 
 do_config_install:: $(SYMROOT_KEXT) $(DSTROOT_KEXT)
-
+else
+# We are building XNU as a static library - no need for the symbol kexts
+endif
 
 # Install helper scripts
 

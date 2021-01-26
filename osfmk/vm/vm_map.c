@@ -3203,8 +3203,8 @@ StartAgain:;
 		do {
 			new_entry = vm_map_entry_insert(map,
 			    entry, tmp_start, tmp_end,
-			    object, offset, needs_copy,
-			    FALSE, FALSE,
+			    object, offset, vmk_flags,
+			    needs_copy, FALSE, FALSE,
 			    cur_protection, max_protection,
 			    VM_BEHAVIOR_DEFAULT,
 			    (entry_for_jit && !VM_MAP_POLICY_ALLOW_JIT_INHERIT(map) ?
@@ -3868,6 +3868,7 @@ vm_map_enter_fourk(
 	    VM_MAP_PAGE_MASK(map)),
 	    copy_object,
 	    0,                         /* offset */
+	    vmk_flags,
 	    FALSE,                         /* needs_copy */
 	    FALSE,
 	    FALSE,
@@ -6154,6 +6155,12 @@ vm_map_protect(
 
 		new_max = current->max_protection;
 		if ((new_prot & new_max) != new_prot) {
+			vm_map_unlock(map);
+			return KERN_PROTECTION_FAILURE;
+		}
+
+		if (current->used_for_jit &&
+		    pmap_has_prot_policy(map->pmap, current->translated_allow_execute, current->protection)) {
 			vm_map_unlock(map);
 			return KERN_PROTECTION_FAILURE;
 		}
@@ -16199,6 +16206,7 @@ vm_map_entry_insert(
 	vm_map_offset_t         end,
 	vm_object_t             object,
 	vm_object_offset_t      offset,
+	vm_map_kernel_flags_t   vmk_flags,
 	boolean_t               needs_copy,
 	boolean_t               is_shared,
 	boolean_t               in_transition,
@@ -16313,8 +16321,7 @@ vm_map_entry_insert(
 	 *	Insert the new entry into the list.
 	 */
 
-	vm_map_store_entry_link(map, insp_entry, new_entry,
-	    VM_MAP_KERNEL_FLAGS_NONE);
+	vm_map_store_entry_link(map, insp_entry, new_entry, vmk_flags);
 	map->size += end - start;
 
 	/*
@@ -16804,13 +16811,6 @@ RestartCopy:
 		if (!copy) {
 			if (src_entry->used_for_jit == TRUE) {
 				if (same_map) {
-#if __APRR_SUPPORTED__
-					/*
-					 * Disallow re-mapping of any JIT regions on APRR devices.
-					 */
-					result = KERN_PROTECTION_FAILURE;
-					break;
-#endif /* __APRR_SUPPORTED__*/
 				} else if (!VM_MAP_POLICY_ALLOW_JIT_SHARING(map)) {
 					/*
 					 * Cannot allow an entry describing a JIT
@@ -20121,6 +20121,13 @@ vm_map_cs_enforcement(
 		return TRUE;
 	}
 	return map->cs_enforcement;
+}
+
+kern_return_t
+vm_map_cs_wx_enable(
+	vm_map_t map)
+{
+	return pmap_cs_allow_invalid(vm_map_pmap(map));
 }
 
 void

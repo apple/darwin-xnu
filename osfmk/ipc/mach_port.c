@@ -1676,8 +1676,12 @@ mach_port_request_notification(
 		}
 		/* port is locked and active */
 
-		/* you cannot register for port death notifications on a kobject */
-		if (ip_kotype(port) != IKOT_NONE) {
+		/*
+		 * you cannot register for port death notifications on a kobject,
+		 * kolabel or special reply port
+		 */
+		if (ip_is_kobject(port) || ip_is_kolabeled(port) ||
+		    port->ip_specialreply) {
 			ip_unlock(port);
 			return KERN_INVALID_RIGHT;
 		}

@@ -2332,6 +2332,24 @@ memory_object_data_reclaim
 		reclaim_backing_store);
 }
 
+boolean_t
+memory_object_backing_object
+(
+	memory_object_t memory_object,
+	memory_object_offset_t offset,
+	vm_object_t *backing_object,
+	vm_object_offset_t *backing_offset)
+{
+	if (memory_object->mo_pager_ops->memory_object_backing_object == NULL) {
+		return FALSE;
+	}
+	return (memory_object->mo_pager_ops->memory_object_backing_object)(
+		memory_object,
+		offset,
+		backing_object,
+		backing_offset);
+}
+
 upl_t
 convert_port_to_upl(
 	ipc_port_t      port)

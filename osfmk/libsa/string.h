@@ -95,13 +95,11 @@ extern char     *strcat(char *, const char *) __deprecated;
 __kpi_deprecated_arm64_macos_unavailable
 extern char     *strncat(char *, const char *, size_t);
 
-/* strcmp() is deprecated. Please use strncmp() instead. */
-__kpi_deprecated_arm64_macos_unavailable
 extern int      strcmp(const char *, const char *);
+extern int      strncmp(const char *, const char *, size_t);
 
 extern size_t   strlcpy(char *, const char *, size_t);
 extern size_t   strlcat(char *, const char *, size_t);
-extern int      strncmp(const char *, const char *, size_t);
 
 extern int      strcasecmp(const char *s1, const char *s2);
 extern int      strncasecmp(const char *s1, const char *s2, size_t n);

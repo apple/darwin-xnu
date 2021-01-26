@@ -169,18 +169,6 @@ Set up your build environment and from the top directory, run:
     $ make cscope   # this will build cscope database
 
 
-Code Style
-==========
-
-Source files can be reformatted to comply with the xnu code style using the "restyle" make target invoked from the
-top-level project directory.
-
-   $ make restyle      # re-format all source files to be xnu code style conformant.
-
-Compliance can be checked using the "checkstyle" make target.
-
-   $ make checkstyle   # Check all relevant source files for xnu code style conformance.
-
 How to install a new header file from XNU
 =========================================
 

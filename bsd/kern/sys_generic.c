@@ -502,7 +502,7 @@ write_nocancel(struct proc *p, struct write_nocancel_args *uap, user_ssize_t *re
 	}
 	if ((fp->f_flag & FWRITE) == 0) {
 		error = EBADF;
-	} else if (FP_ISGUARDED(fp, GUARD_WRITE)) {
+	} else if (fp_isguarded(fp, GUARD_WRITE)) {
 		proc_fdlock(p);
 		error = fp_guard_exception(p, fd, fp, kGUARD_EXC_WRITE);
 		proc_fdunlock(p);
@@ -552,7 +552,7 @@ pwrite_nocancel(struct proc *p, struct pwrite_nocancel_args *uap, user_ssize_t *
 
 	if ((fp->f_flag & FWRITE) == 0) {
 		error = EBADF;
-	} else if (FP_ISGUARDED(fp, GUARD_WRITE)) {
+	} else if (fp_isguarded(fp, GUARD_WRITE)) {
 		proc_fdlock(p);
 		error = fp_guard_exception(p, fd, fp, kGUARD_EXC_WRITE);
 		proc_fdunlock(p);
@@ -670,7 +670,7 @@ preparefilewrite(struct proc *p, struct fileproc **fp_ret, int fd, int check_for
 		error = EBADF;
 		goto ExitThisRoutine;
 	}
-	if (FP_ISGUARDED(fp, GUARD_WRITE)) {
+	if (fp_isguarded(fp, GUARD_WRITE)) {
 		error = fp_guard_exception(p, fd, fp, kGUARD_EXC_WRITE);
 		goto ExitThisRoutine;
 	}

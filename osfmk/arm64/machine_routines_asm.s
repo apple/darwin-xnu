@@ -29,7 +29,6 @@
 #include <machine/asm.h>
 #include <arm64/exception_asm.h>
 #include <arm64/machine_machdep.h>
-#include <arm64/pac_asm.h>
 #include <arm64/proc_reg.h>
 #include <arm/pmap.h>
 #include <pexpert/arm64/board_config.h>
@@ -37,94 +36,6 @@
 #include "assym.s"
 
 
-#if defined(HAS_APPLE_PAC)
-
-.macro SET_KERN_KEY		dst, apctl_el1
-	orr		\dst, \apctl_el1, #APCTL_EL1_KernKeyEn
-.endmacro
-
-.macro CLEAR_KERN_KEY	dst, apctl_el1
-	and		\dst, \apctl_el1, #~APCTL_EL1_KernKeyEn
-.endmacro
-
-/*
- * uint64_t ml_enable_user_jop_key(uint64_t user_jop_key)
- */
-	.align 2
-	.globl EXT(ml_enable_user_jop_key)
-LEXT(ml_enable_user_jop_key)
-	mov		x1, x0
-	mrs		x2, TPIDR_EL1
-	ldr		x2, [x2, ACT_CPUDATAP]
-	ldr		x0, [x2, CPU_JOP_KEY]
-
-	cmp		x0, x1
-	b.eq	Lskip_program_el0_jop_key
-	/*
-	 * We can safely write to the JOP key registers without updating
-	 * current_cpu_datap()->jop_key.  The complementary
-	 * ml_disable_user_jop_key() call will put back the old value.  Interrupts
-	 * are also disabled, so nothing else will read this field in the meantime.
-	 */
-	SET_JOP_KEY_REGISTERS	x1, x2
-Lskip_program_el0_jop_key:
-
-	/*
-	 * if (cpu has APCTL_EL1.UserKeyEn) {
-	 *   set APCTL_EL1.KernKeyEn		// KERNKey is mixed into EL0 keys
-	 * } else {
-	 *   clear APCTL_EL1.KernKeyEn		// KERNKey is not mixed into EL0 keys
-	 * }
-	 */
-	mrs		x1, ARM64_REG_APCTL_EL1
-#if defined(APPLEFIRESTORM)
-	SET_KERN_KEY	x2, x1
-	CLEAR_KERN_KEY	x3, x1
-	tst		x1, #(APCTL_EL1_UserKeyEn)
-	csel	x1, x2, x3, ne
-#elif defined(HAS_APCTL_EL1_USERKEYEN)
-	SET_KERN_KEY	x1, x1
-#else
-	CLEAR_KERN_KEY	x1, x1
-#endif
-	msr		ARM64_REG_APCTL_EL1, x1
-	isb
-	ret
-
-/*
- * void ml_disable_user_jop_key(uint64_t user_jop_key, uint64_t saved_jop_state)
- */
-	.align 2
-	.globl EXT(ml_disable_user_jop_key)
-LEXT(ml_disable_user_jop_key)
-	cmp		x0, x1
-	b.eq	Lskip_program_prev_jop_key
-	SET_JOP_KEY_REGISTERS	x1, x2
-Lskip_program_prev_jop_key:
-
-	/*
-	 * if (cpu has APCTL_EL1.UserKeyEn) {
-	 *   clear APCTL_EL1.KernKeyEn		// KERNKey is not mixed into EL1 keys
-	 * } else {
-	 *   set APCTL_EL1.KernKeyEn		// KERNKey is mixed into EL1 keys
-	 * }
-	 */
-	mrs		x1, ARM64_REG_APCTL_EL1
-#if defined(APPLEFIRESTORM)
-	CLEAR_KERN_KEY	x2, x1
-	SET_KERN_KEY	x3, x1
-	tst		x1, #(APCTL_EL1_UserKeyEn)
-	csel	x1, x2, x3, ne
-#elif defined(HAS_APCTL_EL1_USERKEYEN)
-	CLEAR_KERN_KEY	x1, x1
-#else
-	SET_KERN_KEY	x1, x1
-#endif
-	msr		ARM64_REG_APCTL_EL1, x1
-	isb
-	ret
-
-#endif /* defined(HAS_APPLE_PAC) */
 
 #if HAS_BP_RET
 

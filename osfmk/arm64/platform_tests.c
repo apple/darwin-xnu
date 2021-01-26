@@ -1170,20 +1170,6 @@ ex_cb_test()
 
 #if defined(HAS_APPLE_PAC)
 
-/*
- *
- *  arm64_ropjop_test - basic xnu ROP/JOP test plan
- *
- *  - assert ROP/JOP configured and running status match
- *  - assert all AppleMode ROP/JOP features enabled
- *  - ensure ROP/JOP keys are set and diversified
- *  - sign a KVA (the address of this function),assert it was signed (changed)
- *  - authenticate the newly signed KVA
- *  - assert the authed KVA is the original KVA
- *  - corrupt a signed ptr, auth it, ensure auth failed
- *  - assert the failed authIB of corrupted pointer is tagged
- *
- */
 
 kern_return_t
 arm64_ropjop_test()
@@ -1195,51 +1181,11 @@ arm64_ropjop_test()
 	boolean_t config_jop_enabled = TRUE;
 
 
-	/* assert all AppleMode ROP/JOP features enabled */
-	uint64_t apctl = __builtin_arm_rsr64(ARM64_REG_APCTL_EL1);
-#if __APSTS_SUPPORTED__
-	uint64_t apsts = __builtin_arm_rsr64(ARM64_REG_APSTS_EL1);
-	T_EXPECT(apsts & APSTS_EL1_MKEYVld, NULL);
-#else
-	T_EXPECT(apctl & APCTL_EL1_MKEYVld, NULL);
-#endif /* __APSTS_SUPPORTED__ */
-	T_EXPECT(apctl & APCTL_EL1_AppleMode, NULL);
-
-	bool kernkeyen = apctl & APCTL_EL1_KernKeyEn;
-#if HAS_APCTL_EL1_USERKEYEN
-	bool userkeyen = apctl & APCTL_EL1_UserKeyEn;
-#else
-	bool userkeyen = false;
-#endif
-	/* for KernKey to work as a diversifier, it must be enabled at exactly one of {EL0, EL1/2} */
-	T_EXPECT(kernkeyen || userkeyen, "KernKey is enabled");
-	T_EXPECT(!(kernkeyen && userkeyen), "KernKey is not simultaneously enabled at userspace and kernel space");
-
-	/* ROP/JOP keys enabled current status */
-	bool status_jop_enabled, status_rop_enabled;
-#if __APSTS_SUPPORTED__ /* H13+ */
-	status_jop_enabled = status_rop_enabled = apctl & APCTL_EL1_EnAPKey1;
-#elif __APCFG_SUPPORTED__ /* H12 */
-	uint64_t apcfg_el1 = __builtin_arm_rsr64(APCFG_EL1);
-	status_jop_enabled = status_rop_enabled = apcfg_el1 & APCFG_EL1_ELXENKEY;
-#else /* !__APCFG_SUPPORTED__ H11 */
-	uint64_t sctlr_el1 = __builtin_arm_rsr64("SCTLR_EL1");
-	status_jop_enabled = sctlr_el1 & SCTLR_PACIA_ENABLED;
-	status_rop_enabled = sctlr_el1 & SCTLR_PACIB_ENABLED;
-#endif /* __APSTS_SUPPORTED__ */
-
-	/* assert configured and running status match */
-	T_EXPECT(config_rop_enabled == status_rop_enabled, NULL);
-	T_EXPECT(config_jop_enabled == status_jop_enabled, NULL);
-
-
 	if (config_jop_enabled) {
 		/* jop key */
 		uint64_t apiakey_hi = __builtin_arm_rsr64(ARM64_REG_APIAKEYHI_EL1);
 		uint64_t apiakey_lo = __builtin_arm_rsr64(ARM64_REG_APIAKEYLO_EL1);
 
-		/* ensure JOP key is set and diversified */
-		T_EXPECT(apiakey_hi != KERNEL_ROP_ID && apiakey_lo != KERNEL_ROP_ID, NULL);
 		T_EXPECT(apiakey_hi != 0 && apiakey_lo != 0, NULL);
 	}
 
@@ -1248,8 +1194,6 @@ arm64_ropjop_test()
 		uint64_t apibkey_hi = __builtin_arm_rsr64(ARM64_REG_APIBKEYHI_EL1);
 		uint64_t apibkey_lo = __builtin_arm_rsr64(ARM64_REG_APIBKEYLO_EL1);
 
-		/* ensure ROP key is set and diversified */
-		T_EXPECT(apibkey_hi != KERNEL_ROP_ID && apibkey_lo != KERNEL_ROP_ID, NULL);
 		T_EXPECT(apibkey_hi != 0 && apibkey_lo != 0, NULL);
 
 		/* sign a KVA (the address of this function) */

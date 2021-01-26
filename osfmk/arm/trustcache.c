@@ -59,18 +59,14 @@ extern unsigned long segSizeEXTRADATA;
 void
 trust_cache_init(void)
 {
-	size_t const len = segSizeEXTRADATA;
+	size_t const locked_down_dt_size = SecureDTIsLockedDown() ? PE_state.deviceTreeSize : 0;
+	size_t const len = segSizeEXTRADATA - locked_down_dt_size;
 
 	if (len == 0) {
-#if XNU_TARGET_OS_OSX
+		// We allow no trust cache at all.
 		printf("No external trust cache found (region len is 0).");
-#else
-		panic("No external trust cache found (region len is 0).");
-#endif
 		return;
 	}
-
-	size_t const locked_down_dt_size = SecureDTIsLockedDown() ? PE_state.deviceTreeSize : 0;
 
 	pmap_serialized_trust_caches = (struct serialized_trust_caches*)(segEXTRADATA +
 	    locked_down_dt_size);
@@ -203,7 +199,6 @@ lookup_in_static_trust_cache(const uint8_t cdhash[CS_CDHASH_LEN])
 
 		// Engineering Trust Caches.
 		if (pmap_serialized_trust_caches->num_caches > engineering_trust_cache_index) {
-#if DEVELOPMENT || DEBUG
 			for (uint32_t i = engineering_trust_cache_index; i < pmap_serialized_trust_caches->num_caches; i++) {
 				struct trust_cache_module1 const *module =
 				    (struct trust_cache_module1 const *)(
@@ -215,10 +210,6 @@ lookup_in_static_trust_cache(const uint8_t cdhash[CS_CDHASH_LEN])
 					       (TC_LOOKUP_FOUND << TC_LOOKUP_RESULT_SHIFT);
 				}
 			}
-#else
-			panic("Number of trust caches: %d. How could we let this happen?",
-			    pmap_serialized_trust_caches->num_caches);
-#endif
 		}
 	}
 

@@ -794,6 +794,7 @@ extern vm_map_entry_t   vm_map_entry_insert(
 	vm_map_offset_t         end,
 	vm_object_t             object,
 	vm_object_offset_t      offset,
+	vm_map_kernel_flags_t   vmk_flags,
 	boolean_t               needs_copy,
 	boolean_t               is_shared,
 	boolean_t               in_transition,
@@ -1266,6 +1267,8 @@ extern boolean_t vm_map_cs_enforcement(
 extern void vm_map_cs_enforcement_set(
 	vm_map_t                map,
 	boolean_t               val);
+
+extern kern_return_t vm_map_cs_wx_enable(vm_map_t map);
 
 /* wire down a region */
 

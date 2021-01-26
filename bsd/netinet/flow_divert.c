@@ -3383,6 +3383,17 @@ done:
 errno_t
 flow_divert_connect_out(struct socket *so, struct sockaddr *to, proc_t p)
 {
+#if CONTENT_FILTER
+	if (SOCK_TYPE(so) == SOCK_STREAM && !(so->so_flags & SOF_CONTENT_FILTER)) {
+		int error = cfil_sock_attach(so, NULL, to, CFS_CONNECTION_DIR_OUT);
+		if (error != 0) {
+			struct flow_divert_pcb  *fd_cb  = so->so_fd_pcb;
+			FDLOG(LOG_ERR, fd_cb, "Failed to attach cfil: %d", error);
+			return error;
+		}
+	}
+#endif /* CONTENT_FILTER */
+
 	return flow_divert_connect_out_internal(so, to, p, false);
 }
 

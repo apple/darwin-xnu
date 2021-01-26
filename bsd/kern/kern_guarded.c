@@ -56,7 +56,6 @@
 #include <sys/reason.h>
 #endif
 
-
 #define f_flag fp_glob->fg_flag
 extern int dofilewrite(vfs_context_t ctx, struct fileproc *fp,
     user_addr_t bufp, user_size_t nbyte, off_t offset,
@@ -86,17 +85,25 @@ kern_return_t task_violated_guard(mach_exception_code_t, mach_exception_subcode_
 
 struct guarded_fileproc {
 	struct fileproc gf_fileproc;
-	u_int           gf_magic;
 	u_int           gf_attrs;
 	guardid_t       gf_guard;
 };
 
-const size_t sizeof_guarded_fileproc = sizeof(struct guarded_fileproc);
+ZONE_DECLARE(gfp_zone, "guarded_fileproc",
+    sizeof(struct guarded_fileproc),
+    ZC_NOENCRYPT | ZC_ZFREE_CLEARMEM);
 
-#define FP_TO_GFP(fp)   ((struct guarded_fileproc *)(fp))
+static inline struct guarded_fileproc *
+FP_TO_GFP(struct fileproc *fp)
+{
+	struct guarded_fileproc *gfp =
+	    __container_of(fp, struct guarded_fileproc, gf_fileproc);
+
+	zone_require(gfp_zone, gfp);
+	return gfp;
+}
+
 #define GFP_TO_FP(gfp)  (&(gfp)->gf_fileproc)
-
-#define GUARDED_FILEPROC_MAGIC  0x29083
 
 struct gfp_crarg {
 	guardid_t gca_guard;
@@ -109,17 +116,12 @@ guarded_fileproc_alloc_init(void *crarg)
 	struct gfp_crarg *aarg = crarg;
 	struct guarded_fileproc *gfp;
 
-	if ((gfp = kalloc(sizeof(*gfp))) == NULL) {
-		return NULL;
-	}
-
-	bzero(gfp, sizeof(*gfp));
+	gfp = zalloc_flags(gfp_zone, Z_WAITOK | Z_ZERO);
 
 	struct fileproc *fp = &gfp->gf_fileproc;
 	os_ref_init(&fp->fp_iocount, &f_refgrp);
 	fp->fp_flags = FTYPE_GUARDED;
 
-	gfp->gf_magic = GUARDED_FILEPROC_MAGIC;
 	gfp->gf_guard = aarg->gca_guard;
 	gfp->gf_attrs = aarg->gca_attrs;
 
@@ -130,13 +132,7 @@ void
 guarded_fileproc_free(struct fileproc *fp)
 {
 	struct guarded_fileproc *gfp = FP_TO_GFP(fp);
-
-	if (FILEPROC_TYPE(fp) != FTYPE_GUARDED ||
-	    GUARDED_FILEPROC_MAGIC != gfp->gf_magic) {
-		panic("%s: corrupt fp %p flags %x", __func__, fp, fp->fp_flags);
-	}
-
-	kfree(gfp, sizeof(*gfp));
+	zfree(gfp_zone, gfp);
 }
 
 static int
@@ -155,10 +151,6 @@ fp_lookup_guarded(proc_t p, int fd, guardid_t guard,
 	}
 	struct guarded_fileproc *gfp = FP_TO_GFP(fp);
 
-	if (GUARDED_FILEPROC_MAGIC != gfp->gf_magic) {
-		panic("%s: corrupt fp %p", __func__, fp);
-	}
-
 	if (guard != gfp->gf_guard) {
 		(void) fp_drop(p, fd, fp, locked);
 		return EPERM; /* *not* a mismatch exception */
@@ -172,24 +164,20 @@ fp_lookup_guarded(proc_t p, int fd, guardid_t guard,
 /*
  * Expected use pattern:
  *
- * if (FP_ISGUARDED(fp, GUARD_CLOSE)) {
+ * if (fp_isguarded(fp, GUARD_CLOSE)) {
  *      error = fp_guard_exception(p, fd, fp, kGUARD_EXC_CLOSE);
  *      proc_fdunlock(p);
  *      return error;
  * }
+ *
+ * Passing `0` to `attrs` returns whether the fp is guarded at all.
  */
 
 int
 fp_isguarded(struct fileproc *fp, u_int attrs)
 {
 	if (FILEPROC_TYPE(fp) == FTYPE_GUARDED) {
-		struct guarded_fileproc *gfp = FP_TO_GFP(fp);
-
-		if (GUARDED_FILEPROC_MAGIC != gfp->gf_magic) {
-			panic("%s: corrupt gfp %p flags %x",
-			    __func__, gfp, fp->fp_flags);
-		}
-		return (attrs & gfp->gf_attrs) == attrs;
+		return (attrs & FP_TO_GFP(fp)->gf_attrs) == attrs;
 	}
 	return 0;
 }
@@ -581,11 +569,6 @@ restart:
 			 */
 			struct guarded_fileproc *gfp = FP_TO_GFP(fp);
 
-			if (GUARDED_FILEPROC_MAGIC != gfp->gf_magic) {
-				panic("%s: corrupt gfp %p flags %x",
-				    __func__, gfp, fp->fp_flags);
-			}
-
 			if (oldg == gfp->gf_guard &&
 			    uap->guardflags == gfp->gf_attrs) {
 				/*
@@ -672,11 +655,6 @@ restart:
 			if (0 != uap->nguardflags) {
 				error = EINVAL;
 				goto dropout;
-			}
-
-			if (GUARDED_FILEPROC_MAGIC != gfp->gf_magic) {
-				panic("%s: corrupt gfp %p flags %x",
-				    __func__, gfp, fp->fp_flags);
 			}
 
 			if (oldg != gfp->gf_guard ||

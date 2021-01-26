@@ -2295,7 +2295,7 @@ unp_internalize(struct mbuf *control, proc_t p)
 		} else if (!fg_sendable(tmpfp->fp_glob)) {
 			proc_fdunlock(p);
 			return EINVAL;
-		} else if (FP_ISGUARDED(tmpfp, GUARD_SOCKET_IPC)) {
+		} else if (fp_isguarded(tmpfp, GUARD_SOCKET_IPC)) {
 			error = fp_guard_exception(p,
 			    fds[i], tmpfp, kGUARD_EXC_SOCKET_IPC);
 			proc_fdunlock(p);

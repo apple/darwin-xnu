@@ -904,7 +904,7 @@ task_init(void)
 	{ panic("task_init\n");}
 
 #if defined(HAS_APPLE_PAC)
-	kernel_task->rop_pid = KERNEL_ROP_ID;
+	kernel_task->rop_pid = ml_default_rop_pid();
 	kernel_task->jop_pid = ml_default_jop_pid();
 	// kernel_task never runs at EL0, but machine_thread_state_convert_from/to_user() relies on
 	// disable_user_jop to be false for kernel threads (e.g. in exception delivery on thread_exception_daemon)

@@ -636,7 +636,8 @@ pmap_disable_user_jop(pmap_t pmap);
 
 #define PMAP_SET_VM_MAP_CS_ENFORCED_INDEX 72
 
-#define PMAP_COUNT 73
+
+#define PMAP_COUNT 74
 
 #define PMAP_INVALID_CPU_NUM (~0U)
 

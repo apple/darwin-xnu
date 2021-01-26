@@ -40,33 +40,6 @@
 #endif /* __ARM_KERNEL_PROTECT__ */
 
 
-#if __APRR_SUPPORTED__
-
-.macro MSR_APRR_EL1_X0
-#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
-	bl		EXT(pinst_set_aprr_el1)
-#else
-	msr		APRR_EL1, x0
-#endif
-.endmacro
-
-.macro MSR_APRR_EL0_X0
-#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
-	bl		EXT(pinst_set_aprr_el0)
-#else
-	msr		APRR_EL0, x0
-#endif
-.endmacro
-
-.macro MSR_APRR_SHADOW_MASK_EN_EL1_X0
-#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
-	bl		EXT(pinst_set_aprr_shadow_mask_en_el1)
-#else
-	msr		APRR_SHADOW_MASK_EN_EL1, x0
-#endif
-.endmacro
-
-#endif /* __APRR_SUPPORTED__ */
 
 .macro MSR_VBAR_EL1_X0
 #if defined(KERNEL_INTEGRITY_KTRR)
@@ -163,25 +136,6 @@ LEXT(reset_vector)
 	msr     VBAR_EL1, x0
 #endif
 
-#if __APRR_SUPPORTED__
-	MOV64	x0, APRR_EL1_DEFAULT
-#if XNU_MONITOR
-	adrp	x4, EXT(pmap_ppl_locked_down)@page
-	ldrb	w5, [x4, #EXT(pmap_ppl_locked_down)@pageoff]
-	cmp		w5, #0
-	b.ne	1f
-
-	// If the PPL is not locked down, we start in PPL mode.
-	MOV64	x0, APRR_EL1_PPL
-1:
-#endif /* XNU_MONITOR */
-
-	MSR_APRR_EL1_X0
-
-	// Load up the default APRR_EL0 value.
-	MOV64	x0, APRR_EL0_DEFAULT
-	MSR_APRR_EL0_X0
-#endif /* __APRR_SUPPORTED__ */
 
 #if defined(KERNEL_INTEGRITY_KTRR)
 	/*
@@ -607,29 +561,6 @@ LEXT(start_first_cpu)
 	add		x0, x0, EXT(LowExceptionVectorBase)@pageoff
 	MSR_VBAR_EL1_X0
 
-#if __APRR_SUPPORTED__
-	// Save the LR
-	mov		x1, lr
-
-#if XNU_MONITOR
-	// If the PPL is supported, we start out in PPL mode.
-	MOV64	x0, APRR_EL1_PPL
-#else
-	// Otherwise, we start out in default mode.
-	MOV64	x0, APRR_EL1_DEFAULT
-#endif
-
-	// Set the APRR state for EL1.
-	MSR_APRR_EL1_X0
-
-	// Set the APRR state for EL0.
-	MOV64	x0, APRR_EL0_DEFAULT
-	MSR_APRR_EL0_X0
-
-
-	// Restore the LR.
-	mov	lr, x1
-#endif /* __APRR_SUPPORTED__ */
 
 	// Get the kernel memory parameters from the boot args
 	ldr		x22, [x20, BA_VIRT_BASE]			// Get the kernel virt base
@@ -904,79 +835,13 @@ common_start:
 
 1:
 #ifdef HAS_APPLE_PAC
-#ifdef __APSTS_SUPPORTED__
-	mrs		x0, ARM64_REG_APSTS_EL1
-	and		x1, x0, #(APSTS_EL1_MKEYVld)
-	cbz		x1, 1b 										// Poll APSTS_EL1.MKEYVld
-	mrs		x0, ARM64_REG_APCTL_EL1
-	orr		x0, x0, #(APCTL_EL1_AppleMode)
-#ifdef HAS_APCTL_EL1_USERKEYEN
-	orr		x0, x0, #(APCTL_EL1_UserKeyEn)
-	and		x0, x0, #~(APCTL_EL1_KernKeyEn)
-#else /* !HAS_APCTL_EL1_USERKEYEN */
-	orr		x0, x0, #(APCTL_EL1_KernKeyEn)
-#endif /* HAS_APCTL_EL1_USERKEYEN */
-	and		x0, x0, #~(APCTL_EL1_EnAPKey0)
-	msr		ARM64_REG_APCTL_EL1, x0
-
-#if defined(APPLEFIRESTORM)
-	IF_PAC_FAST_A_KEY_SWITCHING	1f, x0
-	orr		x0, x0, #(APCTL_EL1_KernKeyEn)
-	msr		ARM64_REG_APCTL_EL1, x0
-1:
-#endif /* APPLEFIRESTORM */
-
-#else
-	mrs		x0, ARM64_REG_APCTL_EL1
-	and		x1, x0, #(APCTL_EL1_MKEYVld)
-	cbz		x1, 1b 										// Poll APCTL_EL1.MKEYVld
-	orr		x0, x0, #(APCTL_EL1_AppleMode)
-	orr		x0, x0, #(APCTL_EL1_KernKeyEn)
-	msr		ARM64_REG_APCTL_EL1, x0
-#endif /* APSTS_SUPPORTED */
-
-	/* ISB necessary to ensure APCTL_EL1_AppleMode logic enabled before proceeding */
-	isb		sy
-	/* Load static kernel key diversification values */
-	ldr		x0, =KERNEL_ROP_ID
-	/* set ROP key. must write at least once to pickup mkey per boot diversification */
-	msr		APIBKeyLo_EL1, x0
-	add		x0, x0, #1
-	msr		APIBKeyHi_EL1, x0
-	add		x0, x0, #1
-	msr		APDBKeyLo_EL1, x0
-	add		x0, x0, #1
-	msr		APDBKeyHi_EL1, x0
-	add		x0, x0, #1
-	msr		ARM64_REG_KERNELKEYLO_EL1, x0
-	add		x0, x0, #1
-	msr		ARM64_REG_KERNELKEYHI_EL1, x0
-	/* set JOP key. must write at least once to pickup mkey per boot diversification */
-	add		x0, x0, #1
-	msr		APIAKeyLo_EL1, x0
-	add		x0, x0, #1
-	msr		APIAKeyHi_EL1, x0
-	add		x0, x0, #1
-	msr		APDAKeyLo_EL1, x0
-	add		x0, x0, #1
-	msr		APDAKeyHi_EL1, x0
-	/* set G key */
-	add		x0, x0, #1
-	msr		APGAKeyLo_EL1, x0
-	add		x0, x0, #1
-	msr		APGAKeyHi_EL1, x0
 
 	// Enable caches, MMU, ROP and JOP
 	MOV64	x0, SCTLR_EL1_DEFAULT
 	orr		x0, x0, #(SCTLR_PACIB_ENABLED) /* IB is ROP */
 
-#if __APCFG_SUPPORTED__
-	// for APCFG systems, JOP keys are always on for EL1.
-	// JOP keys for EL0 will be toggled on the first time we pmap_switch to a pmap that has JOP enabled
-#else /* __APCFG_SUPPORTED__ */
 	MOV64	x1, SCTLR_JOP_KEYS_ENABLED
 	orr 	x0, x0, x1
-#endif /* !__APCFG_SUPPORTED__ */
 #else  /* HAS_APPLE_PAC */
 
 	// Enable caches and MMU
@@ -988,10 +853,8 @@ common_start:
 	MOV64	x1, SCTLR_EL1_DEFAULT
 #if HAS_APPLE_PAC
 	orr		x1, x1, #(SCTLR_PACIB_ENABLED)
-#if !__APCFG_SUPPORTED__
 	MOV64	x2, SCTLR_JOP_KEYS_ENABLED
 	orr		x1, x1, x2
-#endif /* !__APCFG_SUPPORTED__ */
 #endif /* HAS_APPLE_PAC */
 	cmp		x0, x1
 	bne		.

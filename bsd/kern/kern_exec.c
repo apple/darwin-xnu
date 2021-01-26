@@ -2463,7 +2463,7 @@ exec_handle_file_actions(struct image_params *imgp, short psa_flags)
 			proc_fdlock(p);
 			if ((fp = fp_get_noref_locked(p, psfa->psfaa_filedes)) == NULL) {
 				error = EBADF;
-			} else if (FILEPROC_TYPE(fp) == FTYPE_GUARDED) {
+			} else if (fp_isguarded(fp, 0)) {
 				error = fp_guard_exception(p, psfa->psfaa_filedes,
 				    fp, kGUARD_EXC_NOCLOEXEC);
 			} else {
