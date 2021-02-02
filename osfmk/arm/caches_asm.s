@@ -31,7 +31,6 @@
 #include <arm/pmap.h>
 #include <sys/errno.h>
 #include "assym.s"
-#include "caches_macros.s"
 
 
 /*
@@ -145,36 +144,30 @@ LEXT(CleanPoC_Dcache)
 LEXT(clean_mmu_dcache)
 #if	!defined(__ARM_L1_WT_CACHE__)
 	mov		r0, #0
-	GET_CACHE_CONFIG r0, r1, r2, r3
-	mov		r0, #0
 	dsb
 clean_dcacheway:
 clean_dcacheline:		
 	mcr		p15, 0, r0, c7, c10, 2				 // clean dcache line by way/set
-	add		r0, r0, r1							 // increment set index
-	tst		r0, r2								 // look for overflow
+	add		r0, r0, #1 << MMU_I7SET				 // increment set index
+	tst		r0, #1 << (MMU_NSET + MMU_I7SET)	 // look for overflow
 	beq		clean_dcacheline
-	bic		r0, r0, r2							 // clear set overflow
-	adds	r0, r0, r3							 // increment way
+	bic		r0, r0, #1 << (MMU_NSET + MMU_I7SET) // clear set overflow
+	adds	r0, r0, #1 << MMU_I7WAY				 // increment way
 	bcc		clean_dcacheway						 // loop
 #endif
-	HAS_L2_CACHE r0
-	cmp		r0, #0
-	beq		clean_skipl2dcache
-	mov		r0, #1
-	GET_CACHE_CONFIG r0, r1, r2, r3
+#if __ARM_L2CACHE__
 	dsb
 	mov		r0, #2
 clean_l2dcacheway:
 clean_l2dcacheline:		
 	mcr		p15, 0, r0, c7, c10, 2				 // clean dcache line by way/set
-	add		r0, r0, r1							 // increment set index
-	tst		r0, r2								 // look for overflow
+	add		r0, r0, #1 << L2_I7SET				 // increment set index
+	tst		r0, #1 << (L2_NSET + L2_I7SET)		 // look for overflow
 	beq		clean_l2dcacheline
-	bic		r0, r0, r2							 // clear set overflow
-	adds	r0, r0, r3							 // increment way
+	bic		r0, r0, #1 << (L2_NSET + L2_I7SET)	 // clear set overflow
+	adds	r0, r0, #1 << L2_I7WAY				 // increment way
 	bcc		clean_l2dcacheway					 // loop
-clean_skipl2dcache:
+#endif
 	dsb
 	bx		lr
 		
@@ -189,17 +182,15 @@ clean_skipl2dcache:
 LEXT(CleanPoU_Dcache)
 #if	!defined(__ARM_PoU_WT_CACHE__)
 	mov		r0, #0
-	GET_CACHE_CONFIG r0, r1, r2, r3
-	mov		r0, #0
 	dsb
 clean_dcacheway_idle:
 clean_dcacheline_idle:		
 	mcr		p15, 0, r0, c7, c10, 2				 // clean dcache line by way/set
-	add		r0, r0, r1							 // increment set index
-	tst		r0, r2								 // look for overflow
+	add		r0, r0, #1 << MMU_I7SET				 // increment set index
+	tst		r0, #1 << (MMU_NSET + MMU_I7SET)	 // look for overflow
 	beq		clean_dcacheline_idle
-	bic		r0, r0, r2 							 // clear set overflow
-	adds	r0, r0, r3				 			 // increment way
+	bic		r0, r0, #1 << (MMU_NSET + MMU_I7SET) // clear set overflow
+	adds	r0, r0, #1 << MMU_I7WAY				 // increment way
 	bcc		clean_dcacheway_idle				 // loop
 #endif
 	dsb
@@ -248,6 +239,7 @@ LEXT(CleanPoC_DcacheRegion_Force)
 	add		r1, r1, r2
 	sub		r1, r1, #1
 	mov		r1, r1, LSR #MMU_CLINE				// Set cache line counter
+	dsb
 ccdr_loop:
 	mcr		p15, 0, r0, c7, c10, 1				// Clean dcache line to PoC
 	add		r0, r0, #1<<MMU_CLINE				// Get next cache aligned addr
@@ -266,35 +258,29 @@ ccdr_loop:
 	.globl EXT(FlushPoC_Dcache)
 LEXT(FlushPoC_Dcache)
 	mov		r0, #0
-	GET_CACHE_CONFIG r0, r1, r2, r3
-	mov		r0, #0
 	dsb
 cleanflush_dcacheway:
 cleanflush_dcacheline:		
 	mcr		p15, 0, r0, c7, c14, 2				 // cleanflush dcache line by way/set
-	add		r0, r0, r1							 // increment set index
-	tst		r0, r2								 // look for overflow
+	add		r0, r0, #1 << MMU_I7SET				 // increment set index
+	tst		r0, #1 << (MMU_NSET + MMU_I7SET)	 // look for overflow
 	beq		cleanflush_dcacheline
-	bic		r0, r0, r2 							 // clear set overflow
-	adds	r0, r0, r3							 // increment way
+	bic		r0, r0, #1 << (MMU_NSET + MMU_I7SET) // clear set overflow
+	adds	r0, r0, #1 << MMU_I7WAY				 // increment way
 	bcc		cleanflush_dcacheway				 // loop
-	HAS_L2_CACHE r0
-	cmp		r0, #0
-	beq		cleanflush_skipl2dcache
-	mov		r0, #1
-	GET_CACHE_CONFIG r0, r1, r2, r3
+#if __ARM_L2CACHE__
 	dsb
 	mov		r0, #2
 cleanflush_l2dcacheway:
 cleanflush_l2dcacheline:		
 	mcr		p15, 0, r0, c7, c14, 2				 // cleanflush dcache line by way/set
-	add		r0, r0, r1							 // increment set index
-	tst		r0, r2	 							 // look for overflow
+	add		r0, r0, #1 << L2_I7SET				 // increment set index
+	tst		r0, #1 << (L2_NSET + L2_I7SET)	 	// look for overflow
 	beq		cleanflush_l2dcacheline
-	bic		r0, r0, r2							 // clear set overflow
-	adds	r0, r0, r3							 // increment way
+	bic		r0, r0, #1 << (L2_NSET + L2_I7SET)	 // clear set overflow
+	adds	r0, r0, #1 << L2_I7WAY				 // increment way
 	bcc		cleanflush_l2dcacheway				 // loop
-cleanflush_skipl2dcache:
+#endif
 	dsb
 	bx		lr
 
@@ -308,17 +294,15 @@ cleanflush_skipl2dcache:
 	.globl EXT(FlushPoU_Dcache)
 LEXT(FlushPoU_Dcache)
 	mov		r0, #0
-	GET_CACHE_CONFIG r0, r1, r2, r3
-	mov		r0, #0
 	dsb
 fpud_way:
 fpud_line:		
 	mcr		p15, 0, r0, c7, c14, 2				 // cleanflush dcache line by way/set
-	add		r0, r0, r1							 // increment set index
-	tst		r0, r2								 // look for overflow
+	add		r0, r0, #1 << MMU_I7SET				 // increment set index
+	tst		r0, #1 << (MMU_NSET + MMU_I7SET)	 // look for overflow
 	beq		fpud_line
-	bic		r0, r0, r2 							 // clear set overflow
-	adds	r0, r0, r3							 // increment way
+	bic		r0, r0, #1 << (MMU_NSET + MMU_I7SET) // clear set overflow
+	adds	r0, r0, #1 << MMU_I7WAY				 // increment way
 	bcc		fpud_way							 // loop
 	dsb
 	bx		lr

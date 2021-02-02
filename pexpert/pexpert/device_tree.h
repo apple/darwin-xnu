@@ -249,13 +249,9 @@ extern int SecureDTRestartEntryIteration(DTEntryIterator iterator);
 extern int SecureDTGetProperty(const DTEntry entry, const char *propertyName,
     void const **propertyValue, unsigned int *propertySize);
 
-#if defined(__i386__) || defined(__x86_64__)
-// x86 processes device tree fragments outside the normal DT region in
-// hibernation. This would not work on ARM.
 extern int SecureDTGetPropertyRegion(const DTEntry entry, const char *propertyName,
     void const **propertyValue, unsigned int *propertySize,
     vm_offset_t const region_start, vm_size_t region_size);
-#endif
 
 /*
  *  -------------------------------------------------------------------------------

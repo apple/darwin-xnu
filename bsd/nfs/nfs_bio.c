@@ -2987,6 +2987,17 @@ nfs_buf_write_rpc(struct nfsbuf *bp, int iomode, thread_t thd, kauth_cred_t cred
 		return error;
 	}
 
+	if (length == 0) {
+		/* We should never get here  */
+#if DEVELOPMENT
+		printf("nfs_buf_write_rpc: Got request with zero length. np %p, bp %p, offset %lld\n", np, bp, offset);
+#else
+		printf("nfs_buf_write_rpc: Got request with zero length.\n");
+#endif /* DEVELOPMENT */
+		nfs_buf_iodone(bp);
+		return 0;
+	}
+
 	auio = uio_createwithbuffer(1, NBOFF(bp) + offset, UIO_SYSSPACE,
 	    UIO_WRITE, &uio_buf, sizeof(uio_buf));
 	NFS_UIO_ADDIOV(auio, CAST_USER_ADDR_T(bp->nb_data + offset), length);
@@ -3204,7 +3215,7 @@ finish:
 		bp->nb_verf = wverf;
 	}
 
-	if ((rlen > 0) && (bp->nb_offio < (offset + (int)rlen))) {
+	if (!ISSET(bp->nb_flags, NB_STALEWVERF) && rlen > 0 && (bp->nb_offio < (offset + (int)rlen))) {
 		bp->nb_offio = offset + rlen;
 	}
 

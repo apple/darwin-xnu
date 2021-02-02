@@ -719,6 +719,7 @@ static unsigned int mb_drain_maxint = 60;
 #else /* XNU_TARGET_OS_OSX */
 static unsigned int mb_drain_maxint = 0;
 #endif /* XNU_TARGET_OS_OSX */
+static unsigned int mb_memory_pressure_percentage = 80;
 
 uintptr_t mb_obscure_extfree __attribute__((visibility("hidden")));
 uintptr_t mb_obscure_extref __attribute__((visibility("hidden")));
@@ -1429,6 +1430,52 @@ mbuf_table_init(void)
 	mbstat.m_mlen = MLEN;
 	mbstat.m_mhlen = MHLEN;
 	mbstat.m_bigmclbytes = m_maxsize(MC_BIGCL);
+}
+
+int
+mbuf_get_class(struct mbuf *m)
+{
+	if (m->m_flags & M_EXT) {
+		uint32_t composite = (MEXT_FLAGS(m) & EXTF_COMPOSITE);
+		m_ext_free_func_t m_free_func = m_get_ext_free(m);
+
+		if (m_free_func == NULL) {
+			if (composite) {
+				return MC_MBUF_CL;
+			} else {
+				return MC_CL;
+			}
+		} else if (m_free_func == m_bigfree) {
+			if (composite) {
+				return MC_MBUF_BIGCL;
+			} else {
+				return MC_BIGCL;
+			}
+		} else if (m_free_func == m_16kfree) {
+			if (composite) {
+				return MC_MBUF_16KCL;
+			} else {
+				return MC_16KCL;
+			}
+		}
+	}
+
+	return MC_MBUF;
+}
+
+bool
+mbuf_class_under_pressure(struct mbuf *m)
+{
+	int mclass = mbuf_get_class(m); // TODO - how can we get the class easily???
+
+	if (m_total(mclass) >= (m_maxlimit(mclass) * mb_memory_pressure_percentage) / 100) {
+		os_log(OS_LOG_DEFAULT,
+		    "%s memory-pressure on mbuf due to class %u, total %u max %u",
+		    __func__, mclass, m_total(mclass), m_maxlimit(mclass));
+		return true;
+	}
+
+	return false;
 }
 
 #if defined(__LP64__)
@@ -3770,8 +3817,8 @@ m_free(struct mbuf *m)
 	}
 
 	if (m->m_flags & M_EXT) {
-		u_int16_t refcnt;
-		u_int32_t composite;
+		uint16_t refcnt;
+		uint32_t composite;
 		m_ext_free_func_t m_free_func;
 
 		if (MBUF_IS_PAIRED(m) && m_free_paired(m)) {
@@ -4166,6 +4213,12 @@ m_copy_pftag(struct mbuf *to, struct mbuf *from)
 	m_pftag(to)->pftag_hdr = NULL;
 	m_pftag(to)->pftag_flags &= ~(PF_TAG_HDR_INET | PF_TAG_HDR_INET6);
 #endif /* PF_ECN */
+}
+
+void
+m_copy_necptag(struct mbuf *to, struct mbuf *from)
+{
+	memcpy(m_necptag(to), m_necptag(from), sizeof(struct necp_mtag_));
 }
 
 void
@@ -8811,3 +8864,6 @@ SYSCTL_PROC(_kern_ipc, OID_AUTO, mb_drain_force,
 SYSCTL_INT(_kern_ipc, OID_AUTO, mb_drain_maxint,
     CTLFLAG_RW | CTLFLAG_LOCKED, &mb_drain_maxint, 0,
     "Minimum time interval between garbage collection");
+SYSCTL_INT(_kern_ipc, OID_AUTO, mb_memory_pressure_percentage,
+    CTLFLAG_RW | CTLFLAG_LOCKED, &mb_memory_pressure_percentage, 0,
+    "Percentage of when we trigger memory-pressure for an mbuf-class");

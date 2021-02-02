@@ -371,7 +371,7 @@ bsd/netkey/keydb.c      		optional ipsec
 
 bsd/net/multi_layer_pkt_log.c		optional inet inet ipsec ipsec_esp
 
-bsd/crypto/entropy/diag_entropy_sysctl.c standard
+bsd/crypto/entropy/entropy_sysctl.c standard
 
 #bsd/netpm/pm_aTT.c        optional pm
 #bsd/netpm/pm_ams.c        optional pm

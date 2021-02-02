@@ -14,11 +14,11 @@ import xnudefines
 def MBufStat(cmd_args=None):
     """ Print extended mbuf allocator statistics.
     """
-    hdr_format = "{0: <16s} {1: >8s} {2: >8s} {3: ^16s} {4: >8s} {5: >12s} {6: >8s} {7: >8s} {8: >8s}"
-    print hdr_format.format('class', 'total', 'cached', 'uncached', 'inuse', 'failed', 'waiter', 'notified', 'purge')
-    print hdr_format.format('name', 'objs', 'objs', 'objs/slabs', 'objs', 'alloc count', 'count', 'count', 'count')
-    print hdr_format.format('-'*16, '-'*8, '-'*8, '-'*16, '-'*8, '-'*12, '-'*8, '-'*8, '-'*8)
-    entry_format = "{0: <16s} {1: >8d} {2: >8d} {3:>7d} / {4:<6d} {5: >8d} {6: >12d} {7: >8d} {8: >8d} {9: >8d}"
+    hdr_format = "{0: <16s} {1: >8s} {2: >8s} {3: ^16s} {4: >8s} {5: >12s} {6: >8s} {7: >8s} {8: >8s} {9: >8s}"
+    print hdr_format.format('class', 'total', 'cached', 'uncached', 'inuse', 'failed', 'waiter', 'notified', 'purge', 'max')
+    print hdr_format.format('name', 'objs', 'objs', 'objs/slabs', 'objs', 'alloc count', 'count', 'count', 'count', 'objs')
+    print hdr_format.format('-'*16, '-'*8, '-'*8, '-'*16, '-'*8, '-'*12, '-'*8, '-'*8, '-'*8, '-'*8)
+    entry_format = "{0: <16s} {1: >8d} {2: >8d} {3:>7d} / {4:<6d} {5: >8d} {6: >12d} {7: >8d} {8: >8d} {9: >8d} {10: >8d}"
     num_items = sizeof(kern.globals.mbuf_table) / sizeof(kern.globals.mbuf_table[0])
     ncpus = int(kern.globals.ncpu)
     for i in range(num_items):
@@ -38,7 +38,8 @@ def MBufStat(cmd_args=None):
                                   mcs.mbcl_infree, mcs.mbcl_slab_cnt,
                                   (mcs.mbcl_total - total - mcs.mbcl_infree),
                                   mcs.mbcl_fail_cnt, mbuf.mtbl_cache.mc_waiter_cnt,
-                                  mcs.mbcl_notified, mcs.mbcl_purge_cnt
+                                  mcs.mbcl_notified, mcs.mbcl_purge_cnt,
+                                  mbuf.mtbl_maxlimit
                                   )
 # EndMacro: mbuf_stat
 

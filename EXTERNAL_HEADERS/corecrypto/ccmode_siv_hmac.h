@@ -34,15 +34,15 @@ struct ccmode_siv_hmac {
     size_t size; /* first argument to ccsiv_hmac_ctx_decl(). */
     size_t block_size;
     
-    int (*init)(const struct ccmode_siv_hmac *sivhmac,
+    int (*CC_SPTR(ccmode_siv_hmac, init))(const struct ccmode_siv_hmac *sivhmac,
                 ccsiv_hmac_ctx *ctx,
                 size_t key_len,
                 const uint8_t *key,
                 const size_t tag_size);
-    int (*set_nonce)(ccsiv_hmac_ctx *ctx, size_t nbytes, const uint8_t *in);
-    int (*auth)(ccsiv_hmac_ctx *ctx, size_t nbytes, const uint8_t *in);      
-    int (*crypt)(ccsiv_hmac_ctx *ctx, size_t nbytes, const uint8_t *in, uint8_t *out);
-    int (*reset)(ccsiv_hmac_ctx *ctx);
+    int (*CC_SPTR(ccmode_siv_hmac, set_nonce))(ccsiv_hmac_ctx *ctx, size_t nbytes, const uint8_t *in);
+    int (*CC_SPTR(ccmode_siv_hmac, auth))(ccsiv_hmac_ctx *ctx, size_t nbytes, const uint8_t *in);
+    int (*CC_SPTR(ccmode_siv_hmac, crypt))(ccsiv_hmac_ctx *ctx, size_t nbytes, const uint8_t *in, uint8_t *out);
+    int (*CC_SPTR(ccmode_siv_hmac, reset))(ccsiv_hmac_ctx *ctx);
     const struct ccdigest_info *hmac_digest; // Digest to be used in HMAC;
     const struct ccmode_ctr *ctr;
 };

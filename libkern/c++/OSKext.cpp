@@ -3828,11 +3828,13 @@ OSKext::lookupKextWithAddress(vm_address_t address)
 	OSSharedPtr<OSKext> foundKext;             // returned
 	uint32_t count, i;
 	kmod_info_t *kmod_info;
+	vm_address_t originalAddress;
 #if defined(__arm64__)
 	uint64_t   textExecBase;
 	size_t     textExecSize;
 #endif /* defined(__arm64__) */
 
+	originalAddress = address;
 #if  __has_feature(ptrauth_calls)
 	address = (vm_address_t)VM_KERNEL_STRIP_PTR(address);
 #endif /*  __has_feature(ptrauth_calls) */
@@ -3868,7 +3870,8 @@ OSKext::lookupKextWithAddress(vm_address_t address)
 	}
 	/*
 	 * DriverKit userspace executables do not have a kernel linkedExecutable,
-	 * so we "fake" their address range with the LoadTag.
+	 * so we "fake" their address range with the LoadTag. We cannot use the ptrauth-stripped address
+	 * here, so use the original address passed to this method.
 	 *
 	 * This is supposed to be used for logging reasons only. When logd
 	 * calls this function it ors the address with FIREHOSE_TRACEPOINT_PC_KERNEL_MASK, so we
@@ -3876,7 +3879,7 @@ OSKext::lookupKextWithAddress(vm_address_t address)
 	 * Also we need to remove FIREHOSE_TRACEPOINT_PC_DYNAMIC_BIT set when emitting the log line.
 	 */
 
-	address = address & ~(FIREHOSE_TRACEPOINT_PC_KERNEL_MASK | FIREHOSE_TRACEPOINT_PC_DYNAMIC_BIT);
+	address = originalAddress & ~(FIREHOSE_TRACEPOINT_PC_KERNEL_MASK | FIREHOSE_TRACEPOINT_PC_DYNAMIC_BIT);
 	count = sLoadedDriverKitKexts->getCount();
 	for (i = 0; i < count; i++) {
 		OSKext * thisKext = OSDynamicCast(OSKext, sLoadedDriverKitKexts->getObject(i));
@@ -3901,14 +3904,6 @@ OSKext::copyKextUUIDForAddress(OSNumber *address)
 		return NULL;
 	}
 
-	uintptr_t addr = ml_static_slide((uintptr_t)address->unsigned64BitValue());
-	if (addr == 0) {
-		return NULL;
-	}
-#if  __has_feature(ptrauth_calls)
-	addr = (uintptr_t)VM_KERNEL_STRIP_PTR(addr);
-#endif /*  __has_feature(ptrauth_calls) */
-
 #if CONFIG_MACF
 	/* Is the calling process allowed to query kext info? */
 	if (current_task() != kernel_task) {
@@ -3928,10 +3923,28 @@ OSKext::copyKextUUIDForAddress(OSNumber *address)
 		}
 	}
 #endif
-	kext = lookupKextWithAddress(addr);
-	if (kext) {
-		uuid = kext->copyTextUUID();
+
+	uintptr_t slidAddress = ml_static_slide((uintptr_t)address->unsigned64BitValue());
+	if (slidAddress != 0) {
+		kext = lookupKextWithAddress(slidAddress);
+		if (kext) {
+			uuid = kext->copyTextUUID();
+		}
 	}
+
+	if (!uuid) {
+		/*
+		 * If we still don't have a UUID, then we failed to match the slid + stripped address with
+		 * a kext. This might have happened because the log message came from a dext.
+		 *
+		 * Try again with the original address.
+		 */
+		kext = lookupKextWithAddress((vm_address_t)address->unsigned64BitValue());
+		if (kext && kext->isDriverKit()) {
+			uuid = kext->copyTextUUID();
+		}
+	}
+
 	return uuid;
 }
 
@@ -5392,10 +5405,8 @@ OSKext::loadCodelessKext(OSString *kextIdentifier, OSDictionary *requestDict)
 		OSKext::recordIdentifierRequest(OSDynamicCast(OSString, newKext->getIdentifier()));
 
 		result = kOSReturnSuccess;
-		/* send the kext's personalities to the IOCatalog */
-		if (!newKext->flags.requireExplicitLoad) {
-			result = newKext->sendPersonalitiesToCatalog(true, NULL);
-		}
+		/* Send the kext's personalities to the IOCatalog. This is an explicit load. */
+		result = newKext->sendPersonalitiesToCatalog(true, NULL);
 	}
 
 finish:
@@ -11842,6 +11853,13 @@ OSKext::loadFileSetKexts(OSDictionary * requestDict __unused)
 	ret = kOSKextReturnDisabled;
 
 	IORecursiveLockLock(sKextLock);
+
+	if (!sLoadEnabled) {
+		OSKextLog(NULL, kOSKextLogErrorLevel | kOSKextLogIPCFlag,
+		    "KextLog: Kext loading is disabled (attempt to load KCs).");
+		IORecursiveLockUnlock(sKextLock);
+		return ret;
+	}
 
 	pageable_filepath = OSDynamicCast(OSString,
 	    requestArgs->getObject(kKextRequestArgumentPageableKCFilename));

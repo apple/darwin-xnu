@@ -77,7 +77,12 @@ Lskip_program_el0_jop_key:
 	 * }
 	 */
 	mrs		x1, ARM64_REG_APCTL_EL1
-#if   defined(HAS_APCTL_EL1_USERKEYEN)
+#if defined(APPLEFIRESTORM)
+	SET_KERN_KEY	x2, x1
+	CLEAR_KERN_KEY	x3, x1
+	tst		x1, #(APCTL_EL1_UserKeyEn)
+	csel	x1, x2, x3, ne
+#elif defined(HAS_APCTL_EL1_USERKEYEN)
 	SET_KERN_KEY	x1, x1
 #else
 	CLEAR_KERN_KEY	x1, x1
@@ -105,7 +110,12 @@ Lskip_program_prev_jop_key:
 	 * }
 	 */
 	mrs		x1, ARM64_REG_APCTL_EL1
-#if   defined(HAS_APCTL_EL1_USERKEYEN)
+#if defined(APPLEFIRESTORM)
+	CLEAR_KERN_KEY	x2, x1
+	SET_KERN_KEY	x3, x1
+	tst		x1, #(APCTL_EL1_UserKeyEn)
+	csel	x1, x2, x3, ne
+#elif defined(HAS_APCTL_EL1_USERKEYEN)
 	CLEAR_KERN_KEY	x1, x1
 #else
 	SET_KERN_KEY	x1, x1

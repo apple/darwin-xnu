@@ -3886,7 +3886,7 @@ processor_setrun(
 #endif
 	if (SCHED(priority_is_urgent)(thread->sched_pri) && thread->sched_pri > processor->current_pri) {
 		preempt = (AST_PREEMPT | AST_URGENT);
-	} else if (processor->active_thread && thread_eager_preemption(processor->active_thread)) {
+	} else if (processor->current_is_eagerpreempt) {
 		preempt = (AST_PREEMPT | AST_URGENT);
 	} else if ((thread->sched_mode == TH_MODE_TIMESHARE) && (thread->sched_pri < thread->base_pri)) {
 		if (SCHED(priority_is_urgent)(thread->base_pri) && thread->sched_pri > processor->current_pri) {
@@ -4738,7 +4738,7 @@ csw_check_locked(
 
 	result = SCHED(processor_csw_check)(processor);
 	if (result != AST_NONE) {
-		return check_reason | result | (thread_eager_preemption(thread) ? AST_URGENT : AST_NONE);
+		return check_reason | result | (thread_is_eager_preempt(thread) ? AST_URGENT : AST_NONE);
 	}
 
 	/*
@@ -5862,57 +5862,62 @@ sched_clutch_timeshare_scan(
 
 #endif /* CONFIG_SCHED_TIMESHARE_CORE */
 
-boolean_t
-thread_eager_preemption(thread_t thread)
+bool
+thread_is_eager_preempt(thread_t thread)
 {
-	return (thread->sched_flags & TH_SFLAG_EAGERPREEMPT) != 0;
+	return thread->sched_flags & TH_SFLAG_EAGERPREEMPT;
 }
 
 void
 thread_set_eager_preempt(thread_t thread)
 {
-	spl_t x;
-	processor_t p;
-	ast_t ast = AST_NONE;
-
-	x = splsched();
-	p = current_processor();
-
+	spl_t s = splsched();
 	thread_lock(thread);
+
+	assert(!thread_is_eager_preempt(thread));
+
 	thread->sched_flags |= TH_SFLAG_EAGERPREEMPT;
 
 	if (thread == current_thread()) {
-		ast = csw_check(thread, p, AST_NONE);
+		/* csw_check updates current_is_eagerpreempt on the processor */
+		ast_t ast = csw_check(thread, current_processor(), AST_NONE);
+
 		thread_unlock(thread);
+
 		if (ast != AST_NONE) {
-			(void) thread_block_reason(THREAD_CONTINUE_NULL, NULL, ast);
+			thread_block_reason(THREAD_CONTINUE_NULL, NULL, ast);
 		}
 	} else {
-		p = thread->last_processor;
+		processor_t last_processor = thread->last_processor;
 
-		if (p != PROCESSOR_NULL && p->state == PROCESSOR_RUNNING &&
-		    p->active_thread == thread) {
-			cause_ast_check(p);
+		if (last_processor != PROCESSOR_NULL &&
+		    last_processor->state == PROCESSOR_RUNNING &&
+		    last_processor->active_thread == thread) {
+			cause_ast_check(last_processor);
 		}
 
 		thread_unlock(thread);
 	}
 
-	splx(x);
+	splx(s);
 }
 
 void
 thread_clear_eager_preempt(thread_t thread)
 {
-	spl_t x;
-
-	x = splsched();
+	spl_t s = splsched();
 	thread_lock(thread);
+
+	assert(thread_is_eager_preempt(thread));
 
 	thread->sched_flags &= ~TH_SFLAG_EAGERPREEMPT;
 
+	if (thread == current_thread()) {
+		current_processor()->current_is_eagerpreempt = false;
+	}
+
 	thread_unlock(thread);
-	splx(x);
+	splx(s);
 }
 
 /*

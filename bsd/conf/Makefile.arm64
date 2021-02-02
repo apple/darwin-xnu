@@ -5,6 +5,7 @@
 # Inline assembly doesn't interact well with LTO
 fbt_arm.o_CFLAGS_ADD += $(CFLAGS_NOLTO_FLAG)
 
+kern_csr.o_CFLAGS_ADD += -I$(SRCROOT)/osfmk
 
 ######################################################################
 #END    Machine dependent Makefile fragment for arm

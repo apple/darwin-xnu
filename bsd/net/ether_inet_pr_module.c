@@ -246,7 +246,7 @@ ether_inet_pre_output(ifnet_t ifp, protocol_family_t protocol_family,
 
 	switch (dst_netaddr->sa_family) {
 	case AF_INET: {
-		struct sockaddr_dl ll_dest;
+		struct sockaddr_dl ll_dest = {};
 
 		result = arp_lookup_ip(ifp,
 		    (const struct sockaddr_in *)(uintptr_t)(size_t)dst_netaddr,

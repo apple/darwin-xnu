@@ -2957,11 +2957,6 @@ ubc_cs_blob_deallocate(
 	vm_offset_t     blob_addr,
 	vm_size_t       blob_size)
 {
-#if PMAP_CS
-	if (blob_size > pmap_cs_blob_limit) {
-		kmem_free(kernel_map, blob_addr, blob_size);
-	} else
-#endif
 	{
 		kfree(blob_addr, blob_size);
 	}
@@ -3559,40 +3554,6 @@ ubc_cs_blob_add(
 		blob->csb_cd = new_cd;
 		blob->csb_entitlements_blob = new_entitlements;
 		blob->csb_reconstituted = true;
-	}
-#elif PMAP_CS
-	/*
-	 * When pmap_cs is enabled, there's an expectation that large blobs are
-	 * relocated to their own page.  Above, this happens under
-	 * ubc_cs_reconstitute_code_signature() but that discards parts of the
-	 * signatures that are necessary on some platforms (eg, requirements).
-	 * So in this case, just copy everything.
-	 */
-	if (pmap_cs && (blob->csb_mem_size > pmap_cs_blob_limit)) {
-		vm_offset_t cd_offset, ent_offset;
-		vm_size_t new_mem_size = round_page(blob->csb_mem_size);
-		vm_address_t new_mem_kaddr = 0;
-
-		kr = kmem_alloc_kobject(kernel_map, &new_mem_kaddr, new_mem_size, VM_KERN_MEMORY_SECURITY);
-		if (kr != KERN_SUCCESS) {
-			printf("failed to allocate %lu bytes to relocate blob: %d\n", new_mem_size, kr);
-			error = ENOMEM;
-			goto out;
-		}
-
-		cd_offset = (vm_address_t) blob->csb_cd - blob->csb_mem_kaddr;
-		ent_offset = (vm_address_t) blob->csb_entitlements_blob - blob->csb_mem_kaddr;
-
-		memcpy((void *) new_mem_kaddr, (const void *) blob->csb_mem_kaddr, blob->csb_mem_size);
-		ubc_cs_blob_deallocate(blob->csb_mem_kaddr, blob->csb_mem_size);
-		blob->csb_cd = (const CS_CodeDirectory *) (new_mem_kaddr + cd_offset);
-		/* Only update the entitlements blob pointer if it is non-NULL.  If it is NULL, then
-		 * the blob has no entitlements and ent_offset is garbage. */
-		if (blob->csb_entitlements_blob != NULL) {
-			blob->csb_entitlements_blob = (const CS_GenericBlob *) (new_mem_kaddr + ent_offset);
-		}
-		blob->csb_mem_kaddr = new_mem_kaddr;
-		blob->csb_mem_size = new_mem_size;
 	}
 #endif
 
@@ -4906,66 +4867,3 @@ ubc_cs_validation_bitmap_deallocate(__unused vnode_t vp)
 }
 #endif /* CHECK_CS_VALIDATION_BITMAP */
 
-#if PMAP_CS
-kern_return_t
-cs_associate_blob_with_mapping(
-	void                    *pmap,
-	vm_map_offset_t         start,
-	vm_map_size_t           size,
-	vm_object_offset_t      offset,
-	void                    *blobs_p)
-{
-	off_t                   blob_start_offset, blob_end_offset;
-	kern_return_t           kr;
-	struct cs_blob          *blobs, *blob;
-	vm_offset_t             kaddr;
-	struct pmap_cs_code_directory *cd_entry = NULL;
-
-	if (!pmap_cs) {
-		return KERN_NOT_SUPPORTED;
-	}
-
-	blobs = (struct cs_blob *)blobs_p;
-
-	for (blob = blobs;
-	    blob != NULL;
-	    blob = blob->csb_next) {
-		blob_start_offset = (blob->csb_base_offset +
-		    blob->csb_start_offset);
-		blob_end_offset = (blob->csb_base_offset +
-		    blob->csb_end_offset);
-		if ((off_t) offset < blob_start_offset ||
-		    (off_t) offset >= blob_end_offset ||
-		    (off_t) (offset + size) <= blob_start_offset ||
-		    (off_t) (offset + size) > blob_end_offset) {
-			continue;
-		}
-		kaddr = blob->csb_mem_kaddr;
-		if (kaddr == 0) {
-			/* blob data has been released */
-			continue;
-		}
-		cd_entry = blob->csb_pmap_cs_entry;
-		if (cd_entry == NULL) {
-			continue;
-		}
-
-		break;
-	}
-
-	if (cd_entry != NULL) {
-		kr = pmap_cs_associate(pmap,
-		    cd_entry,
-		    start,
-		    size,
-		    offset - blob_start_offset);
-	} else {
-		kr = KERN_CODESIGN_ERROR;
-	}
-#if 00
-	printf("FBDP %d[%s] pmap_cs_associate(%p,%p,0x%llx,0x%llx) -> kr=0x%x\n", proc_selfpid(), &(current_proc()->p_comm[0]), pmap, cd_entry, (uint64_t)start, (uint64_t)size, kr);
-	kr = KERN_SUCCESS;
-#endif
-	return kr;
-}
-#endif /* PMAP_CS */

@@ -37,15 +37,20 @@
 #include <ptrauth.h>
 #include <arm/cpu_data_internal.h>
 #include <arm/cpu_internal.h>
+#include <libkern/section_keywords.h>
 
-#if HIBERNATE_HMAC_IMAGE
-#include <arm64/ppl/ppl_hib.h>
-#include <corecrypto/ccsha2_internal.h>
-#include <corecrypto/ccdigest_internal.h>
-#endif /* HIBERNATE_HMAC_IMAGE */
 
 pal_hib_tramp_result_t gHibTramp;
-pal_hib_globals_t gHibernateGlobals;
+pal_hib_globals_t gHibernateGlobals MARK_AS_HIBERNATE_DATA_CONST_LATE;
+
+// as a workaround for <rdar://problem/70121432> References between different compile units in xnu shouldn't go through GOT
+// all of the extern symbols that we refer to in this file have to be declared with hidden visibility
+extern IOHibernateImageHeader *gIOHibernateCurrentHeader __attribute__((visibility("hidden")));
+extern const uint32_t ccsha256_initial_state[8] __attribute__((visibility("hidden")));
+extern void AccelerateCrypto_SHA256_compress(ccdigest_state_t state, size_t numBlocks, const void *data) __attribute__((visibility("hidden")));
+extern void ccdigest_final_64be(const struct ccdigest_info *di, ccdigest_ctx_t, unsigned char *digest) __attribute__((visibility("hidden")));
+extern struct pmap_cpu_data_array_entry pmap_cpu_data_array[MAX_CPUS] __attribute__((visibility("hidden")));
+extern bool hib_entry_pmap_lockdown __attribute__((visibility("hidden")));
 
 uintptr_t
 hibernate_restore_phys_page(uint64_t src, uint64_t dst, uint32_t len, __unused uint32_t procFlags)
@@ -81,74 +86,18 @@ pal_hib_restore_pal_state(__unused uint32_t *arg)
 void
 pal_hib_resume_init(pal_hib_ctx_t *ctx, hibernate_page_list_t *map, uint32_t *nextFree)
 {
-#if HIBERNATE_HMAC_IMAGE
-	extern void AccelerateCrypto_SHA256_compress(ccdigest_state_t state, size_t numBlocks, const void *data);
-	ctx->di = (struct ccdigest_info){
-		.output_size = CCSHA256_OUTPUT_SIZE,
-		.state_size = CCSHA256_STATE_SIZE,
-		.block_size = CCSHA256_BLOCK_SIZE,
-		.oid_size = ccoid_sha256_len,
-		.oid = CC_DIGEST_OID_SHA256,
-		.initial_state = ccsha256_initial_state,
-		.compress = AccelerateCrypto_SHA256_compress,
-		.final = ccdigest_final_64be,
-	};
-
-	SHA256_CTX shaCtx;
-
-	// validate signature of handoff
-	uint32_t handoffPages = gIOHibernateCurrentHeader->handoffPages;
-	uint32_t handoffPageCount = gIOHibernateCurrentHeader->handoffPageCount;
-
-	void *handoffSrc = (void *)pal_hib_map(IMAGE_AREA, ptoa_64(handoffPages));
-	ppl_hib_init_context(&ctx->di, &shaCtx, 'HOFF');
-	ccdigest_update(&ctx->di, shaCtx.ctx, sizeof(handoffPages), &handoffPages);
-	ccdigest_update(&ctx->di, shaCtx.ctx, sizeof(handoffPageCount), &handoffPageCount);
-	ccdigest_update(&ctx->di, shaCtx.ctx, ptoa_64(handoffPageCount), handoffSrc);
-	uint8_t handoffHMAC[CCSHA384_OUTPUT_SIZE];
-	ppl_hib_compute_hmac(&ctx->di, &shaCtx, gHibernateGlobals.hmacRegBase, handoffHMAC);
-	HIB_ASSERT(__nosan_memcmp(handoffHMAC, gIOHibernateCurrentHeader->handoffHMAC, sizeof(handoffHMAC)) == 0);
-
-	// construct a hibernate_scratch_t for storing all of the pages we restored
-	hibernate_scratch_init(&ctx->pagesRestored, map, nextFree);
-#endif /* HIBERNATE_HMAC_IMAGE */
 }
 
 void
 pal_hib_restored_page(pal_hib_ctx_t *ctx, pal_hib_restore_stage_t stage, ppnum_t ppnum)
 {
-#if HIBERNATE_HMAC_IMAGE
-	if (stage != pal_hib_restore_stage_handoff_data) {
-		// remember that we restored this page
-		hibernate_scratch_write(&ctx->pagesRestored, &ppnum, sizeof(ppnum));
-	}
-#endif /* HIBERNATE_HMAC_IMAGE */
 }
 
 void
 pal_hib_patchup(pal_hib_ctx_t *ctx)
 {
-#if HIBERNATE_HMAC_IMAGE
-	// compute and validate the HMAC for the wired pages (image1)
-	SHA256_CTX shaCtx;
-
-	hibernate_scratch_start_read(&ctx->pagesRestored);
-	uint64_t pageCount = ctx->pagesRestored.totalLength / sizeof(ppnum_t);
-	ppl_hib_init_context(&ctx->di, &shaCtx, 'PAG1');
-	for (uint64_t i = 0; i < pageCount; i++) {
-		ppnum_t ppnum;
-		hibernate_scratch_read(&ctx->pagesRestored, &ppnum, sizeof(ppnum));
-		vm_offset_t virtAddr = pal_hib_map(DEST_COPY_AREA, ptoa_64(ppnum));
-		ccdigest_update(&ctx->di, shaCtx.ctx, sizeof(ppnum), &ppnum);
-		ccdigest_update(&ctx->di, shaCtx.ctx, PAGE_SIZE, (void *)virtAddr);
-	}
-	uint8_t image1PagesHMAC[CCSHA384_OUTPUT_SIZE];
-	ppl_hib_compute_hmac(&ctx->di, &shaCtx, gHibernateGlobals.hmacRegBase, image1PagesHMAC);
-	HIB_ASSERT(__nosan_memcmp(image1PagesHMAC, gIOHibernateCurrentHeader->image1PagesHMAC, sizeof(image1PagesHMAC)) == 0);
-#endif /* HIBERNATE_HMAC_IMAGE */
 
 	// DRAM pages are captured from a PPL context, so here we restore all cpu_data structures to a non-PPL context
-	extern struct pmap_cpu_data_array_entry pmap_cpu_data_array[MAX_CPUS];
 	for (int i = 0; i < MAX_CPUS; i++) {
 		pmap_cpu_data_array[i].cpu_data.ppl_state = PPL_STATE_KERNEL;
 		pmap_cpu_data_array[i].cpu_data.ppl_kern_saved_sp = 0;
@@ -160,7 +109,6 @@ pal_hib_patchup(pal_hib_ctx_t *ctx)
 	// Calls into the pmap that could potentially modify pmap data structures
 	// during image copying were explicitly blocked on hibernation entry.
 	// Resetting this variable to false allows those calls to be made again.
-	extern bool hib_entry_pmap_lockdown;
 	hib_entry_pmap_lockdown = false;
 }
 
@@ -381,7 +329,6 @@ pal_hib_resume_tramp(uint32_t headerPpnum)
 	HIB_ASSERT(phys_end != 0);
 
 	hib_bzero(&gHibTramp, sizeof(gHibTramp));
-	gHibTramp.kernelSlide = header->restore1CodeVirt - hib_text_start;
 
 	// During hibernation resume, we create temporary mappings that do not collide with where any of the kernel mappings were originally.
 	// Technically, non-collision isn't a requirement, but doing this means that if some code accidentally jumps to a VA in the original
@@ -389,7 +336,7 @@ pal_hib_resume_tramp(uint32_t headerPpnum)
 	// The base address of our temporary mappings is adjusted by a random amount as a "poor-man's ASLR". We don’t have a good source of random
 	// numbers in this context, so we just use some of the bits from one of imageHeaderHMMAC, which should be random enough.
 	uint16_t rand = (uint16_t)(((header->imageHeaderHMAC[0]) << 8) | header->imageHeaderHMAC[1]);
-	uint64_t mem_slide = gHibTramp.kernelSlide - (phys_end - phys_start) * 4 - rand * 256 * PAGE_SIZE;
+	uint64_t mem_slide = gHibernateGlobals.kernelSlide - (phys_end - phys_start) * 4 - rand * 256 * PAGE_SIZE;
 
 	// make sure we don't clobber any of the pages we need for restore
 	hibernate_reserve_restore_pages(header_phys, header, ctx.bitmap);
@@ -424,7 +371,7 @@ pal_hib_resume_tramp(uint32_t headerPpnum)
 				bool executable = (protection & VM_PROT_EXECUTE);
 				bool writeable = (protection & VM_PROT_WRITE);
 				uint64_t map_flags = executable ? MAP_RX : writeable ? MAP_RW : MAP_RO;
-				map_range_start_end(&ctx, seg_start, seg_end, gHibTramp.kernelSlide, map_flags);
+				map_range_start_end(&ctx, seg_start, seg_end, gHibernateGlobals.kernelSlide, map_flags);
 				last_seg_end = seg_end;
 			}
 			if (seg_info->segments[i].physPage == header->restore1CodePhysPage) {

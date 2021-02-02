@@ -161,6 +161,20 @@ typedef struct memorystatus_kernel_stats {
 	char     largest_zone_name[MACH_ZONE_NAME_MAX_LEN];
 } memorystatus_kernel_stats_t;
 
+typedef enum memorystatus_freeze_skip_reason {
+	kMemorystatusFreezeSkipReasonNone = 0,
+	kMemorystatusFreezeSkipReasonExcessSharedMemory = 1,
+	kMemorystatusFreezeSkipReasonLowPrivateSharedRatio = 2,
+	kMemorystatusFreezeSkipReasonNoCompressorSpace = 3,
+	kMemorystatusFreezeSkipReasonNoSwapSpace = 4,
+	kMemorystatusFreezeSkipReasonBelowMinPages = 5,
+	kMemorystatusFreezeSkipReasonLowProbOfUse = 6,
+	kMemorystatusFreezeSkipReasonOther = 7,
+	kMemorystatusFreezeSkipReasonOutOfBudget = 8,
+	kMemorystatusFreezeSkipReasonOutOfSlots = 9,
+	kMemorystatusFreezeSkipReasonDisabled = 10,
+	_kMemorystatusFreezeSkipReasonMax
+} memorystatus_freeze_skip_reason_t;
 /*
 ** This is a variable-length struct.
 ** Allocate a buffer of the size returned by the sysctl, cast to a memorystatus_snapshot_t *
@@ -172,6 +186,7 @@ typedef struct jetsam_snapshot_entry {
 	int32_t  priority;
 	uint32_t state;
 	uint32_t fds;
+	memorystatus_freeze_skip_reason_t jse_freeze_skip_reason; /* why wasn't this process frozen? */
 	uint8_t  uuid[16];
 	uint64_t user_data;
 	uint64_t killed;
@@ -352,6 +367,8 @@ int memorystatus_control(uint32_t command, int32_t pid, uint32_t flags, void *bu
 #define MEMORYSTATUS_CMD_SET_JETSAM_SNAPSHOT_OWNERSHIP 23 /* Used by unit tests in the development kernel only. */
 #endif /* PRIVATE */
 
+#define MEMORYSTATUS_CMD_GET_PROCESS_IS_FROZEN 24 /* Check if the process is frozen. */
+
 /* Commands that act on a group of processes */
 #define MEMORYSTATUS_CMD_GRP_SET_PROPERTIES           100
 
@@ -504,7 +521,6 @@ typedef struct memorystatus_memlimit_properties2 {
 	                                                        *  of the aging bands and/or the IDLE band. */
 #define P_MEMSTAT_PRIORITY_ASSERTION              0x00020000   /* jetsam priority is being driven by an assertion */
 #define P_MEMSTAT_FREEZE_CONSIDERED               0x00040000   /* This process has been considered for the freezer. */
-
 
 /*
  * p_memstat_relaunch_flags holds

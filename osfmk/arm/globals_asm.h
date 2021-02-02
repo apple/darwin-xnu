@@ -32,7 +32,6 @@ LOAD_ADDR_GEN_DEF(fiqstack_top)
 LOAD_ADDR_GEN_DEF(gVirtBase)
 LOAD_ADDR_GEN_DEF(gPhysBase)
 LOAD_ADDR_GEN_DEF(gPhysSize)
-LOAD_ADDR_GEN_DEF(EntropyData)
 LOAD_ADDR_GEN_DEF(kdebug_enable)
 #if CONFIG_TELEMETRY
 LOAD_ADDR_GEN_DEF(telemetry_needs_record)

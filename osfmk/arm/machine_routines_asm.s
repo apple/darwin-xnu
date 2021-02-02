@@ -1156,16 +1156,12 @@ LEXT(reenable_async_aborts)
 	bx		lr
 
 /*
- *	uint64_t ml_get_timebase(void)
+ *	uint64_t ml_get_speculative_timebase(void)
  */
 	.text
 	.align 2
-	.globl EXT(ml_get_timebase)
-LEXT(ml_get_timebase)
-	mrc		p15, 0, r12, c13, c0, 4						// Read TPIDRPRW
-	ldr		r3, [r12, ACT_CPUDATAP]						// Get current cpu data
-#if __ARM_TIME__ || __ARM_TIME_TIMEBASE_ONLY__
-	isb													// Required by ARMV7C.b section B8.1.2, ARMv8 section D6.1.2.
+	.globl EXT(ml_get_speculative_timebase)
+LEXT(ml_get_speculative_timebase)
 1:
 	mrrc	p15, 0, r3, r1, c14							// Read the Time Base (CNTPCT), high => r1
 	mrrc	p15, 0, r0, r3, c14							// Read the Time Base (CNTPCT), low => r0
@@ -1173,21 +1169,32 @@ LEXT(ml_get_timebase)
 	cmp		r1, r2
 	bne		1b											// Loop until both high values are the same
 
+	mrc		p15, 0, r12, c13, c0, 4						// Read TPIDRPRW
 	ldr		r3, [r12, ACT_CPUDATAP]						// Get current cpu data
 	ldr		r2, [r3, CPU_BASE_TIMEBASE_LOW]				// Add in the offset to
 	adds	r0, r0, r2									// convert to
 	ldr		r2, [r3, CPU_BASE_TIMEBASE_HIGH]			// mach_absolute_time
 	adc		r1, r1, r2									//
-#else /* ! __ARM_TIME__  || __ARM_TIME_TIMEBASE_ONLY__ */
-1:
-	ldr		r2, [r3, CPU_TIMEBASE_HIGH]					// Get the saved TBU value
-	ldr		r0, [r3, CPU_TIMEBASE_LOW]					// Get the saved TBL value
-	ldr		r1, [r3, CPU_TIMEBASE_HIGH]					// Get the saved TBU value
-	cmp		r1, r2										// Make sure TB has not rolled over
-	bne		1b
-#endif /* __ARM_TIME__ */
 	bx		lr											// return
 
+/*
+ *	uint64_t ml_get_timebase(void)
+ */
+	.text
+	.align 2
+	.globl EXT(ml_get_timebase)
+LEXT(ml_get_timebase)
+	isb													// Required by ARMV7C.b section B8.1.2, ARMv8 section D6.1.2.
+	b	EXT(ml_get_speculative_timebase)
+
+/*
+ *	uint64_t ml_get_timebase_entropy(void)
+ */
+	.text
+	.align 2
+	.globl EXT(ml_get_timebase_entropy)
+LEXT(ml_get_timebase_entropy)
+	b	EXT(ml_get_speculative_timebase)
 
 /*
  *	uint32_t ml_get_decrementer(void)

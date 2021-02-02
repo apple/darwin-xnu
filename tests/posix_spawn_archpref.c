@@ -48,6 +48,9 @@ T_DECL(posix_spawn_archpref, "verify posix_spawn_setarchpref_np can select slice
 #if defined(__arm64__) && defined(__LP64__)
 	run_test("arm64", CPU_TYPE_ARM64, CPU_SUBTYPE_ARM64_ALL);
 #endif /* defined(__arm64__) && defined(__LP64__) */
+#if defined(__arm64e__)
+	run_test("arm64e", CPU_TYPE_ARM64, CPU_SUBTYPE_ARM64E);
+#endif /* defined(__arm64e__) */
 
 #if defined(__x86_64__)
 	run_test("any (x86_64)", CPU_TYPE_X86_64, CPU_SUBTYPE_ANY);

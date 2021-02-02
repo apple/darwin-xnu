@@ -39,7 +39,46 @@
 
 #if defined(HAS_APPLE_PAC)
 
-#if   defined(HAS_APCTL_EL1_USERKEYEN)
+#if defined(APPLEFIRESTORM)
+/* H13 may use either fast or slow A-key switching, depending on CPU model and revision */
+#define HAS_PAC_FAST_A_KEY_SWITCHING    1
+#define HAS_PAC_SLOW_A_KEY_SWITCHING    1
+
+/* BEGIN IGNORE CODESTYLE */
+
+/**
+ * IF_PAC_FAST_A_KEY_SWITCHING
+ *
+ * Branch to a specified label if this H13 model + revision supports fast A-key switching.
+ *
+ *   label - label to branch to
+ *   tmp - scratch register
+ */
+.macro IF_PAC_FAST_A_KEY_SWITCHING	label, tmp
+	/**
+	 * start.s attempts to set APCTL_EL1.UserKeyEn.  If this H13 CPU doesn't
+	 * actually support this bit, it will be RaZ.
+	 */
+	mrs		\tmp, APCTL_EL1
+	tbnz	\tmp, #APCTL_EL1_UserKeyEn_OFFSET, \label
+.endmacro
+
+/**
+ * IF_PAC_SLOW_A_KEY_SWITCHING
+ *
+ * Branch to a specified label if this H13 model + revision doesn't support fast A-key switching.
+ *
+ *   label - label to branch to
+ *   tmp - scratch register
+ */
+.macro IF_PAC_SLOW_A_KEY_SWITCHING	label, tmp
+	mrs		\tmp, APCTL_EL1
+	tbz		\tmp, #APCTL_EL1_UserKeyEn_OFFSET, \label
+.endmacro
+
+/* END IGNORE CODESTYLE */
+
+#elif defined(HAS_APCTL_EL1_USERKEYEN)
 #define HAS_PAC_FAST_A_KEY_SWITCHING    1
 #define HAS_PAC_SLOW_A_KEY_SWITCHING    0
 
@@ -51,7 +90,7 @@
 .macro IF_PAC_SLOW_A_KEY_SWITCHING      label, tmp
 .endmacro
 
-#else /* !&& !defined(HAS_APCTL_EL1_USERKEYEN) */
+#else /* !defined(APPLEFIRESTORM) && !defined(HAS_APCTL_EL1_USERKEYEN) */
 #define HAS_PAC_FAST_A_KEY_SWITCHING    0
 #define HAS_PAC_SLOW_A_KEY_SWITCHING    1
 
@@ -63,7 +102,7 @@
 .error "This macro should never need to be used on this CPU family."
 .endmacro
 
-#endif /**/
+#endif /* defined(APPLEFIRESTORM) */
 
 /* BEGIN IGNORE CODESTYLE */
 

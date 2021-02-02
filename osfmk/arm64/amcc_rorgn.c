@@ -42,7 +42,6 @@
 #include <arm/pmap.h>
 #include <arm64/tlb.h>
 #include <arm64/amcc_rorgn.h>
-#include <memmap_types.h>
 
 #if HIBERNATION
 #include <arm64/pal_hibernate.h>

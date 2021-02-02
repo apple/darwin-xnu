@@ -305,9 +305,10 @@ extern void vm_shared_region_undo_mappings(
 __attribute__((noinline))
 extern kern_return_t vm_shared_region_map_file(
 	struct vm_shared_region *shared_region,
-	void                    *root_dir,
 	int                     sr_mappings_count,
 	struct _sr_file_mappings *sr_mappings);
+extern void *vm_shared_region_root_dir(
+	struct vm_shared_region *shared_region);
 extern kern_return_t vm_shared_region_sliding_valid(uint32_t slide);
 extern void vm_commpage_init(void);
 extern void vm_commpage_text_init(void);

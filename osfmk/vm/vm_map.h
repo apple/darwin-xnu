@@ -1159,12 +1159,6 @@ extern kern_return_t vm_map_set_cache_attr(
 
 extern int override_nx(vm_map_t map, uint32_t user_tag);
 
-#if PMAP_CS
-extern kern_return_t vm_map_entry_cs_associate(
-	vm_map_t                map,
-	vm_map_entry_t          entry,
-	vm_map_kernel_flags_t   vmk_flags);
-#endif /* PMAP_CS */
 
 extern void vm_map_region_top_walk(
 	vm_map_entry_t entry,

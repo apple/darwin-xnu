@@ -119,45 +119,33 @@ vm_extmod_statistics_data_t host_extmod_statistics;
 kern_return_t
 host_processors(host_priv_t host_priv, processor_array_t * out_array, mach_msg_type_number_t * countp)
 {
-	processor_t processor, *tp;
-	void * addr;
-	unsigned int count, i;
-
 	if (host_priv == HOST_PRIV_NULL) {
 		return KERN_INVALID_ARGUMENT;
 	}
 
 	assert(host_priv == &realhost);
 
-	count = processor_count;
+	unsigned int count = processor_count;
 	assert(count != 0);
 
-	addr = kalloc((vm_size_t)(count * sizeof(mach_port_t)));
-	if (addr == 0) {
+	static_assert(sizeof(mach_port_t) == sizeof(processor_t));
+
+	mach_port_t* ports = kalloc((vm_size_t)(count * sizeof(mach_port_t)));
+	if (!ports) {
 		return KERN_RESOURCE_SHORTAGE;
 	}
 
-	tp = (processor_t *)addr;
-	*tp++ = processor = processor_list;
+	for (unsigned int i = 0; i < count; i++) {
+		processor_t processor = processor_array[i];
+		assert(processor != PROCESSOR_NULL);
 
-	if (count > 1) {
-		simple_lock(&processor_list_lock, LCK_GRP_NULL);
-
-		for (i = 1; i < count; i++) {
-			*tp++ = processor = processor->processor_list;
-		}
-
-		simple_unlock(&processor_list_lock);
+		/* do the conversion that Mig should handle */
+		ipc_port_t processor_port = convert_processor_to_port(processor);
+		ports[i] = processor_port;
 	}
 
 	*countp = count;
-	*out_array = (processor_array_t)addr;
-
-	/* do the conversion that Mig should handle */
-	tp = (processor_t *)addr;
-	for (i = 0; i < count; i++) {
-		((mach_port_t *)tp)[i] = (mach_port_t)convert_processor_to_port(tp[i]);
-	}
+	*out_array = (processor_array_t)ports;
 
 	return KERN_SUCCESS;
 }
@@ -479,7 +467,6 @@ host_statistics(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_ty
 	}
 
 	case HOST_CPU_LOAD_INFO: {
-		processor_t processor;
 		host_cpu_load_info_t cpu_load_info;
 
 		if (*count < HOST_CPU_LOAD_INFO_COUNT) {
@@ -501,7 +488,12 @@ host_statistics(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_ty
 
 		simple_lock(&processor_list_lock, LCK_GRP_NULL);
 
-		for (processor = processor_list; processor != NULL; processor = processor->processor_list) {
+		unsigned int pcount = processor_count;
+
+		for (unsigned int i = 0; i < pcount; i++) {
+			processor_t processor = processor_array[i];
+			assert(processor != PROCESSOR_NULL);
+
 			timer_t idle_state;
 			uint64_t idle_time_snapshot1, idle_time_snapshot2;
 			uint64_t idle_time_tstamp1, idle_time_tstamp2;
@@ -1153,11 +1145,10 @@ host_processor_info(host_t host,
     mach_msg_type_number_t * out_array_count)
 {
 	kern_return_t result;
-	processor_t processor;
 	host_t thost;
 	processor_info_t info;
-	unsigned int icount, tcount;
-	unsigned int pcount, i;
+	unsigned int icount;
+	unsigned int pcount;
 	vm_offset_t addr;
 	vm_size_t size, needed;
 	vm_map_copy_t copy;
@@ -1182,29 +1173,19 @@ host_processor_info(host_t host,
 	}
 
 	info = (processor_info_t)addr;
-	processor = processor_list;
-	tcount = icount;
 
-	result = processor_info(processor, flavor, &thost, info, &tcount);
-	if (result != KERN_SUCCESS) {
-		kmem_free(ipc_kernel_map, addr, size);
-		return result;
-	}
+	for (unsigned int i = 0; i < pcount; i++) {
+		processor_t processor = processor_array[i];
+		assert(processor != PROCESSOR_NULL);
 
-	if (pcount > 1) {
-		for (i = 1; i < pcount; i++) {
-			simple_lock(&processor_list_lock, LCK_GRP_NULL);
-			processor = processor->processor_list;
-			simple_unlock(&processor_list_lock);
+		unsigned int tcount = icount;
 
-			info += icount;
-			tcount = icount;
-			result = processor_info(processor, flavor, &thost, info, &tcount);
-			if (result != KERN_SUCCESS) {
-				kmem_free(ipc_kernel_map, addr, size);
-				return result;
-			}
+		result = processor_info(processor, flavor, &thost, info, &tcount);
+		if (result != KERN_SUCCESS) {
+			kmem_free(ipc_kernel_map, addr, size);
+			return result;
 		}
+		info += icount;
 	}
 
 	if (size != needed) {

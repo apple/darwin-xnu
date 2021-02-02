@@ -373,6 +373,10 @@ struct pmap {
 	unsigned int            tte_index_max;          /* max tte index in translation table entries */
 #endif
 
+	void *                  reserved0;
+	void *                  reserved1;
+	uint64_t                reserved2;
+	uint64_t                reserved3;
 
 	unsigned int            stamp;                  /* creation stamp */
 	_Atomic int32_t         ref_count;              /* pmap reference count */
@@ -387,7 +391,13 @@ struct pmap {
 	char                    pmap_procname[17];
 	bool            pmap_stats_assert;
 #endif /* MACH_ASSERT */
+	bool                    reserved4;
 	bool                    pmap_vm_map_cs_enforced;
+	boolean_t               reserved5;
+	uint64_t                reserved6;
+	uint64_t                reserved7;
+	bool                    reserved8;
+	bool                    reserved9;
 #if DEVELOPMENT || DEBUG
 	bool            footprint_suspended;
 	bool            footprint_was_suspended;
@@ -399,6 +409,8 @@ struct pmap {
 	bool            nested_bounds_set;                      /* The nesting bounds have been set */
 #if HAS_APPLE_PAC
 	bool            disable_jop;
+#else
+	bool            reserved10;
 #endif /* HAS_APPLE_PAC */
 };
 
@@ -446,7 +458,7 @@ extern ppnum_t pmap_find_phys_nofault(pmap_t map, addr64_t va);
 extern void pmap_set_pmap(pmap_t pmap, thread_t thread);
 extern void pmap_collect(pmap_t pmap);
 extern  void pmap_gc(void);
-#if HAS_APPLE_PAC && XNU_MONITOR
+#if HAS_APPLE_PAC
 extern void * pmap_sign_user_ptr(void *value, ptrauth_key key, uint64_t data, uint64_t jop_key);
 extern void * pmap_auth_user_ptr(void *value, ptrauth_key key, uint64_t data, uint64_t jop_key);
 #endif /* HAS_APPLE_PAC && XNU_MONITOR */

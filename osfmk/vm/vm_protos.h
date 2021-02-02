@@ -516,14 +516,6 @@ extern void cs_validate_page(
 	int *validated_p,
 	int *tainted_p,
 	int *nx_p);
-#if PMAP_CS
-extern kern_return_t cs_associate_blob_with_mapping(
-	void *pmap,
-	vm_map_offset_t start,
-	vm_map_size_t size,
-	vm_object_offset_t offset,
-	void *blobs_p);
-#endif /* PMAP_CS */
 
 extern kern_return_t memory_entry_purgeable_control_internal(
 	ipc_port_t      entry_port,

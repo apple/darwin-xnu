@@ -918,7 +918,7 @@ sixlowpan_proto_pre_output(ifnet_t ifp,
 {
 #pragma unused(protocol_family)
 	errno_t result = 0;
-	struct sockaddr_dl sdl;
+	struct sockaddr_dl sdl = {};
 	struct sockaddr_in6 *dest6 =  (struct sockaddr_in6 *)(uintptr_t)(size_t)dest;
 
 	if (!IN6_IS_ADDR_MULTICAST(&dest6->sin6_addr)) {

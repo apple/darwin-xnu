@@ -45,6 +45,11 @@
 #include <ptrauth.h>
 #endif
 
+#if XNU_MONITOR
+#define IN_PPLSTK_BOUNDS(__addr) \
+	(((uintptr_t)(__addr) >= (uintptr_t)pmap_stacks_start) && \
+	((uintptr_t)(__addr) < (uintptr_t)pmap_stacks_end))
+#endif
 
 unsigned int __attribute__((noinline))
 backtrace(uintptr_t *bt, unsigned int max_frames, bool *was_truncated_out)
@@ -84,6 +89,9 @@ backtrace_frame(uintptr_t *bt, unsigned int max_frames, void *start_frame,
 	((uintptr_t)(__addr) < (uintptr_t)top))
 
 	in_valid_stack = IN_STK_BOUNDS(fp);
+#if XNU_MONITOR
+	in_valid_stack |= IN_PPLSTK_BOUNDS(fp);
+#endif /* XNU_MONITOR */
 
 	if (!in_valid_stack) {
 		fp = NULL;
@@ -99,6 +107,9 @@ backtrace_frame(uintptr_t *bt, unsigned int max_frames, void *start_frame,
 		 * have set this up, so bounds check, as well.
 		 */
 		in_valid_stack = IN_STK_BOUNDS(next_fp);
+#if XNU_MONITOR
+		in_valid_stack |= IN_PPLSTK_BOUNDS(next_fp);
+#endif /* XNU_MONITOR */
 
 		if (next_fp == NULL || !in_valid_stack) {
 			break;
@@ -113,7 +124,25 @@ backtrace_frame(uintptr_t *bt, unsigned int max_frames, void *start_frame,
 
 		/* stacks grow down; backtracing should be moving to higher addresses */
 		if (next_fp <= fp) {
+#if XNU_MONITOR
+			bool fp_in_pplstack = IN_PPLSTK_BOUNDS(fp);
+			bool fp_in_kstack = IN_STK_BOUNDS(fp);
+			bool next_fp_in_pplstack = IN_PPLSTK_BOUNDS(fp);
+			bool next_fp_in_kstack = IN_STK_BOUNDS(fp);
+
+			/*
+			 * This check is verbose; it is basically checking whether
+			 * we are switching between the kernel stack and the cpu
+			 * stack.  If so, we ignore the fact that fp has switched
+			 * directions (as it is a symptom of switching stacks).
+			 */
+			if (((fp_in_pplstack) && (next_fp_in_kstack)) ||
+			    ((fp_in_kstack) && (next_fp_in_pplstack))) {
+				break;
+			}
+#else /* XNU_MONITOR */
 			break;
+#endif /* !XNU_MONITOR */
 		}
 		fp = next_fp;
 	}

@@ -1176,6 +1176,7 @@ flow_divert_create_connect_packet(struct flow_divert_pcb *fd_cb, struct sockaddr
 	size_t                  cfil_id_size            = 0;
 	struct inpcb            *inp = sotoinpcb(so);
 	struct ifnet *ifp = NULL;
+	uint32_t flags = 0;
 
 	error = flow_divert_packet_init(fd_cb, FLOW_DIVERT_PKT_CONNECT, &connect_packet);
 	if (error) {
@@ -1268,7 +1269,16 @@ flow_divert_create_connect_packet(struct flow_divert_pcb *fd_cb, struct sockaddr
 	}
 
 	if (so->so_flags1 & SOF1_DATA_IDEMPOTENT) {
-		uint32_t flags = FLOW_DIVERT_TOKEN_FLAG_TFO;
+		flags |= FLOW_DIVERT_TOKEN_FLAG_TFO;
+	}
+
+	if ((inp->inp_flags & INP_BOUND_IF) ||
+	    ((inp->inp_vflag & INP_IPV6) && !IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_laddr)) ||
+	    ((inp->inp_vflag & INP_IPV4) && inp->inp_laddr.s_addr != INADDR_ANY)) {
+		flags |= FLOW_DIVERT_TOKEN_FLAG_BOUND;
+	}
+
+	if (flags != 0) {
 		error = flow_divert_packet_append_tlv(connect_packet, FLOW_DIVERT_TLV_FLAGS, sizeof(flags), &flags);
 		if (error) {
 			goto done;

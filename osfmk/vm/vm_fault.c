@@ -208,10 +208,6 @@ unsigned long vm_cs_revalidates = 0;
 unsigned long vm_cs_query_modified = 0;
 unsigned long vm_cs_validated_dirtied = 0;
 unsigned long vm_cs_bitmap_validated = 0;
-#if PMAP_CS
-uint64_t vm_cs_defer_to_pmap_cs = 0;
-uint64_t vm_cs_defer_to_pmap_cs_not = 0;
-#endif /* PMAP_CS */
 
 void vm_pre_fault(vm_map_offset_t, vm_prot_t);
 
@@ -2550,28 +2546,7 @@ vm_fault_cs_check_violation(
 		/* VM map is locked, so 1 ref will remain on VM object -
 		 * so no harm if vm_page_validate_cs drops the object lock */
 
-#if PMAP_CS
-		if (fault_info->pmap_cs_associated &&
-		    pmap_cs_enforced(pmap) &&
-		    !VMP_CS_VALIDATED(m, fault_page_size, fault_phys_offset) &&
-		    !VMP_CS_TAINTED(m, fault_page_size, fault_phys_offset) &&
-		    !VMP_CS_NX(m, fault_page_size, fault_phys_offset) &&
-		    (prot & VM_PROT_EXECUTE) &&
-		    (caller_prot & VM_PROT_EXECUTE)) {
-			/*
-			 * With pmap_cs, the pmap layer will validate the
-			 * code signature for any executable pmap mapping.
-			 * No need for us to validate this page too:
-			 * in pmap_cs we trust...
-			 */
-			vm_cs_defer_to_pmap_cs++;
-		} else {
-			vm_cs_defer_to_pmap_cs_not++;
-			vm_page_validate_cs(m, fault_page_size, fault_phys_offset);
-		}
-#else /* PMAP_CS */
 		vm_page_validate_cs(m, fault_page_size, fault_phys_offset);
-#endif /* PMAP_CS */
 	}
 
 	/* If the map is switched, and is switch-protected, we must protect
@@ -2647,15 +2622,6 @@ vm_fault_cs_check_violation(
 		*cs_violation = TRUE;
 	} else if (!VMP_CS_VALIDATED(m, fault_page_size, fault_phys_offset) &&
 	    (prot & VM_PROT_EXECUTE)
-#if PMAP_CS
-	    /*
-	     * Executable pages will be validated by pmap_cs;
-	     * in pmap_cs we trust...
-	     * If pmap_cs is turned off, this is a code-signing
-	     * violation.
-	     */
-	    && !(pmap_cs_enforced(pmap))
-#endif /* PMAP_CS */
 	    ) {
 		*cs_violation = TRUE;
 	} else {
@@ -3330,23 +3296,6 @@ vm_fault_attempt_pmap_enter(
 	    wired,
 	    pmap_options,
 	    kr);
-#if PMAP_CS
-	/*
-	 * Retry without execute permission if we encountered a codesigning
-	 * failure on a non-execute fault.  This allows applications which
-	 * don't actually need to execute code to still map it for read access.
-	 */
-	if ((kr == KERN_CODESIGN_ERROR) && pmap_cs_enforced(pmap) &&
-	    (*prot & VM_PROT_EXECUTE) && !(caller_prot & VM_PROT_EXECUTE)) {
-		*prot &= ~VM_PROT_EXECUTE;
-		PMAP_ENTER_OPTIONS(pmap, vaddr,
-		    fault_phys_offset,
-		    m, *prot, fault_type, 0,
-		    wired,
-		    pmap_options,
-		    kr);
-	}
-#endif
 	return kr;
 }
 
@@ -3538,11 +3487,6 @@ vm_fault_enter_prepare(
 #if KASAN
 	if (pmap == kernel_pmap) {
 		kasan_notify_address(vaddr, PAGE_SIZE);
-	}
-#endif
-#if PMAP_CS
-	if (pmap_cs_exempt(pmap)) {
-		cs_bypass = TRUE;
 	}
 #endif
 

@@ -92,6 +92,10 @@ struct machine_thread {
 	unsigned int              uptw_ttb;
 	unsigned int              kptw_ttb;
 	unsigned int              asid;
+#else
+	unsigned int              reserved0;
+	unsigned int              reserved1;
+	unsigned int              reserved2;
 #endif
 
 #if __arm64__
@@ -99,6 +103,8 @@ struct machine_thread {
 	arm_saved_state_t *       XNU_PTRAUTH_SIGNED_PTR("machine_thread.upcb") upcb;   /* pointer to user GPR state */
 	arm_neon_saved_state_t *  uNeon;                   /* pointer to user VFP state */
 	arm_saved_state_t *       kpcb;                    /* pointer to kernel GPR state */
+	void *                    reserved3;
+	long                      reserved4;
 	uint64_t                  recover_far;
 #elif __arm__
 	struct arm_saved_state    PcbData;
@@ -125,6 +131,7 @@ struct machine_thread {
 #if __arm64__
 	uint64_t                  energy_estimate_nj;
 #endif
+	uint64_t                  reserved5;
 
 #if INTERRUPT_MASKED_DEBUG
 	uint64_t                  intmask_timestamp;          /* timestamp of when interrupts were manually masked */
@@ -139,16 +146,22 @@ struct machine_thread {
 	volatile uintptr_t                 expected_fault_addr;
 #endif
 
+	uint64_t                  reserved6;
 	vm_offset_t               pcpu_data_base;
 	struct cpu_data *         CpuDatap;               /* current per cpu data */
 	unsigned int              preemption_count;       /* preemption count */
 #if __arm64__
 	uint16_t                  exception_trace_code;
 #endif
+	uint8_t                   reserved7;
 #if defined(HAS_APPLE_PAC)
 	uint8_t                   disable_user_jop;
 	uint64_t                  rop_pid;
 	uint64_t                  jop_pid;
+#else
+	uint8_t                   reserved8;
+	uint64_t                  reserved9;
+	uint64_t                  reserved10;
 #endif
 };
 #endif

@@ -392,8 +392,7 @@ extern void             thread_timer_expire(
 	void                    *thread,
 	void                    *p1);
 
-extern boolean_t        thread_eager_preemption(
-	thread_t thread);
+extern bool thread_is_eager_preempt(thread_t thread);
 
 extern boolean_t sched_generic_direct_dispatch_to_idle_processors;
 

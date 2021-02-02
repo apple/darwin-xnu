@@ -389,6 +389,9 @@ struct  proc {
 	int32_t           p_memstat_requestedpriority;  /* active priority */
 	int32_t           p_memstat_assertionpriority;  /* assertion driven priority */
 	uint32_t          p_memstat_dirty;              /* dirty state */
+#if CONFIG_FREEZE
+	uint8_t           p_memstat_freeze_skip_reason; /* memorystaus_freeze_skipped_reason_t. Protected by the freezer mutex. */
+#endif
 	uint64_t          p_memstat_userdata;           /* user state */
 	uint64_t          p_memstat_idledeadline;       /* time at which process became clean */
 	uint64_t          p_memstat_idle_start;         /* abstime process transitions into the idle band */

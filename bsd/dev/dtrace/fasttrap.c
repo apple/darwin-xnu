@@ -2415,6 +2415,48 @@ fasttrap_validatestr(char const* str, size_t maxlen) {
 	return utf8_validatestr((unsigned const char*) str, len);
 }
 
+/*
+ * Checks that provided credentials are allowed to debug target process.
+ */
+static int
+fasttrap_check_cred_priv(cred_t *cr, proc_t *p)
+{
+	int err = 0;
+
+	/* Only root can use DTrace. */
+	if (!kauth_cred_issuser(cr)) {
+		err = EPERM;
+		goto out;
+	}
+
+	/* Process is marked as no attach. */
+	if (ISSET(p->p_lflag, P_LNOATTACH)) {
+		err = EBUSY;
+		goto out;
+	}
+
+#if CONFIG_MACF
+	/* Check with MAC framework when enabled. */
+	struct proc_ident cur_ident = proc_ident(current_proc());
+	struct proc_ident p_ident = proc_ident(p);
+
+	/* Do not hold ref to proc here to avoid deadlock. */
+	proc_rele(p);
+	err = mac_proc_check_debug(&cur_ident, cr, &p_ident);
+
+	if (proc_find_ident(&p_ident) == PROC_NULL) {
+		err = ESRCH;
+		goto out_no_proc;
+	}
+#endif /* CONFIG_MACF */
+
+out:
+	proc_rele(p);
+
+out_no_proc:
+	return err;
+}
+
 /*ARGSUSED*/
 static int
 fasttrap_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *rv)
@@ -2486,15 +2528,11 @@ fasttrap_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *
 				ret = ESRCH;
 				goto err;
 			}
-			// proc_lock(p);
-			// FIXME! How is this done on OS X?
-			// if ((ret = priv_proc_cred_perm(cr, p, NULL,
-			//     VREAD | VWRITE)) != 0) {
-			// 	mutex_exit(&p->p_lock);
-			// 	return (ret);
-			// }
-			// proc_unlock(p);
-			proc_rele(p);
+
+			ret = fasttrap_check_cred_priv(cr, p);
+			if (ret != 0) {
+				goto err;
+			}
 		}
 
 		ret = fasttrap_add_probe(probe);
@@ -2508,7 +2546,7 @@ err:
 		fasttrap_instr_query_t instr;
 		fasttrap_tracepoint_t *tp;
 		uint_t index;
-		// int ret;
+		int ret;
 
 		if (copyin(arg, &instr, sizeof (instr)) != 0)
 			return (EFAULT);
@@ -2526,15 +2564,11 @@ err:
 					proc_rele(p);
 				return (ESRCH);
 			}
-			//proc_lock(p);
-			// FIXME! How is this done on OS X?
-			// if ((ret = priv_proc_cred_perm(cr, p, NULL,
-			//     VREAD)) != 0) {
-			// 	mutex_exit(&p->p_lock);
-			// 	return (ret);
-			// }
-			// proc_unlock(p);
-			proc_rele(p);
+
+			ret = fasttrap_check_cred_priv(cr, p);
+			if (ret != 0) {
+				return (ret);
+			}
 		}
 
 		index = FASTTRAP_TPOINTS_INDEX(instr.ftiq_pid, instr.ftiq_pc);

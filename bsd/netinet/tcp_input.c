@@ -579,6 +579,21 @@ tcp_reass(struct tcpcb *tp, struct tcphdr *th, int *tlenp, struct mbuf *m,
 	}
 #endif /* TRAFFIC_MGT */
 
+	if (th->th_seq != tp->rcv_nxt) {
+		struct mbuf *tmp = m;
+		while (tmp != NULL) {
+			if (mbuf_class_under_pressure(tmp)) {
+				m_freem(m);
+				tcp_reass_overflows++;
+				tcpstat.tcps_rcvmemdrop++;
+				*tlenp = 0;
+				return 0;
+			}
+
+			tmp = tmp->m_next;
+		}
+	}
+
 	/*
 	 * Limit the number of segments in the reassembly queue to prevent
 	 * holding on to too many segments (and thus running out of mbufs).

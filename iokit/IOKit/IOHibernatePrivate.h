@@ -33,7 +33,6 @@
 
 #if defined(__arm64__)
 
-#define HIBERNATE_HMAC_IMAGE 1
 #define HIBERNATE_HAVE_MACHINE_HEADER 1
 
 // enable the hibernation exception handler on DEBUG and DEVELOPMENT kernels

@@ -30,7 +30,6 @@
 #include <arm/proc_reg.h>
 #include <mach_kdp.h>
 #include "assym.s"
-#include "caches_macros.s"
 
 	.text
 	.align 12
@@ -282,34 +281,31 @@ doneveqp:
 
 	// clean the dcache
 	mov		r11, #0
-	GET_CACHE_CONFIG r11, r2, r3, r4
-	mov		r11, #0
 cleanflushway:
 cleanflushline:		
 	mcr		p15, 0, r11, c7, c14, 2				 // cleanflush dcache line by way/set
-	add		r11, r11, r2			 			 // increment set index
-	tst		r11, r3								 // look for overflow
+	add		r11, r11, #1 << MMU_I7SET			 // increment set index
+	tst		r11, #1 << (MMU_NSET + MMU_I7SET)	 // look for overflow
 	beq		cleanflushline
-	bic		r11, r11, r3 						 // clear set overflow
-	adds	r11, r11, r4						 // increment way
+	bic		r11, r11, #1 << (MMU_NSET + MMU_I7SET) // clear set overflow
+	adds	r11, r11, #1 << MMU_I7WAY			 // increment way
 	bcc		cleanflushway				 		 // loop
-	HAS_L2_CACHE r11
-	cmp		r11, #0
-	beq		invall2skipl2dcache
+
+#if	__ARM_L2CACHE__
 	// Invalidate L2 cache
-	mov		r11, #1
-	GET_CACHE_CONFIG r11, r2, r3, r4
 	mov		r11, #2
 invall2flushway:
 invall2flushline:		
 	mcr		p15, 0, r11, c7, c14, 2				 // Invalidate dcache line by way/set
-	add		r11, r11, r2						 // increment set index
-	tst		r11, r3								 // look for overflow
+	add		r11, r11, #1 << L2_I7SET			 // increment set index
+	tst		r11, #1 << (L2_NSET + L2_I7SET)		 // look for overflow
 	beq		invall2flushline
-	bic		r11, r11, r3 						 // clear set overflow
-	adds	r11, r11, r4						 // increment way
+	bic		r11, r11, #1 << (L2_NSET + L2_I7SET) // clear set overflow
+	adds	r11, r11, #1 << L2_I7WAY			 // increment way
 	bcc		invall2flushway				 		 // loop
-invall2skipl2dcache:
+
+#endif
+
 	mov		r11, #0
 	mcr		p15, 0, r11, c13, c0, 3				// Write TPIDRURO
 	LOAD_ADDR(sp, intstack_top)					// Get interrupt stack top

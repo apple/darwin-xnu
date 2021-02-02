@@ -29,12 +29,12 @@ cc_aligned_struct(16) ccsiv_ctx;
 struct ccmode_siv {
     size_t size;        /* first argument to ccsiv_ctx_decl(). */
     size_t block_size;
-    int (*init)(const struct ccmode_siv *siv, ccsiv_ctx *ctx,
+    int (*CC_SPTR(ccmode_siv, init))(const struct ccmode_siv *siv, ccsiv_ctx *ctx,
                  size_t key_len, const uint8_t *key);
-    int (*set_nonce)(ccsiv_ctx *ctx,  size_t nbytes, const uint8_t *in);  // could just be ccm with NULL out
-    int (*auth)(ccsiv_ctx *ctx,  size_t nbytes, const uint8_t *in);  // could just be ccm with NULL out
-    int (*crypt)(ccsiv_ctx *ctx, size_t nbytes, const uint8_t *in, uint8_t *out);
-    int (*reset)(ccsiv_ctx *ctx);
+    int (*CC_SPTR(ccmode_siv, set_nonce))(ccsiv_ctx *ctx,  size_t nbytes, const uint8_t *in);  // could just be ccm with NULL out
+    int (*CC_SPTR(ccmode_siv, auth))(ccsiv_ctx *ctx,  size_t nbytes, const uint8_t *in);  // could just be ccm with NULL out
+    int (*CC_SPTR(ccmode_siv, crypt))(ccsiv_ctx *ctx, size_t nbytes, const uint8_t *in, uint8_t *out);
+    int (*CC_SPTR(ccmode_siv, reset))(ccsiv_ctx *ctx);
     const struct ccmode_cbc *cbc;
     const struct ccmode_ctr *ctr;
 };

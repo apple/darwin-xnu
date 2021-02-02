@@ -1865,6 +1865,7 @@ ip_fragment(struct mbuf *m, struct ifnet *ifp, uint32_t mtu, int sw_csum)
 
 		M_COPY_CLASSIFIER(m, m0);
 		M_COPY_PFTAG(m, m0);
+		M_COPY_NECPTAG(m, m0);
 
 #if BYTE_ORDER != BIG_ENDIAN
 		HTONS(mhip->ip_off);

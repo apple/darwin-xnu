@@ -227,9 +227,20 @@ fg_free(struct fileglob *fg)
 
 OS_ALWAYS_INLINE
 void
-fg_ref(struct fileglob *fg)
+fg_ref(proc_t p, struct fileglob *fg)
 {
+#if DEBUG || DEVELOPMENT
+	proc_fdlock_assert(p, LCK_MTX_ASSERT_OWNED);
+#else
+	(void)p;
+#endif
 	os_ref_retain_raw(&fg->fg_count, &f_refgrp);
+}
+
+void
+fg_drop_live(struct fileglob *fg)
+{
+	os_ref_release_live_raw(&fg->fg_count, &f_refgrp);
 }
 
 int
@@ -3256,7 +3267,7 @@ finishdup(proc_t p,
 		return ENOMEM;
 	}
 
-	fg_ref(ofp->fp_glob);
+	fg_ref(p, ofp->fp_glob);
 	nfp->fp_glob = ofp->fp_glob;
 
 #if DIAGNOSTIC
@@ -4919,7 +4930,7 @@ fdcopy(proc_t p, vnode_t uth_cdir)
 					fp->fp_flags |=
 					    (ofp->fp_flags & ~FP_TYPEMASK);
 					fp->fp_glob = ofp->fp_glob;
-					fg_ref(fp->fp_glob);
+					fg_ref(p, fp->fp_glob);
 					*fpp = fp;
 				}
 			} else {
@@ -5284,17 +5295,18 @@ sys_fileport_makeport(proc_t p, struct fileport_makeport_args *uap,
 		goto out_unlock;
 	}
 
+	/* Dropped when port is deallocated */
+	fg_ref(p, fg);
+
 	proc_fdunlock(p);
 
 	/* Allocate and initialize a port */
 	fileport = fileport_alloc(fg);
 	if (fileport == IPC_PORT_NULL) {
+		fg_drop_live(fg);
 		err = EAGAIN;
 		goto out;
 	}
-
-	/* Dropped when port is deallocated */
-	fg_ref(fg);
 
 	/* Add an entry.  Deallocates port on failure. */
 	name = ipc_port_copyout_send(fileport, get_task_ipcspace(p->task));
@@ -5382,7 +5394,7 @@ fileport_makefd(proc_t p, ipc_port_t port, int uf_flags, int *retval)
 	}
 
 	fp->fp_glob = fg;
-	fg_ref(fg);
+	fg_ref(p, fg);
 
 	procfdtbl_releasefd(p, fd, fp);
 	proc_fdunlock(p);
@@ -5525,7 +5537,7 @@ dupfdopen(struct filedesc *fdp, int indx, int dfd, int flags, int error)
 		if (fp->fp_glob) {
 			fg_free(fp->fp_glob);
 		}
-		fg_ref(wfp->fp_glob);
+		fg_ref(p, wfp->fp_glob);
 		fp->fp_glob = wfp->fp_glob;
 
 		fdp->fd_ofileflags[indx] = fdp->fd_ofileflags[dfd] |

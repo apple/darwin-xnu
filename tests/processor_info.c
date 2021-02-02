@@ -102,3 +102,37 @@ T_DECL(processor_cpu_stat64,
 	free(poststats);
 #endif /* __arm64__ */
 }
+
+
+T_DECL(processor_cpu_info_order,
+    "ensure host_processor_info iterates CPU in CPU ID order")
+{
+	host_t host = mach_host_self();
+	host_t priv_port = MACH_PORT_NULL;
+
+	kern_return_t kr = host_get_host_priv_port(host, &priv_port);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "host_get_host_priv_port");
+	T_QUIET; T_ASSERT_NE(priv_port, MACH_PORT_NULL, "valid host priv port");
+
+	processor_info_array_t  info_array = NULL;
+	mach_msg_type_number_t  info_count = 0;
+	natural_t               processor_count = 0;
+
+	kr = host_processor_info(mach_host_self(), PROCESSOR_BASIC_INFO, &processor_count,
+	    &info_array, &info_count);
+
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "host_processor_info(PROCESSOR_BASIC_INFO)");
+	T_QUIET; T_ASSERT_NOTNULL(info_array, "valid processor port array");
+	T_QUIET; T_ASSERT_GT(info_count, (mach_msg_type_number_t)0, "non-zero array");
+	T_QUIET; T_ASSERT_GT(processor_count, (natural_t)0, "non-zero processor_count");
+
+	processor_basic_info_t basic_info_array = (processor_basic_info_t)info_array;
+
+	for (natural_t i = 0; i < processor_count; i++) {
+		struct processor_basic_info* processor_info = &basic_info_array[i];
+
+		natural_t slot_num = (natural_t)processor_info->slot_num;
+
+		T_ASSERT_EQ(slot_num, i, "CPU ID must equal array index");
+	}
+}

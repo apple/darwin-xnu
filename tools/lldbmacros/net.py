@@ -1671,7 +1671,12 @@ def GetInPcb(pcb, proto):
     out_string += "\n\t"
     so = pcb.inp_socket
     if (so != 0):
-        out_string += "so=" + str(so) + " s=" + str(int(so.so_snd.sb_cc)) + " r=" + str(int(so.so_rcv.sb_cc)) + " usecnt=" + str(int(so.so_usecount)) + ", "
+        out_string += "so=" + str(so) + " s=" + str(int(so.so_snd.sb_cc)) + " r=" + str(int(so.so_rcv.sb_cc))
+        if proto == IPPROTO_TCP :
+            tcpcb = cast(pcb.inp_ppcb, 'tcpcb *')
+            out_string += " reass=" + str(int(tcpcb.t_reassqlen))
+
+        out_string += " usecnt=" + str(int(so.so_usecount)) + ", "
 
     if (pcb.inp_state == 0 or pcb.inp_state == INPCB_STATE_INUSE):
         out_string += "inuse"
@@ -1707,7 +1712,11 @@ def CalcMbufInSB(so, snd_cc, snd_buf, rcv_cc, rcv_buf, snd_record_cnt, rcv_recor
     CalcMbufInList(mpkt, rcv_record_cnt, rcv_buf, rcv_mbuf_cnt, rcv_mbuf_cluster_cnt)
 
 def GetPcbInfo(pcbi, proto):
-    tcp_reassqlen = 0
+    tcp_reassqlen = [0]
+    tcp_reassq_bytes = 0
+    mbuf_reassq_cnt = [0]
+    mbuf_reassq_bytes = [0] * (Mbuf_Type.MT_LAST + 1)
+    mbuf_reassq_cluster = [0]
     out_string = ""
     snd_mbuf_cnt = [0]
     snd_mbuf_cluster_cnt = [0]
@@ -1754,7 +1763,14 @@ def GetPcbInfo(pcbi, proto):
                     CalcMbufInSB(so, snd_cc, snd_buf, rcv_cc, rcv_buf, snd_record_cnt, rcv_record_cnt, snd_mbuf_cnt, rcv_mbuf_cnt, snd_mbuf_cluster_cnt, rcv_mbuf_cluster_cnt)
                 if proto == IPPROTO_TCP and pcb.inp_ppcb:
                     tcpcb = cast(pcb.inp_ppcb, 'tcpcb *')
-                    tcp_reassqlen += tcpcb.t_reassqlen
+                    reass_entry = cast(tcpcb.t_segq.lh_first, 'tseg_qent *')
+                    curr_reass = 0
+                    while reass_entry != 0:
+                        CalcMbufInList(reass_entry.tqe_m, tcp_reassqlen, mbuf_reassq_bytes, mbuf_reassq_cnt, mbuf_reassq_cluster)
+                        tcp_reassq_bytes += reass_entry.tqe_len
+                        curr_reass += reass_entry.tqe_len
+
+                        reass_entry = reass_entry.tqe_q.le_next
 
                 pcb = cast(pcb.inp_hash.le_next, 'inpcb *')
             i += 1
@@ -1770,7 +1786,11 @@ def GetPcbInfo(pcbi, proto):
             out_string += "total snd_buf bytes of type " + Mbuf_Type.reverse_mapping[x] + " : " + str(int(snd_buf[x])) + " total recv_buf bytes of type " + Mbuf_Type.reverse_mapping[x] + " : " + str(int(rcv_buf[x])) + "\n"
     out_string += "port hash base is " + hex(pcbi.ipi_porthashbase) + "\n"
     if proto == IPPROTO_TCP:
-        out_string += "TCP reassembly queue length: " + str(tcp_reassqlen) + "\n"
+        out_string += "TCP reassembly queue length: " + str(tcp_reassqlen[0]) + " TCP-payload bytes: " + str(tcp_reassq_bytes) + "\n"
+
+        for x in range(Mbuf_Type.MT_LAST):
+            if mbuf_reassq_bytes[x] != 0:
+                out_string += "total reassq bytes of type " + Mbuf_Type.reverse_mapping[x] + " : " + str(mbuf_reassq_bytes[x]) + "\n"
 
     i = 0
     hashbase = pcbi.ipi_porthashbase

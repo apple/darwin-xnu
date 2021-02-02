@@ -50,10 +50,6 @@
 #include <arm/cpu_data_internal.h>
 #include <machine/pal_hibernate.h>
 
-#if HIBERNATE_HMAC_IMAGE
-#include <arm64/hibernate_ppl_hmac.h>
-#include <arm64/ppl/ppl_hib.h>
-#endif /* HIBERNATE_HMAC_IMAGE */
 
 extern void
 qsort(void *a, size_t n, size_t es, int (*cmp)(const void *, const void *));
@@ -98,39 +94,9 @@ hibernate_page_list_allocate(boolean_t log)
 	hibernate_page_list_t * list;
 	hibernate_bitmap_t *    bitmap;
 
-#if HIBERNATE_HMAC_IMAGE
-	// Determine if any PPL-owned I/O ranges need to be hibernated, and if so,
-	// allocate bitmaps to represent those pages.
-	const ppl_hib_io_range *io_ranges = NULL;
-	uint16_t                num_io_ranges = 0;
-	hibernate_bitmap_t *    dram_ranges = NULL;
-	uint32_t                num_banks = 1;
-
-	ppl_hmac_get_io_ranges(&io_ranges, &num_io_ranges);
-
-	// Allocate a single DRAM range to cover kernel-managed memory and one range
-	// per PPL-owned I/O range that needs to be hibernated.
-	if (io_ranges != NULL && num_io_ranges > 0) {
-		num_banks += num_io_ranges;
-	}
-
-	dram_ranges = kheap_alloc(KHEAP_TEMP,
-	    num_banks * sizeof(hibernate_bitmap_t), Z_WAITOK);
-	if (!dram_ranges) {
-		return NULL;
-	}
-
-	// The 0th dram range is used to represent kernel-managed memory, so skip it
-	// when adding I/O ranges.
-	for (unsigned int i = 1; i < num_banks; ++i) {
-		dram_ranges[i].first_page = io_ranges[i - 1].first_page;
-		dram_ranges[i].last_page = (io_ranges[i - 1].first_page + io_ranges[i - 1].page_count) - 1;
-	}
-#else
 	// Allocate a single DRAM range to cover the kernel-managed memory.
 	hibernate_bitmap_t      dram_ranges[1];
 	uint32_t                num_banks = sizeof(dram_ranges) / sizeof(dram_ranges[0]);
-#endif /* HIBERNATE_HMAC_IMAGE */
 
 	// All of kernel-managed memory can be described by one DRAM range
 	set_dram_range(&dram_ranges[0], gPhysBase, gPhysSize);
@@ -176,10 +142,6 @@ hibernate_page_list_allocate(boolean_t log)
 	}
 
 out:
-#if HIBERNATE_HMAC_IMAGE
-	kheap_free(KHEAP_TEMP, dram_ranges,
-	    num_banks * sizeof(hibernate_bitmap_t));
-#endif /* HIBERNATE_HMAC_IMAGE */
 
 	return list;
 }
@@ -294,9 +256,7 @@ hibernate_vm_locks_are_safe(void)
 void
 pal_hib_init(void)
 {
-#if HIBERNATE_HMAC_IMAGE
-	gHibernateGlobals.hmacRegBase = ppl_hmac_get_reg_base();
-#endif /* HIBERNATE_HMAC_IMAGE */
+	gHibernateGlobals.kernelSlide = gVirtBase - gPhysBase;
 }
 
 void

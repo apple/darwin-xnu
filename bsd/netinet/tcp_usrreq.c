@@ -371,7 +371,7 @@ tcp_usr_listen(struct socket *so, struct proc *p)
 	struct inpcb *inp = sotoinpcb(so);
 	struct tcpcb *tp;
 
-	COMMON_START();
+	COMMON_START_ALLOW_FLOW_DIVERT(true);
 	if (inp->inp_lport == 0) {
 		error = in_pcbbind(inp, NULL, p);
 	}
@@ -389,7 +389,7 @@ tcp6_usr_listen(struct socket *so, struct proc *p)
 	struct inpcb *inp = sotoinpcb(so);
 	struct tcpcb *tp;
 
-	COMMON_START();
+	COMMON_START_ALLOW_FLOW_DIVERT(true);
 	if (inp->inp_lport == 0) {
 		inp->inp_vflag &= ~INP_IPV4;
 		if ((inp->inp_flags & IN6P_IPV6_V6ONLY) == 0) {

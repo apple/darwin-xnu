@@ -1618,6 +1618,38 @@ cfil_socket_safe_lock(struct inpcb *inp)
 	return false;
 }
 
+/*
+ * cfil_socket_safe_lock_rip -
+ * This routine attempts to lock the rip socket safely.
+ * The passed in ripcbinfo is assumed to be locked and must be unlocked (regardless
+ * of success/failure) before calling socket_unlock().  This is to avoid double
+ * locking since rip_unlock() will lock ripcbinfo if it needs to dispose inpcb when
+ * so_usecount is 0.
+ */
+static bool
+cfil_socket_safe_lock_rip(struct inpcb *inp, struct inpcbinfo *pcbinfo)
+{
+	struct socket *so = NULL;
+
+	VERIFY(pcbinfo != NULL);
+
+	if (in_pcb_checkstate(inp, WNT_ACQUIRE, 0) != WNT_STOPUSING) {
+		so = inp->inp_socket;
+		socket_lock(so, 1);
+		if (in_pcb_checkstate(inp, WNT_RELEASE, 1) != WNT_STOPUSING) {
+			lck_rw_done(pcbinfo->ipi_lock);
+			return true;
+		}
+	}
+
+	lck_rw_done(pcbinfo->ipi_lock);
+
+	if (so) {
+		socket_unlock(so, 1);
+	}
+	return false;
+}
+
 static struct socket *
 cfil_socket_from_sock_id(cfil_sock_id_t cfil_sock_id, bool udp_only)
 {
@@ -1670,6 +1702,9 @@ find_udp:
 		}
 	}
 	lck_rw_done(pcbinfo->ipi_lock);
+	if (so != NULL) {
+		goto done;
+	}
 
 	pcbinfo = &ripcbinfo;
 	lck_rw_lock_shared(pcbinfo->ipi_lock);
@@ -1678,10 +1713,11 @@ find_udp:
 		    inp->inp_socket != NULL &&
 		    inp->inp_socket->so_cfil_db != NULL &&
 		    (inp->inp_socket->so_gencnt & 0x0ffffffff) == gencnt) {
-			if (cfil_socket_safe_lock(inp)) {
+			if (cfil_socket_safe_lock_rip(inp, pcbinfo)) {
 				so = inp->inp_socket;
 			}
-			break;
+			/* pcbinfo is already unlocked, we are done. */
+			goto done;
 		}
 	}
 	lck_rw_done(pcbinfo->ipi_lock);
@@ -2836,6 +2872,7 @@ cfil_sock_attach(struct socket *so, struct sockaddr *local, struct sockaddr *rem
 	if (so->so_cfil != NULL) {
 		OSIncrementAtomic(&cfil_stats.cfs_sock_attach_already);
 		CFIL_LOG(LOG_ERR, "already attached");
+		goto done;
 	} else {
 		cfil_info_alloc(so, NULL);
 		if (so->so_cfil == NULL) {
@@ -4738,7 +4775,9 @@ cfil_update_entry_offsets(struct socket *so, struct cfil_info *cfil_info, int ou
 		}
 
 		entrybuf->cfe_ctl_q.q_start += datalen;
-		entrybuf->cfe_pass_offset = entrybuf->cfe_ctl_q.q_start;
+		if (entrybuf->cfe_pass_offset < entrybuf->cfe_ctl_q.q_start) {
+			entrybuf->cfe_pass_offset = entrybuf->cfe_ctl_q.q_start;
+		}
 		entrybuf->cfe_peeked = entrybuf->cfe_ctl_q.q_start;
 		if (entrybuf->cfe_peek_offset < entrybuf->cfe_pass_offset) {
 			entrybuf->cfe_peek_offset = entrybuf->cfe_pass_offset;
@@ -4779,6 +4818,11 @@ cfil_data_common(struct socket *so, struct cfil_info *cfil_info, int outgoing, s
 	}
 
 	datalen = cfil_data_length(data, &mbcnt, &mbnum);
+
+	if (datalen == 0) {
+		error = 0;
+		goto done;
+	}
 
 	if (outgoing) {
 		cfi_buf = &cfil_info->cfi_snd;

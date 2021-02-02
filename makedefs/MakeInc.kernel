@@ -1,6 +1,6 @@
 # -*- mode: makefile;-*-
 #
-# Copyright (C) 1999-2016 Apple Inc. All rights reserved.
+# Copyright (C) 1999-2020 Apple Inc. All rights reserved.
 #
 # MakeInc.kernel augments the single-architecture
 # recursive build system with rules specific
@@ -416,3 +416,5 @@ install_alias: $(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(ALIAS_FILE_NAME)
 
 print_exports:
 	$(_v)printenv | sort
+
+# vim: set ft=make:

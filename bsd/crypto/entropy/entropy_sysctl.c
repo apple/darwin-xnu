@@ -27,30 +27,45 @@
  */
 
 #include <sys/sysctl.h>
-#include <crypto/entropy/diag_entropy_sysctl.h>
+#include <kern/zalloc.h>
+#include <kern/percpu.h>
+#include <crypto/entropy/entropy_sysctl.h>
 #include <prng/entropy.h>
+#include <libkern/section_keywords.h>
 
-extern entropy_data_t EntropyData;
+SYSCTL_NODE(_kern, OID_AUTO, entropy, CTLFLAG_RD, 0, NULL);
+SYSCTL_NODE(_kern_entropy, OID_AUTO, health, CTLFLAG_RD, 0, NULL);
+
+SYSCTL_INT(_kern_entropy_health, OID_AUTO, startup_done, CTLFLAG_RD, &entropy_health_startup_done, 0, NULL);
+
+SYSCTL_NODE(_kern_entropy_health, OID_AUTO, repetition_count_test, CTLFLAG_RD, 0, NULL);
+SYSCTL_UINT(_kern_entropy_health_repetition_count_test, OID_AUTO, reset_count, CTLFLAG_RD, &entropy_health_rct_stats.reset_count, 0, NULL);
+SYSCTL_UINT(_kern_entropy_health_repetition_count_test, OID_AUTO, failure_count, CTLFLAG_RD, &entropy_health_rct_stats.failure_count, 0, NULL);
+SYSCTL_UINT(_kern_entropy_health_repetition_count_test, OID_AUTO, max_observation_count, CTLFLAG_RD, &entropy_health_rct_stats.max_observation_count, 0, NULL);
+
+SYSCTL_NODE(_kern_entropy_health, OID_AUTO, adaptive_proportion_test, CTLFLAG_RD, 0, NULL);
+SYSCTL_UINT(_kern_entropy_health_adaptive_proportion_test, OID_AUTO, reset_count, CTLFLAG_RD, &entropy_health_apt_stats.reset_count, 0, NULL);
+SYSCTL_UINT(_kern_entropy_health_adaptive_proportion_test, OID_AUTO, failure_count, CTLFLAG_RD, &entropy_health_apt_stats.failure_count, 0, NULL);
+SYSCTL_UINT(_kern_entropy_health_adaptive_proportion_test, OID_AUTO, max_observation_count, CTLFLAG_RD, &entropy_health_apt_stats.max_observation_count, 0, NULL);
 
 static int
 sysctl_entropy_collect(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
 {
-	if (!req->oldptr || req->oldlen > EntropyData.buffer_size) {
+	if (!req->oldptr || req->oldlen > entropy_analysis_buffer_size) {
 		return EINVAL;
 	}
-	return SYSCTL_OUT(req, EntropyData.buffer, req->oldlen);
+
+	return SYSCTL_OUT(req, entropy_analysis_buffer, req->oldlen);
 }
 
-SYSCTL_NODE(_kern, OID_AUTO, entropy, CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_NOAUTO, 0, NULL);
 // Get current size of entropy buffer in bytes
-SYSCTL_UINT(_kern_entropy, OID_AUTO, entropy_buffer_size, CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_NOAUTO, &EntropyData.buffer_size, 0, NULL);
+SYSCTL_UINT(_kern_entropy, OID_AUTO, entropy_buffer_size, CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_NOAUTO, &entropy_analysis_buffer_size, 0, NULL);
 // Collect contents from entropy buffer
 SYSCTL_PROC(_kern_entropy, OID_AUTO, entropy_collect, CTLTYPE_OPAQUE | CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_NOAUTO, NULL, 0, sysctl_entropy_collect, "-", NULL);
 
 void
-register_entropy_sysctl(void)
+entropy_analysis_register_sysctls(void)
 {
-	sysctl_register_oid(&sysctl__kern_entropy);
 	sysctl_register_oid(&sysctl__kern_entropy_entropy_buffer_size);
 	sysctl_register_oid(&sysctl__kern_entropy_entropy_collect);
 }

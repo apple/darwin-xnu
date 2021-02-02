@@ -54,6 +54,7 @@ _LOG_HOST_LINK = $(call LOG,$1,$(ColorH),$(ColorLF),$(LOG_PFX_LEN))
 LOG_LDFILELIST = $(call LOG,LDFILELIST,$(ColorL),$(ColorLF),$(LOG_PFX_LEN_ADJ))
 LOG_MIG = $(call LOG,MIG,$(ColorM),$(ColorF),$(LOG_PFX_LEN_ADJ))
 LOG_LD = $(call LOG,LD,$(ColorL),$(ColorF),$(LOG_PFX_LEN_ADJ))
+LOG_ALIGN = $(call LOG,--------->,$(Color0),$(Color0),$(LOG_PFX_LEN))
 
 # Compiling/machine-specific operations.
 LOG_CC = $(call _LOG_COMP,CC)
@@ -81,6 +82,7 @@ LOG_ALIAS = $(call _LOG_HOST,ALIAS)
 LOG_STRIP = $(call _LOG_HOST,STRIP)
 LOG_DSYMUTIL = $(call _LOG_HOST,DSYMUTIL)
 LOG_LIBTOOL = $(call _LOG_HOST,LIBTOOL)
+LOG_FILEPREP = $(call _LOG_HOST,FILEPREP)
 
 # Host-side linking operations.
 LOG_GENASSYM = $(call _LOG_HOST_LINK,GENASSYM)

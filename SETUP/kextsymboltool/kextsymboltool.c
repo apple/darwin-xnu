@@ -476,6 +476,7 @@ lookup_arch(const char *archstring)
 		{ "armv7s", 12 /* CPU_TYPE_ARM */, 11 /* CPU_SUBTYPE_ARM_V7S */, NX_LittleEndian, NULL },
 		{ "armv7k", 12 /* CPU_TYPE_ARM */, 12 /* CPU_SUBTYPE_ARM_V7K */, NX_LittleEndian, NULL },
 		{ "arm64", 0x0100000c /* CPU_TYPE_ARM64 */, 0 /* CPU_SUBTYPE_ARM64_ALL */, NX_LittleEndian, NULL },
+		{ "arm64e", 0x0100000c /* CPU_TYPE_ARM64 */, 2 /* CPU_SUBTYPE_ARM64_E */, NX_LittleEndian, NULL },
 	};
 	unsigned long i;
 

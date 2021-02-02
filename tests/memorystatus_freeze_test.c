@@ -39,7 +39,10 @@ T_GLOBAL_META(
 	X(IS_FREEZABLE_NOT_AS_EXPECTED) \
 	X(MEMSTAT_PRIORITY_CHANGE_FAILED) \
 	X(INVALID_ALLOCATE_PAGES_ARGUMENTS) \
-	X(EXIT_CODE_MAX)
+	X(FROZEN_BIT_SET) \
+	X(FROZEN_BIT_NOT_SET) \
+	X(MEMORYSTATUS_CONTROL_ERROR) \
+	X(EXIT_CODE_MAX) \
 
 #define EXIT_CODES_ENUM(VAR) VAR,
 enum exit_codes_num {
@@ -545,7 +548,7 @@ T_HELPER_DECL(frozen_background, "Frozen background process", T_META_ASROOT(true
 
 /* Launches the frozen_background helper as a managed process. */
 static pid_t
-launch_frozen_background_process()
+launch_background_helper(const char* variant)
 {
 	pid_t pid;
 	char **launch_tool_args;
@@ -559,7 +562,7 @@ launch_frozen_background_process()
 	launch_tool_args = (char *[]){
 		testpath,
 		"-n",
-		"frozen_background",
+		variant,
 		NULL
 	};
 	ret = dt_launch_tool(&pid, launch_tool_args, false, NULL, NULL);
@@ -634,7 +637,7 @@ memorystatus_assertion_test_demote_frozen()
 	});
 
 	/* Launch the child process and set the initial properties on it. */
-	child_pid = launch_frozen_background_process();
+	child_pid = launch_background_helper("frozen_background");
 	set_memlimits(child_pid, active_limit_mb, inactive_limit_mb, false, false);
 	set_assertion_priority(child_pid, requestedpriority, 0x0);
 	(void)check_properties(child_pid, requestedpriority, inactive_limit_mb, 0x0, ASSERTION_STATE_IS_SET, "Priority was set");
@@ -811,7 +814,7 @@ get_jetsam_snapshot_entry(memorystatus_jetsam_snapshot_t *snapshot, pid_t pid)
  * If exit_with_child is true, the test will exit when the child exits.
  */
 static void
-test_after_frozen_background_launches(bool exit_with_child, dispatch_block_t test_block)
+test_after_background_helper_launches(bool exit_with_child, const char* variant, dispatch_block_t test_block)
 {
 	dispatch_source_t ds_signal, ds_exit;
 
@@ -821,7 +824,7 @@ test_after_frozen_background_launches(bool exit_with_child, dispatch_block_t tes
 	T_QUIET; T_ASSERT_NOTNULL(ds_signal, "dispatch_source_create");
 	dispatch_source_set_event_handler(ds_signal, test_block);
 	/* Launch the child process. */
-	child_pid = launch_frozen_background_process();
+	child_pid = launch_background_helper(variant);
 	/* Listen for exit. */
 	if (exit_with_child) {
 		ds_exit = dispatch_source_create(DISPATCH_SOURCE_TYPE_PROC, (uintptr_t)child_pid, DISPATCH_PROC_EXIT, dispatch_get_main_queue());
@@ -830,6 +833,9 @@ test_after_frozen_background_launches(bool exit_with_child, dispatch_block_t tes
 			pid_t rc = waitpid(child_pid, &status, 0);
 			T_QUIET; T_ASSERT_EQ(rc, child_pid, "waitpid");
 			code = WEXITSTATUS(status);
+			if (code != 0) {
+				T_LOG("Child exited with error: %s", exit_codes_str[code]);
+			}
 			T_QUIET; T_ASSERT_EQ(code, 0, "Child exited cleanly");
 			T_END;
 		});
@@ -843,7 +849,7 @@ test_after_frozen_background_launches(bool exit_with_child, dispatch_block_t tes
 T_DECL(get_frozen_procs, "List processes in the freezer") {
 	skip_if_freezer_is_disabled();
 
-	test_after_frozen_background_launches(true, ^{
+	test_after_background_helper_launches(true, "frozen_background", ^{
 		proc_name_t name;
 		/* Place the child in the idle band so that it gets elevated like a typical app. */
 		move_to_idle_band(child_pid);
@@ -864,7 +870,7 @@ T_DECL(frozen_to_swap_accounting, "jetsam snapshot has frozen_to_swap accounting
 
 	skip_if_freezer_is_disabled();
 
-	test_after_frozen_background_launches(true, ^{
+	test_after_background_helper_launches(true, "frozen_background", ^{
 		memorystatus_jetsam_snapshot_t *snapshot = NULL;
 		memorystatus_jetsam_snapshot_entry_t *child_entry = NULL;
 		/* Place the child in the idle band so that it gets elevated like a typical app. */
@@ -897,7 +903,7 @@ T_DECL(freezer_snapshot, "App kills are recorded in the freezer snapshot") {
 	/* Take ownership of the snapshot to ensure we don't race with another process trying to consume them. */
 	take_jetsam_snapshot_ownership();
 
-	test_after_frozen_background_launches(false, ^{
+	test_after_background_helper_launches(false, "frozen_background", ^{
 		int ret;
 		memorystatus_jetsam_snapshot_t *snapshot = NULL;
 		memorystatus_jetsam_snapshot_entry_t *child_entry = NULL;
@@ -920,7 +926,7 @@ T_DECL(freezer_snapshot_consume, "Freezer snapshot is consumed on read") {
 	/* Take ownership of the snapshot to ensure we don't race with another process trying to consume them. */
 	take_jetsam_snapshot_ownership();
 
-	test_after_frozen_background_launches(false, ^{
+	test_after_background_helper_launches(false, "frozen_background", ^{
 		int ret;
 		memorystatus_jetsam_snapshot_t *snapshot = NULL;
 		memorystatus_jetsam_snapshot_entry_t *child_entry = NULL;
@@ -949,7 +955,7 @@ T_DECL(freezer_snapshot_frozen_state, "Frozen state is recorded in freezer snaps
 	/* Take ownership of the snapshot to ensure we don't race with another process trying to consume them. */
 	take_jetsam_snapshot_ownership();
 
-	test_after_frozen_background_launches(false, ^{
+	test_after_background_helper_launches(false, "frozen_background", ^{
 		int ret;
 		memorystatus_jetsam_snapshot_t *snapshot = NULL;
 		memorystatus_jetsam_snapshot_entry_t *child_entry = NULL;
@@ -976,7 +982,7 @@ T_DECL(freezer_snapshot_thaw_state, "Thaw count is recorded in freezer snapshot"
 	/* Take ownership of the snapshot to ensure we don't race with another process trying to consume them. */
 	take_jetsam_snapshot_ownership();
 
-	test_after_frozen_background_launches(false, ^{
+	test_after_background_helper_launches(false, "frozen_background", ^{
 		int ret;
 		memorystatus_jetsam_snapshot_t *snapshot = NULL;
 		memorystatus_jetsam_snapshot_entry_t *child_entry = NULL;
@@ -1001,5 +1007,71 @@ T_DECL(freezer_snapshot_thaw_state, "Thaw count is recorded in freezer snapshot"
 
 		free(snapshot);
 		T_END;
+	});
+}
+
+T_HELPER_DECL(check_frozen, "Check frozen state", T_META_ASROOT(true)) {
+	int kern_ret;
+	dispatch_source_t ds_signal;
+	__block int is_frozen;
+	/* Set the process to freezable */
+	kern_ret = memorystatus_control(MEMORYSTATUS_CMD_SET_PROCESS_IS_FREEZABLE, getpid(), 1, NULL, 0);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(kern_ret, "set process is freezable");
+	/* Signal to our parent that we can be frozen */
+	if (kill(getppid(), SIGUSR1) != 0) {
+		T_LOG("Unable to signal to parent process!");
+		exit(SIGNAL_TO_PARENT_FAILED);
+	}
+
+	/* We should not be frozen yet. */
+	is_frozen = memorystatus_control(MEMORYSTATUS_CMD_GET_PROCESS_IS_FROZEN, getpid(), 0, NULL, 0);
+	if (is_frozen == -1) {
+		T_LOG("memorystatus_control error: %s", strerror(errno));
+		exit(MEMORYSTATUS_CONTROL_ERROR);
+	}
+	if (is_frozen) {
+		exit(FROZEN_BIT_SET);
+	}
+
+
+	sig_t sig_ret = signal(SIGUSR1, SIG_IGN);
+	T_QUIET; T_WITH_ERRNO; T_ASSERT_NE(sig_ret, SIG_ERR, "signal(SIGUSR1, SIG_IGN)");
+	ds_signal = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGUSR1, 0, dispatch_get_main_queue());
+	if (ds_signal == NULL) {
+		exit(DISPATCH_SOURCE_CREATE_FAILED);
+	}
+
+	dispatch_source_set_event_handler(ds_signal, ^{
+		/* We should now be frozen. */
+		is_frozen = memorystatus_control(MEMORYSTATUS_CMD_GET_PROCESS_IS_FROZEN, getpid(), 0, NULL, 0);
+		if (is_frozen == -1) {
+			T_LOG("memorystatus_control error: %s", strerror(errno));
+			exit(MEMORYSTATUS_CONTROL_ERROR);
+		}
+		if (!is_frozen) {
+			exit(FROZEN_BIT_NOT_SET);
+		}
+		exit(SUCCESS);
+	});
+	dispatch_activate(ds_signal);
+
+	dispatch_main();
+}
+
+T_DECL(memorystatus_get_process_is_frozen, "MEMORYSTATUS_CMD_GET_PROCESS_IS_FROZEN returns correct state") {
+	skip_if_freezer_is_disabled();
+
+	test_after_background_helper_launches(true, "check_frozen", ^{
+		int ret;
+		/* Freeze the child, resume it, and signal it to check its state */
+		move_to_idle_band(child_pid);
+		ret = pid_suspend(child_pid);
+		T_ASSERT_POSIX_SUCCESS(ret, "child suspended");
+		freeze_process(child_pid);
+		ret = pid_resume(child_pid);
+		T_ASSERT_POSIX_SUCCESS(ret, "child resumed after freeze");
+
+		kill(child_pid, SIGUSR1);
+		/* The child will checks its own frozen state & exit. */
 	});
 }

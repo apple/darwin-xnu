@@ -181,8 +181,19 @@ cpuid_get_cpufamily(void)
 			break;
 		case CPU_PART_LIGHTNING:
 		case CPU_PART_THUNDER:
+#ifndef RC_HIDE_XNU_FIRESTORM
+		case CPU_PART_THUNDER_M10:
+#endif
 			cpufamily = CPUFAMILY_ARM_LIGHTNING_THUNDER;
 			break;
+#ifndef RC_HIDE_XNU_FIRESTORM
+		case CPU_PART_FIRESTORM:
+		case CPU_PART_ICESTORM:
+		case CPU_PART_FIRESTORM_TONGA:
+		case CPU_PART_ICESTORM_TONGA:
+			cpufamily = CPUFAMILY_ARM_FIRESTORM_ICESTORM;
+			break;
+#endif
 		default:
 			cpufamily = CPUFAMILY_UNKNOWN;
 			break;
@@ -216,6 +227,10 @@ cpuid_get_cpusubfamily(void)
 	case CPU_PART_TEMPEST:
 	case CPU_PART_LIGHTNING:
 	case CPU_PART_THUNDER:
+#ifndef RC_HIDE_XNU_FIRESTORM
+	case CPU_PART_FIRESTORM:
+	case CPU_PART_ICESTORM:
+#endif
 		cpusubfamily = CPUSUBFAMILY_ARM_HP;
 		break;
 	case CPU_PART_TYPHOON_CAPRI:
@@ -223,9 +238,16 @@ cpuid_get_cpusubfamily(void)
 	case CPU_PART_HURRICANE_MYST:
 	case CPU_PART_VORTEX_ARUBA:
 	case CPU_PART_TEMPEST_ARUBA:
+#ifndef RC_HIDE_XNU_FIRESTORM
+	case CPU_PART_FIRESTORM_TONGA:
+	case CPU_PART_ICESTORM_TONGA:
+#endif
 		cpusubfamily = CPUSUBFAMILY_ARM_HG;
 		break;
 	case CPU_PART_TEMPEST_M9:
+#ifndef RC_HIDE_XNU_FIRESTORM
+	case CPU_PART_THUNDER_M10:
+#endif
 		cpusubfamily = CPUSUBFAMILY_ARM_M;
 		break;
 	default:

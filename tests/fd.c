@@ -2,6 +2,9 @@
 #include <darwintest_utils.h>
 #include <pthread.h>
 #include <sys/select.h>
+#include <sys/fileport.h>
+#include <sys/fcntl.h>
+#include <mach/mach.h>
 
 T_GLOBAL_META(
 	T_META_RUN_CONCURRENTLY(true),
@@ -91,4 +94,43 @@ T_DECL(fd_dup2_erase_clofork_58446996,
 	T_ASSERT_POSIX_SUCCESS(dup2(fd1, fd2), "dup2(fd1, fd2)");
 	T_EXPECT_EQ(fcntl(fd2, F_GETFD, 0), 0,
 	    "neither FD_CLOEXEC nor FD_CLOFORK should be set");
+}
+
+struct confined_race_state {
+	int fd;
+	bool made;
+};
+
+static void *
+confine_thread(void *data)
+{
+	volatile int *fdp = data;
+
+	for (;;) {
+		fcntl(*fdp, F_SETCONFINED, 1);
+	}
+
+	return NULL;
+}
+
+T_DECL(confined_fileport_race, "test for rdar://69922255")
+{
+	int fd = -1;
+	pthread_t t;
+	mach_port_t p = MACH_PORT_NULL;
+
+	T_ASSERT_POSIX_SUCCESS(pthread_create(&t, NULL, confine_thread, &fd),
+	    "pthread_create");
+
+	for (int i = 0; i < 100 * 1000; i++) {
+		fd = open("/dev/null", O_RDONLY | 0x08000000 /* O_CLOFORK */);
+		T_QUIET; T_ASSERT_POSIX_SUCCESS(fd, "open(/dev/null)");
+		if (fileport_makeport(fd, &p) == 0) {
+			T_QUIET; T_ASSERT_EQ(fcntl(fd, F_GETCONFINED), 0,
+			    "should never get a confined fd: %d", fd);
+			mach_port_destroy(mach_task_self(), p);
+		}
+
+		close(fd);
+	}
 }

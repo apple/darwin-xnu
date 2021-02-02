@@ -208,9 +208,15 @@
 
 #define SPSR_INTERRUPTS_ENABLED(x) (!(x & DAIF_FIQF))
 
+#if __ARM_ARCH_8_5__
+#define PSR64_SSBS_U32_DEFAULT  PSR64_SSBS_32
+#define PSR64_SSBS_U64_DEFAULT  PSR64_SSBS_64
+#define PSR64_SSBS_KRN_DEFAULT  PSR64_SSBS_64
+#else
 #define PSR64_SSBS_U32_DEFAULT  (0)
 #define PSR64_SSBS_U64_DEFAULT  (0)
 #define PSR64_SSBS_KRN_DEFAULT  (0)
+#endif
 
 /*
  * msr DAIFSet, Xn, and msr DAIFClr, Xn transfer
@@ -361,8 +367,13 @@
 // 0     M              MMU enable
 #define SCTLR_M_ENABLED           (1ULL << 0)
 
+#if __ARM_ARCH_8_5__
+#define SCTLR_CSEH_DEFAULT        (0)
+#define SCTLR_DSSBS_DEFAULT       SCTLR_DSSBS
+#else
 #define SCTLR_CSEH_DEFAULT        (SCTLR_EIS | SCTLR_EOS)
 #define SCTLR_DSSBS_DEFAULT       (0)
+#endif
 
 #define SCTLR_EL1_DEFAULT \
 	(SCTLR_RESERVED | SCTLR_UCI_ENABLED | SCTLR_nTWE_WFE_ENABLED | SCTLR_DZE_ENABLED | \
@@ -1697,6 +1708,12 @@ typedef enum {
 #define MIDR_TURKS            (0x026 << MIDR_EL1_PNUM_SHIFT)
 #endif
 
+#ifdef APPLEFIRESTORM
+#define MIDR_SICILY_ICESTORM            (0x020 << MIDR_EL1_PNUM_SHIFT)
+#define MIDR_SICILY_FIRESTORM           (0x021 << MIDR_EL1_PNUM_SHIFT)
+#define MIDR_TONGA_ICESTORM             (0x022 << MIDR_EL1_PNUM_SHIFT)
+#define MIDR_TONGA_FIRESTORM            (0x023 << MIDR_EL1_PNUM_SHIFT)
+#endif
 
 
 /*
@@ -2033,11 +2050,6 @@ typedef enum {
 #define ACTLR_EL1_DisHWP         ACTLR_EL1_DisHWP_MASK
 
 
-#if HAS_IC_INVAL_FILTERS
-#define ACTLR_EL1_IC_IVAU_EnASID_OFFSET 12
-#define ACTLR_EL1_IC_IVAU_EnASID_MASK   (1ULL << ACTLR_EL1_IC_IVAU_EnASID_OFFSET)
-#define ACTLR_EL1_IC_IVAU_EnASID        ACTLR_EL1_IC_IVAU_EnASID_MASK
-#endif /* HAS_IC_INVAL_FILTERS */
 
 #define AFPCR_DAZ_SHIFT  (0)
 #define AFPCR_FTZ_SHIFT  (1)

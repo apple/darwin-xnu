@@ -37,10 +37,6 @@ endef
 
 $(foreach FILE,$(UNCONFIGURED_HIB_FILES),$(eval $(call ADD_HIB_CFLAGS,$(FILE))))
 
-# hibernate_restore.o uses function pointers but the signing keys aren't set up yet,
-# so compile this file with no ptrauth
-hibernate_restore.o_CFLAGS_ADD += -fno-ptrauth-calls
-
 lz4.o_CFLAGS_ADD += -fbuiltin -O3
 vfp_state_test.o_CFLAGS_ADD += -mno-implicit-float
 

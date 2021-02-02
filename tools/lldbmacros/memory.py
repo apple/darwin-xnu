@@ -3708,7 +3708,7 @@ def _vm_page_unpack_ptr(page):
         vm_pages_addr = unsigned(addressof(kern.globals.vm_pages[0]))
         element_size = unsigned(addressof(kern.globals.vm_pages[1])) - vm_pages_addr
         return (vm_pages_addr + masked_page * element_size)
-    return vm_unpack_pointer(page, params)
+    return unsigned(vm_unpack_pointer(page, params))
 
 @lldb_command('calcvmpagehash')
 def CalcVMPageHash(cmd_args=None):

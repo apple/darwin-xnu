@@ -80,9 +80,9 @@ void ml_install_interrupt_handler(
 	IOInterruptHandler handler,
 	void *refCon);
 
-void ml_entropy_collect(void);
-
 uint64_t ml_get_timebase(void);
+uint64_t ml_get_timebase_entropy(void);
+
 void ml_init_lock_timeout(void);
 void ml_init_delay_spin_threshold(int);
 

@@ -220,6 +220,20 @@ struct cckprng_sched_ctx {
     unsigned pool_idx;
 };
 
+// A function pointer to fill an entropy buffer. It should return some
+// estimate of entropy (e.g. the number of timing samples resident in
+// the buffer). The implementation may return zero if no entropy is
+// available. The implementation should return negative in case of an
+// error (e.g. a failure in continuous health tests).
+//
+// The caller should set entropy_nbytes to the maximum size of the
+// input buffer, and the implementation should set it to the number of
+// bytes it has initialized. The third argument is arbitrary state the
+// implementation provides and receives back on each call.
+typedef int32_t (*cckprng_getentropy)(size_t *entropy_nbytes,
+                                      void *entropy,
+                                      void *arg);
+
 struct cckprng_ctx {
     // The master secret of the PRNG
     struct cckprng_key_ctx key;
@@ -250,24 +264,38 @@ struct cckprng_ctx {
 
     // Diagnostics for the PRNG
     struct cckprng_diag diag;
+
+    // A function pointer to get entropy
+    cckprng_getentropy getentropy;
+
+    // An arbitrary piece of state to be provided to the entropy function
+    void *getentropy_arg;
 };
 
 // This collection of function pointers is just a convenience for
 // registering the PRNG with xnu
 struct cckprng_funcs {
-    void (*init)(struct cckprng_ctx *ctx,
-                 unsigned max_ngens,
-                 size_t entropybuf_nbytes,
-                 const void *entropybuf,
-                 const uint32_t *entropybuf_nsamples,
-                 size_t seed_nbytes,
-                 const void *seed,
-                 size_t nonce_nbytes,
-                 const void *nonce);
-    void (*initgen)(struct cckprng_ctx *ctx, unsigned gen_idx);
-    void (*reseed)(struct cckprng_ctx *ctx, size_t nbytes, const void *seed);
-    void (*refresh)(struct cckprng_ctx *ctx);
-    void (*generate)(struct cckprng_ctx *ctx, unsigned gen_idx, size_t nbytes, void *out);
+    void (*CC_SPTR(cckprng_funcs, init))(struct cckprng_ctx *ctx,
+										 unsigned max_ngens,
+										 size_t entropybuf_nbytes,
+										 const void *entropybuf,
+										 const uint32_t *entropybuf_nsamples,
+										 size_t seed_nbytes,
+										 const void *seed,
+										 size_t nonce_nbytes,
+										 const void *nonce);
+    void (*CC_SPTR(cckprng_funcs, initgen))(struct cckprng_ctx *ctx, unsigned gen_idx);
+    void (*CC_SPTR(cckprng_funcs, reseed))(struct cckprng_ctx *ctx, size_t nbytes, const void *seed);
+    void (*CC_SPTR(cckprng_funcs, refresh))(struct cckprng_ctx *ctx);
+    void (*CC_SPTR(cckprng_funcs, generate))(struct cckprng_ctx *ctx, unsigned gen_idx, size_t nbytes, void *out);
+	void (*CC_SPTR(cckprng_funcs, init_with_getentropy))(struct cckprng_ctx *ctx,
+														 unsigned max_ngens,
+														 size_t seed_nbytes,
+														 const void *seed,
+														 size_t nonce_nbytes,
+														 const void *nonce,
+														 cckprng_getentropy getentropy,
+														 void *getentropy_arg);
 };
 
 /*
@@ -295,6 +323,30 @@ void cckprng_init(struct cckprng_ctx *ctx,
                   const void *seed,
                   size_t nonce_nbytes,
                   const void *nonce);
+
+/*
+  @function cckprng_init_with_getentropy
+  @abstract Initialize a kernel PRNG context.
+
+  @param ctx Context for this instance
+  @param max_ngens Maximum count of generators that may be allocated
+  @param seed_nbytes Length of the seed in bytes
+  @param seed Pointer to a high-entropy seed
+  @param nonce_nbytes Length of the nonce in bytes
+  @param seed Pointer to a single-use nonce
+  @param getentropy A function pointer to fill an entropy buffer
+  @param getentropy_arg State provided to the entropy function
+
+  @discussion @p max_ngens should be set based on an upper bound of CPUs available on the device. See the @p cckprng_getentropy type definition for discussion on its semantics.
+*/
+void cckprng_init_with_getentropy(struct cckprng_ctx *ctx,
+                                  unsigned max_ngens,
+                                  size_t seed_nbytes,
+                                  const void *seed,
+                                  size_t nonce_nbytes,
+                                  const void *nonce,
+                                  cckprng_getentropy getentropy,
+                                  void *getentropy_arg);
 
 /*
   @function cckprng_initgen

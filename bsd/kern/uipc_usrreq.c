@@ -2031,7 +2031,7 @@ fg_insertuipc_mark(struct fileglob * fg)
 		msleep(&fg->fg_lflags, &fg->fg_lock, 0, "fg_insertuipc", NULL);
 	}
 
-	os_ref_retain_locked_raw(&fg->fg_count, &f_refgrp);
+	os_ref_retain_raw(&fg->fg_count, &f_refgrp);
 	fg->fg_msgcount++;
 	if (fg->fg_msgcount == 1) {
 		fg->fg_lflags |= FG_INSMSGQ;

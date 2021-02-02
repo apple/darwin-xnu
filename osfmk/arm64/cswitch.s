@@ -195,7 +195,11 @@
 	ldr		\cpudatap, [\thread, ACT_CPUDATAP]
 #endif /* defined(__ARM_ARCH_8_5__) || defined(HAS_APPLE_PAC) */
 
+#if defined(__ARM_ARCH_8_5__)
+	ldrb	\wsync, [\cpudatap, CPU_SYNC_ON_CSWITCH]
+#else /* defined(__ARM_ARCH_8_5__) */
 	mov		\wsync, #0
+#endif
 
 
 #if defined(HAS_APPLE_PAC)
@@ -227,6 +231,9 @@ Lskip_jop_keys_\@:
 	cbz		\wsync, 1f
 	isb 	sy
 
+#if defined(__ARM_ARCH_8_5__)
+	strb	wzr, [\cpudatap, CPU_SYNC_ON_CSWITCH]
+#endif
 1:
 .endmacro
 

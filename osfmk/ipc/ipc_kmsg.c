@@ -228,7 +228,7 @@ ikm_finalize_sig(
 	return *scratchp;
 }
 
-#elif defined(CRYPTO_SHA2) && !defined(__x86_64__)
+#elif defined(CRYPTO_SHA2) && !defined(__x86_64__) && !defined(__arm__)
 
 typedef SHA256_CTX ikm_sig_scratch_t;
 
@@ -269,7 +269,7 @@ ikm_finalize_sig(
 }
 
 #else
-/* Stubbed out implementation (for __x86_64__ for now) */
+/* Stubbed out implementation (for __x86_64__, __arm__ for now) */
 
 typedef uintptr_t ikm_sig_scratch_t;
 
@@ -1175,7 +1175,8 @@ ipc_kmsg_trace_send(ipc_kmsg_t kmsg,
 #endif
 
 /* zone for cached ipc_kmsg_t structures */
-ZONE_DECLARE(ipc_kmsg_zone, "ipc kmsgs", IKM_SAVED_KMSG_SIZE, ZC_CACHING);
+ZONE_DECLARE(ipc_kmsg_zone, "ipc kmsgs", IKM_SAVED_KMSG_SIZE,
+    ZC_CACHING | ZC_ZFREE_CLEARMEM);
 static TUNABLE(bool, enforce_strict_reply, "ipc_strict_reply", false);
 
 /*
@@ -1311,19 +1312,21 @@ ipc_kmsg_alloc(
 		max_expanded_size = msg_and_trailer_size;
 	}
 
-	kmsg = (ipc_kmsg_t)zalloc(ipc_kmsg_zone);
-
-	if (max_expanded_size < IKM_SAVED_MSG_SIZE) {
-		max_expanded_size = IKM_SAVED_MSG_SIZE;         /* round up for ikm_cache */
-		data = NULL;
-	} else if (max_expanded_size > IKM_SAVED_MSG_SIZE) {
+	if (max_expanded_size > IKM_SAVED_MSG_SIZE) {
 		data = kheap_alloc(KHEAP_DATA_BUFFERS, max_expanded_size, Z_WAITOK);
+		if (data == NULL) {
+			return IKM_NULL;
+		}
+	} else {
+		data = NULL;
+		max_expanded_size = IKM_SAVED_MSG_SIZE;
 	}
 
-	if (kmsg != IKM_NULL) {
-		ikm_init(kmsg, max_expanded_size);
-		ikm_set_header(kmsg, data, msg_and_trailer_size);
-	}
+	kmsg = zalloc_flags(ipc_kmsg_zone, Z_WAITOK | Z_ZERO | Z_NOFAIL);
+	kmsg->ikm_size = max_expanded_size;
+	ikm_qos_init(kmsg);
+	ikm_set_header(kmsg, data, msg_and_trailer_size);
+	assert((kmsg->ikm_prev = kmsg->ikm_next = IKM_BOGUS));
 
 	return kmsg;
 }

@@ -1910,6 +1910,7 @@ ip6_do_fragmentation(struct mbuf **mptr, uint32_t optlen, struct ifnet *ifp,
 
 			M_COPY_CLASSIFIER(new_m, morig);
 			M_COPY_PFTAG(new_m, morig);
+			M_COPY_NECPTAG(new_m, morig);
 
 			ip6f->ip6f_reserved = 0;
 			ip6f->ip6f_ident = id;

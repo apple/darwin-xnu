@@ -55,10 +55,6 @@ typedef enum {
  * @discussion  ARM64-specific PAL context; see pal_hib_ctx_t for details.
  */
 struct pal_hib_ctx {
-#if HIBERNATE_HMAC_IMAGE
-	struct ccdigest_info di;
-	hibernate_scratch_t pagesRestored;
-#endif /* HIBERNATE_HMAC_IMAGE */
 };
 
 /*!
@@ -69,12 +65,14 @@ struct pal_hib_ctx {
  * @field       dockChannelWstatMask Mask to apply to dockchannel WSTAT register to compute available FIFO entries
  * @field       hibUartRegBase       Physical address of the UART registers
  * @field       hmacRegBase          Physical address of the hmac block registers
+ * @field       kernelSlide          Offset from physical address to virtual address in the kernel map
  */
 typedef struct {
 	uint64_t dockChannelRegBase;
 	uint64_t dockChannelWstatMask;
 	uint64_t hibUartRegBase;
 	uint64_t hmacRegBase;
+	uint64_t kernelSlide;
 } pal_hib_globals_t;
 extern pal_hib_globals_t gHibernateGlobals;
 
@@ -102,13 +100,11 @@ void pal_hib_resume_tramp(uint32_t headerPpnum);
  * @field       ttbr0               Physical address of the first level translation table (low mem)
  * @field       ttbr1               Physical address of the first level translation table (high mem)
  * @field       memSlide            Offset from physical address to virtual address during hibernation resume
- * @field       kernelSlide         Offset from physical address to virtual address in the kernel map
  */
 typedef struct{
 	uint64_t ttbr0;
 	uint64_t ttbr1;
 	uint64_t memSlide;
-	uint64_t kernelSlide;
 } pal_hib_tramp_result_t;
 
 #if HIBERNATE_TRAP_HANDLER

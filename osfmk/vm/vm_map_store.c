@@ -179,11 +179,7 @@ vm_map_store_entry_link(
 		}
 #endif
 	}
-#if PMAP_CS
-	(void) vm_map_entry_cs_associate(map, entry, vmk_flags);
-#else /* PMAP_CS */
 	(void) vmk_flags;
-#endif /* PMAP_CS */
 }
 
 void

@@ -320,8 +320,8 @@ machine_thread_state_convert_to_user(
 
 	// Note that kernel threads never have disable_user_jop set
 	if (current_thread()->machine.disable_user_jop || !thread_is_64bit_addr(current_thread()) ||
-	    thread->machine.disable_user_jop || !thread_is_64bit_addr(thread) ||
-	    (BootArgs->bootFlags & kBootFlagsDisableUserThreadStateJOP)) {
+	    thread->machine.disable_user_jop || !thread_is_64bit_addr(thread)
+	    ) {
 		ts64->flags = __DARWIN_ARM_THREAD_STATE64_FLAGS_NO_PTRAUTH;
 		return KERN_SUCCESS;
 	}
@@ -420,8 +420,8 @@ machine_thread_state_convert_from_user(
 	}
 
 	if (ts64->flags & __DARWIN_ARM_THREAD_STATE64_FLAGS_NO_PTRAUTH) {
-		if (thread->machine.disable_user_jop || !thread_is_64bit_addr(thread) ||
-		    (BootArgs->bootFlags & kBootFlagsDisableUserThreadStateJOP)) {
+		if (thread->machine.disable_user_jop || !thread_is_64bit_addr(thread)
+		    ) {
 			return KERN_SUCCESS;
 		}
 		// Disallow setting unsigned thread state on JOP-enabled processes.

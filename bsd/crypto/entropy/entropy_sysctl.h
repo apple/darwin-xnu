@@ -26,9 +26,17 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#ifndef _SYS_CRYPTO_ENTROPY_DIAG_ENTROPY_SYSCTL_H_
-#define _SYS_CRYPTO_ENTROPY_DIAG_ENTROPY_SYSCTL_H_
+#ifndef _SYS_CRYPTO_ENTROPY_ENTROPYSYSCTL_H_
+#define _SYS_CRYPTO_ENTROPY_ENTROPYSYSCTL_H_
 
-void register_entropy_sysctl(void);
+// This function is used only for test purposes. We collect a large
+// number of entropy samples during boot and analyze them offline.
+//
+// See entropy.c to understand the initialization of this module via
+// boot arg and the collection of the samples.
+//
+// See entropy_sysctl.c to understand the semantics of the sysctl
+// that exposes the samples for analysis.
+void entropy_analysis_register_sysctls(void);
 
 #endif

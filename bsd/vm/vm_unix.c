@@ -2052,8 +2052,9 @@ shared_region_map_and_slide_setup(
 	uint32_t                            mappings_count,
 	struct shared_file_mapping_slide_np *mappings,
 	struct _sr_file_mappings            **sr_file_mappings,
-	struct vm_shared_region             **shared_region,
-	struct vnode                        **scdir_vp)
+	struct vm_shared_region             **shared_region_ptr,
+	struct vnode                        **scdir_vp,
+	struct vnode                        *rdir_vp)
 {
 	int                             error = 0;
 	struct _sr_file_mappings        *srfmp;
@@ -2064,6 +2065,7 @@ shared_region_map_and_slide_setup(
 	vm_prot_t                       maxprot = VM_PROT_ALL;
 #endif
 	uint32_t                        i;
+	struct vm_shared_region         *shared_region;
 
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: %p [%d(%s)] -> map\n",
@@ -2113,8 +2115,9 @@ shared_region_map_and_slide_setup(
 	}
 
 	/* get the process's shared region (setup in vm_map_exec()) */
-	*shared_region = vm_shared_region_trim_and_get(current_task());
-	if (*shared_region == NULL) {
+	shared_region = vm_shared_region_trim_and_get(current_task());
+	*shared_region_ptr = shared_region;
+	if (shared_region == NULL) {
 		SHARED_REGION_TRACE_ERROR(
 			("shared_region: %p [%d(%s)] map(): "
 			"no shared region\n",
@@ -2123,6 +2126,22 @@ shared_region_map_and_slide_setup(
 		error = EINVAL;
 		goto done;
 	}
+
+	/*
+	 * Check the shared region matches the current root
+	 * directory of this process.  Deny the mapping to
+	 * avoid tainting the shared region with something that
+	 * doesn't quite belong into it.
+	 */
+	struct vnode *sr_vnode = vm_shared_region_root_dir(shared_region);
+	if (sr_vnode != NULL ?  rdir_vp != sr_vnode : rdir_vp != rootvnode) {
+		SHARED_REGION_TRACE_ERROR(
+			("shared_region: map(%p) root_dir mismatch\n",
+			(void *)VM_KERNEL_ADDRPERM(current_thread())));
+		error = EPERM;
+		goto done;
+	}
+
 
 	for (srfmp = &(*sr_file_mappings)[0];
 	    srfmp < &(*sr_file_mappings)[files_count];
@@ -2311,11 +2330,8 @@ after_root_check:
 #else /* CONFIG_CSR */
 		/* Devices without SIP/ROSP need to make sure that the shared cache is on the root volume. */
 
-		struct vnode *root_vp = p->p_fd->fd_rdir;
-		if (root_vp == NULL) {
-			root_vp = rootvnode;
-		}
-		if (srfmp->vp->v_mount != root_vp->v_mount) {
+		assert(rdir_vp != NULL);
+		if (srfmp->vp->v_mount != rdir_vp->v_mount) {
 			SHARED_REGION_TRACE_ERROR(
 				("shared_region: %p [%d(%s)] map(%p:'%s'): "
 				"not on process's root volume\n",
@@ -2409,9 +2425,9 @@ after_root_check:
 	}
 done:
 	if (error != 0) {
-		shared_region_map_and_slide_cleanup(p, files_count, *sr_file_mappings, *shared_region, *scdir_vp);
+		shared_region_map_and_slide_cleanup(p, files_count, *sr_file_mappings, shared_region, *scdir_vp);
 		*sr_file_mappings = NULL;
-		*shared_region = NULL;
+		*shared_region_ptr = NULL;
 		*scdir_vp = NULL;
 	}
 	return error;
@@ -2439,23 +2455,35 @@ _shared_region_map_and_slide(
 	kern_return_t                   kr = KERN_SUCCESS;
 	struct _sr_file_mappings        *sr_file_mappings = NULL;
 	struct vnode                    *scdir_vp = NULL;
+	struct vnode                    *rdir_vp = NULL;
 	struct vm_shared_region         *shared_region = NULL;
+
+	/*
+	 * Get a reference to the current proc's root dir.
+	 * Need this to prevent racing with chroot.
+	 */
+	proc_fdlock(p);
+	rdir_vp = p->p_fd->fd_rdir;
+	if (rdir_vp == NULL) {
+		rdir_vp = rootvnode;
+	}
+	assert(rdir_vp != NULL);
+	vnode_get(rdir_vp);
+	proc_fdunlock(p);
 
 	/*
 	 * Turn files, mappings into sr_file_mappings and other setup.
 	 */
 	error = shared_region_map_and_slide_setup(p, files_count,
 	    files, mappings_count, mappings,
-	    &sr_file_mappings, &shared_region, &scdir_vp);
+	    &sr_file_mappings, &shared_region, &scdir_vp, rdir_vp);
 	if (error != 0) {
+		vnode_put(rdir_vp);
 		return error;
 	}
 
 	/* map the file(s) into that shared region's submap */
-	kr = vm_shared_region_map_file(shared_region,
-	    (void *) p->p_fd->fd_rdir,
-	    files_count,
-	    sr_file_mappings);
+	kr = vm_shared_region_map_file(shared_region, files_count, sr_file_mappings);
 	if (kr != KERN_SUCCESS) {
 		SHARED_REGION_TRACE_ERROR(("shared_region: %p [%d(%s)] map(): "
 		    "vm_shared_region_map_file() failed kr=0x%x\n",
@@ -2491,6 +2519,7 @@ _shared_region_map_and_slide(
 		OSBitAndAtomic(~((uint32_t)P_NOSHLIB), &p->p_flag);
 	}
 
+	vnode_put(rdir_vp);
 	shared_region_map_and_slide_cleanup(p, files_count, sr_file_mappings, shared_region, scdir_vp);
 
 	SHARED_REGION_TRACE_DEBUG(
@@ -3293,14 +3322,6 @@ SYSCTL_QUAD(_vm, OID_AUTO, corpse_footprint_full,
 SYSCTL_QUAD(_vm, OID_AUTO, corpse_footprint_no_buf,
     CTLFLAG_RD | CTLFLAG_LOCKED, &vm_map_corpse_footprint_no_buf, "");
 
-#if PMAP_CS
-extern uint64_t vm_cs_defer_to_pmap_cs;
-extern uint64_t vm_cs_defer_to_pmap_cs_not;
-SYSCTL_QUAD(_vm, OID_AUTO, cs_defer_to_pmap_cs,
-    CTLFLAG_RD | CTLFLAG_LOCKED, &vm_cs_defer_to_pmap_cs, "");
-SYSCTL_QUAD(_vm, OID_AUTO, cs_defer_to_pmap_cs_not,
-    CTLFLAG_RD | CTLFLAG_LOCKED, &vm_cs_defer_to_pmap_cs_not, "");
-#endif /* PMAP_CS */
 
 extern uint64_t shared_region_pager_copied;
 extern uint64_t shared_region_pager_slid;

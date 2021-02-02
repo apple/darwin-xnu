@@ -57,9 +57,6 @@
 #include "IOKitKernelInternal.h"
 #if HIBERNATION
 #include <IOKit/IOHibernatePrivate.h>
-#if __arm64__
-#include <arm64/ppl/ppl_hib.h>
-#endif /* __arm64__ */
 #endif /* HIBERNATION */
 #include <console/video_console.h>
 #include <sys/syslog.h>
@@ -578,7 +575,6 @@ defaultSleepPolicyHandler(void *ctx, const IOPMSystemSleepPolicyVariables *vars,
 
 	// Hibernation enabled and either user forced hibernate or low battery sleep
 	if ((vars->hibernateMode & kIOHibernateModeOn) &&
-	    ppl_hib_hibernation_supported() &&
 	    (((vars->hibernateMode & kIOHibernateModeSleep) == 0) ||
 	    (vars->sleepFactors & kIOPMSleepFactorBatteryLow))) {
 		sleepType = kIOPMSleepTypeHibernate;
@@ -1773,9 +1769,6 @@ IOPMrootDomain::start( IOService * nub )
 
 #if HIBERNATION
 #if defined(__arm64__)
-	if (ppl_hib_hibernation_supported()) {
-		publishFeature(kIOHibernateFeatureKey);
-	}
 #endif /* defined(__arm64__) */
 	IOHibernateSystemInit(this);
 #endif

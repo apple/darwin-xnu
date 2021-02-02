@@ -15,7 +15,7 @@
 #include <corecrypto/cc.h>
 
 #define CCRNG_STATE_COMMON \
-    int (*generate)(struct ccrng_state *rng, size_t outlen, void *out);
+    int (*CC_SPTR(ccrng_state, generate))(struct ccrng_state *rng, size_t outlen, void *out);
 
 /*!
  @type      struct ccrng_state

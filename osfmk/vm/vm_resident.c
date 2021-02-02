@@ -6819,8 +6819,15 @@ struct hibernate_statistics {
  * clamp the number of 'xpmapped' pages we'll sweep into the hibernation image
  * so that we don't overrun the estimated image size, which would
  * result in a hibernation failure.
+ *
+ * We use a size value instead of pages because we don't want to take up more space
+ * on disk if the system has a 16K page size vs 4K. Also, we are not guaranteed
+ * to have that additional space available.
+ *
+ * Since this was set at 40000 pages on X86 we are going to use 160MB as our
+ * xpmapped size.
  */
-#define HIBERNATE_XPMAPPED_LIMIT        40000
+#define HIBERNATE_XPMAPPED_LIMIT        ((160 * 1024 * 1024ULL) / PAGE_SIZE)
 
 
 static int
@@ -7864,6 +7871,19 @@ hibernate_page_list_setall(hibernate_page_list_t * page_list,
 
 	if (preflight && will_discard) {
 		*pagesOut -= count_compressor + count_throttled + count_anonymous + count_inactive + count_cleaned + count_speculative + count_active;
+		/*
+		 * We try to keep max HIBERNATE_XPMAPPED_LIMIT pages around in the hibernation image
+		 * even if these are clean and so we need to size the hibernation image accordingly.
+		 *
+		 * NB: We have to assume all HIBERNATE_XPMAPPED_LIMIT pages might show up because 'dirty'
+		 * xpmapped pages aren't distinguishable from other 'dirty' pages in preflight. So we might
+		 * only see part of the xpmapped pages if we look at 'cd_found_xpmapped' which solely tracks
+		 * clean xpmapped pages.
+		 *
+		 * Since these pages are all cleaned by the time we are in the post-preflight phase, we might
+		 * see a much larger number in 'cd_found_xpmapped' now than we did in the preflight phase
+		 */
+		*pagesOut +=  HIBERNATE_XPMAPPED_LIMIT;
 	}
 
 	hibernation_vmqueues_inspection = FALSE;

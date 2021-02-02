@@ -112,6 +112,8 @@ boolean_t memorystatus_freeze_thread_should_run(void);
 int memorystatus_set_process_is_freezable(pid_t pid, boolean_t is_freezable);
 int memorystatus_get_process_is_freezable(pid_t pid, int *is_freezable);
 int memorystatus_freezer_control(int32_t flags, user_addr_t buffer, size_t buffer_size, int32_t *retval);
+void memorystatus_freeze_init_proc(proc_t p);
+errno_t memorystatus_get_process_is_frozen(pid_t pid, int *is_freezable);
 
 #endif /* CONFIG_FREEZE */
 

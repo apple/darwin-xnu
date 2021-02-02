@@ -170,7 +170,7 @@ ndrv_input(
 	char                            *frame_header)
 {
 	struct socket *so;
-	struct sockaddr_dl ndrvsrc;
+	struct sockaddr_dl ndrvsrc = {};
 	struct ndrv_cb *np;
 	int error = 0;
 

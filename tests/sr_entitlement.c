@@ -75,7 +75,9 @@ T_DECL(sr_entitlement, "shared region by entitlement test")
 	int on = 1;
 	size_t size_on = sizeof(on);
 
+#if !__arm64e__
 	T_SKIP("No pointer authentication support");
+#endif
 
 	/*
 	 * Check if the sysctl vm_shared_region_by_entitlement exists and if so make

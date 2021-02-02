@@ -140,6 +140,10 @@ _ranges_validate(task_t task, task_restartable_range_t *ranges, uint32_t count)
 	uint64_t limit = task_has_64Bit_data(task) ? UINT64_MAX : UINT32_MAX;
 	uint64_t end, recovery;
 
+	if (count == 0) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
 	for (size_t i = 0; i < count; i++) {
 		if (ranges[i].length > TASK_RESTARTABLE_OFFSET_MAX ||
 		    ranges[i].recovery_offs > TASK_RESTARTABLE_OFFSET_MAX) {

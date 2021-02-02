@@ -315,13 +315,6 @@ is_parity_error(fault_status_t status)
 	}
 }
 
-static inline unsigned
-__ror(unsigned value, unsigned shift)
-{
-	return ((unsigned)(value) >> (unsigned)(shift)) |
-	       (unsigned)(value) << ((unsigned)(sizeof(unsigned) * CHAR_BIT) - (unsigned)(shift));
-}
-
 __dead2
 static void
 arm64_implementation_specific_error(arm_saved_state_t *state, uint32_t esr, vm_offset_t far)
@@ -1742,11 +1735,6 @@ handle_simd_trap(arm_saved_state_t *state, uint32_t esr)
 void
 sleh_irq(arm_saved_state_t *state)
 {
-	uint64_t     timestamp                = 0;
-	uint32_t     old_entropy_data         = 0;
-	uint32_t     old_entropy_sample_count = 0;
-	size_t       entropy_index            = 0;
-	uint32_t *   entropy_data_ptr         = NULL;
 	cpu_data_t * cdp __unused             = getCpuDatap();
 #if MACH_ASSERT
 	int preemption_level = get_preemption_level();
@@ -1765,25 +1753,7 @@ sleh_irq(arm_saved_state_t *state)
 	    cdp->interrupt_source);
 #endif
 
-	/* We use interrupt timing as an entropy source. */
-	timestamp = ml_get_timebase();
-
-	/*
-	 * The buffer index is subject to races, but as these races should only
-	 * result in multiple CPUs updating the same location, the end result
-	 * should be that noise gets written into the entropy buffer.  As this
-	 * is the entire point of the entropy buffer, we will not worry about
-	 * these races for now.
-	 */
-	old_entropy_sample_count = EntropyData.sample_count;
-	EntropyData.sample_count += 1;
-
-	entropy_index = old_entropy_sample_count & EntropyData.buffer_index_mask;
-	entropy_data_ptr = EntropyData.buffer + entropy_index;
-
-	/* Mix the timestamp data and the old data together. */
-	old_entropy_data = *entropy_data_ptr;
-	*entropy_data_ptr = (uint32_t)timestamp ^ (__ror(old_entropy_data, 9) & EntropyData.ror_mask);
+	entropy_collect();
 
 	sleh_interrupt_handler_epilogue();
 #if MACH_ASSERT
