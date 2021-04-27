@@ -1036,6 +1036,22 @@ void bufattr_markioscheduled(bufattr_t bap);
  */
 int bufattr_ioscheduled(bufattr_t bap);
 
+/*!
+ *  @function bufattr_markexpeditedmeta
+ *  @abstract Mark a metadata I/O buffer as expedited (i.e. requires a high I/O tier).
+ *  @param bap Buffer attributes to mark.
+ *  @discussion Marks the buffer so that spec_strategy() will know that it should be expedited
+ */
+void bufattr_markexpeditedmeta(bufattr_t bap);
+
+/*!
+ *  @function bufattr_expeditedmeta
+ *  @abstract Check if a buffer is marked as expedited metadata I/O.
+ *  @param bap Buffer attributes to test.
+ *  @return Nonzero if the buffer is marked expedited metadata I/O, 0 otherwise.
+ */
+int bufattr_expeditedmeta(bufattr_t bap);
+
 #ifdef KERNEL_PRIVATE
 void    buf_setfilter(buf_t, void (*)(buf_t, void *), void *, void(**)(buf_t, void *), void **);
 

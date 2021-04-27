@@ -83,10 +83,9 @@ IOBMDPageProc(iopa_t * a)
 {
 	kern_return_t kr;
 	vm_address_t  vmaddr  = 0;
-	int           options = 0;// KMA_LOMEM;
 
 	kr = kernel_memory_allocate(kernel_map, &vmaddr,
-	    page_size, 0, options, VM_KERN_MEMORY_IOKIT);
+	    page_size, 0, KMA_NONE, VM_KERN_MEMORY_IOKIT);
 
 	if (KERN_SUCCESS != kr) {
 		vmaddr = 0;

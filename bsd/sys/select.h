@@ -139,6 +139,10 @@ extern int selwait;
 void    selrecord(proc_t selector, struct selinfo *, void *);
 void    selwakeup(struct selinfo *);
 void    selthreadclear(struct selinfo *);
+#if XNU_KERNEL_PRIVATE
+struct _select;
+void    select_cleanup_uthread(struct _select *);
+#endif
 
 __END_DECLS
 

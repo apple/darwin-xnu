@@ -36,8 +36,8 @@ values are:
 <dt> <strong>THREAD_KERNEL_PORT</strong>
 <dd>
 [thread-self send right] The port used to name the thread. 
-Used to invoke operations that affect the thread.  This is the 
-port returned by <strong>mach_thread_self</strong>.
+Used to invoke operations that affect the thread. This is the movable
+port for the thread and different from <strong>mach_thread_self</strong> (immovable).
 </dl>
 <p>
 <dt> <var>special_port</var> 

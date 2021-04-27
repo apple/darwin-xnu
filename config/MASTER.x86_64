@@ -16,9 +16,9 @@
 #  Standard Apple OS Configurations:
 #  -------- ----- -- ---------------
 #
-#  KERNEL_BASE =    [ intel medium msgb_large config_requires_u32_munging config_zcache config_delay_idle_sleep config_proc_udata_storage vsprintf ]
+#  KERNEL_BASE =    [ intel medium msgb_large config_requires_u32_munging config_delay_idle_sleep config_proc_udata_storage vsprintf ]
 #  KERNEL_RELEASE = [ KERNEL_BASE ]
-#  KERNEL_DEV =     [ KERNEL_BASE development mach_assert config_xnupost proc_ref_debug os_reason_debug ]
+#  KERNEL_DEV =     [ KERNEL_BASE development mach_assert config_xnupost proc_ref_debug ]
 #  KERNEL_DEBUG =   [ KERNEL_BASE debug mach_assert config_xnupost config_ltable_stats config_ltable_debug config_waitq_stats config_workloop_debug config_waitq_debug ]
 #  BSD_BASE =       [ mach_bsd sysv_sem sysv_msg sysv_shm config_netboot config_imageboot config_imageboot_chunklist config_workqueue psynch config_proc_uuid_policy config_coredump pgo config_32bit_telemetry config_personas ]
 #  BSD_RELEASE =    [ BSD_BASE ]
@@ -48,7 +48,7 @@
 #  PERF_DBG_RELEASE=[ PERF_DBG_BASE ]
 #  PERF_DBG_DEV    =[ PERF_DBG_BASE lock_stats ]
 #  PERF_DBG_DEBUG = [ PERF_DBG_BASE lock_stats ]
-#  MACH_BASE =      [ mach config_kext_basement mdebug ipc_debug config_mca config_vmx config_mtrr config_lapic config_telemetry importance_inheritance config_atm config_coalitions hypervisor config_iosched config_sysdiagnose config_mach_bridge_send_time copyout_shim phys_write_acct ]
+#  MACH_BASE =      [ mach config_kext_basement mdebug ipc_debug config_mca config_vmx config_mtrr config_lapic config_telemetry importance_inheritance config_atm config_coalitions hypervisor config_iosched config_sysdiagnose config_mach_bridge_send_time copyout_shim phys_write_acct config_user_notification ]
 #  MACH_RELEASE =   [ MACH_BASE ]
 #  MACH_DEV =       [ MACH_BASE task_zone_info importance_trace config_ledger_interval_max ]
 #  MACH_DEBUG =     [ MACH_BASE task_zone_info importance_trace config_ledger_interval_max importance_debug ]

@@ -190,10 +190,17 @@ __XNU_PRIVATE_EXTERN char corefilename[MAXPATHLEN + 1] = {"/private/var/cores/%N
 #include <kern/backtrace.h>
 #endif
 
+static LCK_MTX_DECLARE_ATTR(proc_klist_mlock, &proc_mlock_grp, &proc_lck_attr);
+
 ZONE_DECLARE(pgrp_zone, "pgrp",
     sizeof(struct pgrp), ZC_ZFREE_CLEARMEM);
 ZONE_DECLARE(session_zone, "session",
     sizeof(struct session), ZC_ZFREE_CLEARMEM);
+/*
+ * If you need accounting for KM_PROC consider using
+ * ZONE_VIEW_DEFINE to define a zone view.
+ */
+#define KM_PROC KHEAP_DEFAULT
 
 typedef uint64_t unaligned_u64 __attribute__((aligned(1)));
 
@@ -282,7 +289,7 @@ again:
 		LIST_REMOVE(uip, ui_hash);
 		retval = 0;
 		proc_list_unlock();
-		FREE(uip, M_PROC);
+		kheap_free(KM_PROC, uip, sizeof(struct uidinfo));
 		goto out;
 	}
 	if (diff <= 0) {
@@ -304,15 +311,13 @@ again:
 		goto out;
 	}
 	proc_list_unlock();
-	MALLOC(newuip, struct uidinfo *, sizeof(*uip), M_PROC, M_WAITOK);
+	newuip = kheap_alloc(KM_PROC, sizeof(struct uidinfo), Z_WAITOK);
 	if (newuip == NULL) {
 		panic("chgproccnt: M_PROC zone depleted");
 	}
 	goto again;
 out:
-	if (newuip != NULL) {
-		FREE(newuip, M_PROC);
-	}
+	kheap_free(KM_PROC, newuip, sizeof(struct uidinfo));
 	return retval;
 }
 
@@ -596,7 +601,7 @@ retry:
 	    (((p->p_listflag & (P_LIST_DRAIN | P_LIST_DRAINWAIT)) == 0) ||
 	    ((p->p_listflag & P_LIST_REFWAIT) != 0))) {
 		if ((p->p_listflag & P_LIST_REFWAIT) != 0 && uthread_needs_to_wait_in_proc_refwait()) {
-			msleep(&p->p_listflag, proc_list_mlock, 0, "proc_refwait", 0);
+			msleep(&p->p_listflag, &proc_list_mlock, 0, "proc_refwait", 0);
 			/*
 			 * the proc might have been recycled since we dropped
 			 * the proc list lock, get the proc again.
@@ -648,7 +653,7 @@ again:
 
 	/* If someone else is controlling the (unreaped) zombie - wait */
 	if ((p->p_listflag & P_LIST_WAITING) != 0) {
-		(void)msleep(&p->p_stat, proc_list_mlock, PWAIT, "waitcoll", 0);
+		(void)msleep(&p->p_stat, &proc_list_mlock, PWAIT, "waitcoll", 0);
 		goto again;
 	}
 	p->p_listflag |=  P_LIST_WAITING;
@@ -699,7 +704,7 @@ proc_refdrain_with_refwait(proc_t p, boolean_t get_ref_and_allow_wait)
 	/* Do not wait in ref drain for launchd exec */
 	while (p->p_refcount && !initexec) {
 		p->p_listflag |= P_LIST_DRAINWAIT;
-		msleep(&p->p_refcount, proc_list_mlock, 0, "proc_refdrain", 0);
+		msleep(&p->p_refcount, &proc_list_mlock, 0, "proc_refdrain", 0);
 	}
 
 	p->p_listflag &= ~P_LIST_DRAIN;
@@ -746,7 +751,7 @@ loop:
 
 	if ((pp->p_listflag & (P_LIST_CHILDDRSTART | P_LIST_CHILDDRAINED)) == P_LIST_CHILDDRSTART) {
 		pp->p_listflag |= P_LIST_CHILDDRWAIT;
-		msleep(&pp->p_childrencnt, proc_list_mlock, 0, "proc_parent", 0);
+		msleep(&pp->p_childrencnt, &proc_list_mlock, 0, "proc_parent", 0);
 		loopcnt++;
 		if (loopcnt == 5) {
 			parent = PROC_NULL;
@@ -800,7 +805,7 @@ proc_childdrainstart(proc_t p)
 	/* wait for all that hold parentrefs to drop */
 	while (p->p_parentref > 0) {
 		p->p_listflag |= P_LIST_PARENTREFWAIT;
-		msleep(&p->p_parentref, proc_list_mlock, 0, "proc_childdrainstart", 0);
+		msleep(&p->p_parentref, &proc_list_mlock, 0, "proc_childdrainstart", 0);
 	}
 }
 
@@ -857,6 +862,7 @@ int
 proc_pid(proc_t p)
 {
 	if (p != NULL) {
+		proc_require(p, PROC_REQUIRE_ALLOW_KERNPROC);
 		return p->p_pid;
 	}
 	return -1;
@@ -866,6 +872,7 @@ int
 proc_ppid(proc_t p)
 {
 	if (p != NULL) {
+		proc_require(p, PROC_REQUIRE_ALLOW_KERNPROC);
 		return p->p_ppid;
 	}
 	return -1;
@@ -875,6 +882,7 @@ int
 proc_original_ppid(proc_t p)
 {
 	if (p != NULL) {
+		proc_require(p, PROC_REQUIRE_ALLOW_KERNPROC);
 		return p->p_original_ppid;
 	}
 	return -1;
@@ -913,6 +921,7 @@ int
 proc_csflags(proc_t p, uint64_t *flags)
 {
 	if (p && flags) {
+		proc_require(p, PROC_REQUIRE_ALLOW_KERNPROC);
 		*flags = (uint64_t)p->p_csflags;
 		return 0;
 	}
@@ -996,7 +1005,7 @@ loop:
 	parent =  proc_ref_locked(pp);
 	if ((parent == PROC_NULL) && (pp != PROC_NULL) && (pp->p_stat != SZOMB) && ((pp->p_listflag & P_LIST_EXITED) != 0) && ((pp->p_listflag & P_LIST_CHILDDRAINED) == 0)) {
 		pp->p_listflag |= P_LIST_CHILDLKWAIT;
-		msleep(&pp->p_childrencnt, proc_list_mlock, 0, "proc_parent", 0);
+		msleep(&pp->p_childrencnt, &proc_list_mlock, 0, "proc_parent", 0);
 		goto loop;
 	}
 	proc_list_unlock();
@@ -1745,7 +1754,7 @@ enterpgrp(proc_t p, pid_t pgid, int mksess)
 			sess->s_count = 1;
 			sess->s_ttypgrpid = NO_PID;
 
-			lck_mtx_init(&sess->s_mlock, proc_mlock_grp, proc_lck_attr);
+			lck_mtx_init(&sess->s_mlock, &proc_mlock_grp, &proc_lck_attr);
 
 			bcopy(procsp->s_login, sess->s_login,
 			    sizeof(sess->s_login));
@@ -1773,7 +1782,7 @@ enterpgrp(proc_t p, pid_t pgid, int mksess)
 		}
 		pgrp->pg_id = pgid;
 
-		lck_mtx_init(&pgrp->pg_mlock, proc_mlock_grp, proc_lck_attr);
+		lck_mtx_init(&pgrp->pg_mlock, &proc_mlock_grp, &proc_lck_attr);
 
 		LIST_INIT(&pgrp->pg_members);
 		proc_list_lock();
@@ -1897,13 +1906,13 @@ pgdelete_dropref(struct pgrp *pgrp)
 			panic("pg_deleteref: freeing session in use");
 		}
 		proc_list_unlock();
-		lck_mtx_destroy(&sessp->s_mlock, proc_mlock_grp);
+		lck_mtx_destroy(&sessp->s_mlock, &proc_mlock_grp);
 
 		zfree(session_zone, sessp);
 	} else {
 		proc_list_unlock();
 	}
-	lck_mtx_destroy(&pgrp->pg_mlock, proc_mlock_grp);
+	lck_mtx_destroy(&pgrp->pg_mlock, &proc_mlock_grp);
 	zfree(pgrp_zone, pgrp);
 }
 
@@ -2230,6 +2239,18 @@ bool
 proc_ignores_content_protection(proc_t p)
 {
 	return os_atomic_load(&p->p_vfs_iopolicy, relaxed) & P_VFS_IOPOLICY_IGNORE_CONTENT_PROTECTION;
+}
+
+bool
+proc_ignores_node_permissions(proc_t p)
+{
+	return os_atomic_load(&p->p_vfs_iopolicy, relaxed) & P_VFS_IOPOLICY_IGNORE_NODE_PERMISSIONS;
+}
+
+bool
+proc_skip_mtime_update(proc_t p)
+{
+	return os_atomic_load(&p->p_vfs_iopolicy, relaxed) & P_VFS_IOPOLICY_SKIP_MTIME_UPDATE;
 }
 
 #if CONFIG_COREDUMP
@@ -2764,7 +2785,7 @@ proc_iterate(
 		proc_list_lock();
 		pid_count_available = nprocs + 1; /* kernel_task not counted in nprocs */
 		assert(pid_count_available > 0);
-		if (pidlist_nalloc(pl) > pid_count_available) {
+		if (pidlist_nalloc(pl) >= pid_count_available) {
 			break;
 		}
 		proc_list_unlock();
@@ -2927,7 +2948,7 @@ proc_childrenwalk(
 			proc_list_unlock();
 			goto out;
 		}
-		if (pidlist_nalloc(pl) > pid_count_available) {
+		if (pidlist_nalloc(pl) >= pid_count_available) {
 			break;
 		}
 		proc_list_unlock();
@@ -3008,7 +3029,7 @@ pgrp_iterate(
 			}
 			goto out;
 		}
-		if (pidlist_nalloc(pl) > pid_count_available) {
+		if (pidlist_nalloc(pl) >= pid_count_available) {
 			break;
 		}
 		pgrp_unlock(pgrp);
@@ -3166,7 +3187,7 @@ pgrp_replace(struct proc * p, struct pgrp * newpg)
 
 	while ((p->p_listflag & P_LIST_PGRPTRANS) == P_LIST_PGRPTRANS) {
 		p->p_listflag |= P_LIST_PGRPTRWAIT;
-		(void)msleep(&p->p_pgrpid, proc_list_mlock, 0, "proc_pgrp", 0);
+		(void)msleep(&p->p_pgrpid, &proc_list_mlock, 0, "proc_pgrp", 0);
 	}
 
 	p->p_listflag |= P_LIST_PGRPTRANS;
@@ -3276,7 +3297,7 @@ proc_pgrp(proc_t p)
 
 	while ((p->p_listflag & P_LIST_PGRPTRANS) == P_LIST_PGRPTRANS) {
 		p->p_listflag |= P_LIST_PGRPTRWAIT;
-		(void)msleep(&p->p_pgrpid, proc_list_mlock, 0, "proc_pgrp", 0);
+		(void)msleep(&p->p_pgrpid, &proc_list_mlock, 0, "proc_pgrp", 0);
 	}
 
 	pgrp = p->p_pgrp;
@@ -3328,7 +3349,7 @@ proc_session(proc_t p)
 	/* wait during transitions */
 	while ((p->p_listflag & P_LIST_PGRPTRANS) == P_LIST_PGRPTRANS) {
 		p->p_listflag |= P_LIST_PGRPTRWAIT;
-		(void)msleep(&p->p_pgrpid, proc_list_mlock, 0, "proc_pgrp", 0);
+		(void)msleep(&p->p_pgrpid, &proc_list_mlock, 0, "proc_pgrp", 0);
 	}
 
 	if ((p->p_pgrp != PGRP_NULL) && ((sess = p->p_pgrp->pg_session) != SESSION_NULL)) {
@@ -3356,7 +3377,7 @@ session_rele(struct session *sess)
 			panic("session_rele: freeing session in use");
 		}
 		proc_list_unlock();
-		lck_mtx_destroy(&sess->s_mlock, proc_mlock_grp);
+		lck_mtx_destroy(&sess->s_mlock, &proc_mlock_grp);
 		zfree(session_zone, sess);
 	} else {
 		proc_list_unlock();
@@ -3451,13 +3472,13 @@ proc_transwait(proc_t p, int locked)
 void
 proc_klist_lock(void)
 {
-	lck_mtx_lock(proc_klist_mlock);
+	lck_mtx_lock(&proc_klist_mlock);
 }
 
 void
 proc_klist_unlock(void)
 {
-	lck_mtx_unlock(proc_klist_mlock);
+	lck_mtx_unlock(&proc_klist_mlock);
 }
 
 void

@@ -209,6 +209,9 @@ endif
 ifeq ($(NMEDIT),)
 	export NMEDIT := $(shell $(XCRUN) -sdk $(SDKROOT) -find nmedit)
 endif
+ifeq ($(SCAN_BUILD),)
+	export SCAN_BUILD := $(shell $(XCRUN) -sdk $(SDKROOT) -find scan-build)
+endif
 
 #
 # Platform options
@@ -258,6 +261,7 @@ SLEEP = /bin/sleep
 AWK = /usr/bin/awk
 SED = /usr/bin/sed
 PLUTIL = /usr/bin/plutil
+GREP = /usr/bin/grep
 
 #
 # Command to generate host binaries. Intentionally not

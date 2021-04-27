@@ -54,10 +54,6 @@
  * For the moment, mockfs is not marked in vfs_conf.c as being threadsafe.
  */
 
-extern lck_attr_t     * mockfs_mtx_attr;
-extern lck_grp_attr_t * mockfs_grp_attr;
-extern lck_grp_t      * mockfs_mtx_grp;
-
 struct mockfs_mount {
 	lck_mtx_t       mockfs_mnt_mtx;         /* Mount-wide (and tree-wide) mutex */
 	mockfs_fsnode_t mockfs_root;            /* Root of the node tree */

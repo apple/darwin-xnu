@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -289,6 +289,30 @@
 #define CPUID_VMM_FAMILY_KVM            0x6
 
 
+#if DEBUG || DEVELOPMENT
+
+/*
+ * Apple Paravirtualization CPUID leaves
+ * The base leaf can be placed at any unused 0x100 aligned boundary
+ * in the hypervisor class leaves [0x4000_0000-0x4001_0000].
+ */
+
+#define APPLEPV_INTERFACE_LEAF_INDEX    1
+#define APPLEPV_FEATURES_LEAF_INDEX     2
+#define APPLEPV_LEAF_INDEX_MAX          APPLEPV_FEATURES_LEAF_INDEX
+
+#define APPLEPV_SIGNATURE               "apple-pv-xnu"
+#define APPLEPV_INTERFACE               "AH#1"
+
+/*
+ *  Apple Hypercall Feature Vector:
+ *  Values in ECX:EDX returned by the base leaf
+ */
+
+#define CPUID_LEAF_FEATURE_COREDUMP         _Bit(0)
+
+#endif /* DEBUG || DEVELOPMENT */
+
 
 #ifndef ASSEMBLER
 #include <stdint.h>
@@ -485,6 +509,7 @@ typedef struct {
 	uint32_t        cpuid_vmm_family;
 	uint32_t        cpuid_vmm_bus_frequency;
 	uint32_t        cpuid_vmm_tsc_frequency;
+	uint64_t        cpuid_vmm_applepv_features;
 } i386_vmm_info_t;
 
 typedef enum {
@@ -553,10 +578,14 @@ extern uint32_t         cpuid_cpufamily(void);
 extern i386_cpu_info_t  *cpuid_info(void);
 extern void             cpuid_set_info(void);
 extern boolean_t        cpuid_vmm_present(void);
+extern uint32_t         cpuid_vmm_family(void);
+
+#if DEBUG || DEVELOPMENT
+extern uint64_t         cpuid_vmm_get_applepv_features(void);
+#endif /* DEBUG || DEVELOPMENT */
 
 #ifdef MACH_KERNEL_PRIVATE
 extern i386_vmm_info_t  *cpuid_vmm_info(void);
-extern uint32_t         cpuid_vmm_family(void);
 extern cwa_classifier_e cpuid_wa_required(cpu_wa_e wa);
 extern void cpuid_do_was(void);
 extern const char       *cpuid_vmm_family_string(void);

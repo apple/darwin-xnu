@@ -92,6 +92,11 @@ extern void mach_port_guard_exception(
 	uint64_t      inguard,
 	uint64_t      portguard,
 	unsigned      reason);
+
+extern void mach_port_guard_exception_immovable(
+	mach_port_name_t        name,
+	mach_port_t             port,
+	uint64_t                portguard);
 __END_DECLS
 
 #endif  /* _IPC_PORT_H_ */

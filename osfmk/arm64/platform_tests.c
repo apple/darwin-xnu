@@ -1050,6 +1050,7 @@ struct munger_test {
 	{MT_FUNC(munge_wws), 3, 3, {MT_W_VAL, MT_W_VAL, MT_S_VAL}},
 	{MT_FUNC(munge_wwwsw), 5, 5, {MT_W_VAL, MT_W_VAL, MT_W_VAL, MT_S_VAL, MT_W_VAL}},
 	{MT_FUNC(munge_llllll), 12, 6, {MT_L_VAL, MT_L_VAL, MT_L_VAL, MT_L_VAL, MT_L_VAL, MT_L_VAL}},
+	{MT_FUNC(munge_llll), 8, 4, {MT_L_VAL, MT_L_VAL, MT_L_VAL, MT_L_VAL}},
 	{MT_FUNC(munge_l), 2, 1, {MT_L_VAL}},
 	{MT_FUNC(munge_lw), 3, 2, {MT_L_VAL, MT_W_VAL}},
 	{MT_FUNC(munge_lwww), 5, 4, {MT_L_VAL, MT_W_VAL, MT_W_VAL, MT_W_VAL}},
@@ -1183,16 +1184,16 @@ arm64_ropjop_test()
 
 	if (config_jop_enabled) {
 		/* jop key */
-		uint64_t apiakey_hi = __builtin_arm_rsr64(ARM64_REG_APIAKEYHI_EL1);
-		uint64_t apiakey_lo = __builtin_arm_rsr64(ARM64_REG_APIAKEYLO_EL1);
+		uint64_t apiakey_hi = __builtin_arm_rsr64("APIAKEYHI_EL1");
+		uint64_t apiakey_lo = __builtin_arm_rsr64("APIAKEYLO_EL1");
 
 		T_EXPECT(apiakey_hi != 0 && apiakey_lo != 0, NULL);
 	}
 
 	if (config_rop_enabled) {
 		/* rop key */
-		uint64_t apibkey_hi = __builtin_arm_rsr64(ARM64_REG_APIBKEYHI_EL1);
-		uint64_t apibkey_lo = __builtin_arm_rsr64(ARM64_REG_APIBKEYLO_EL1);
+		uint64_t apibkey_hi = __builtin_arm_rsr64("APIBKEYHI_EL1");
+		uint64_t apibkey_lo = __builtin_arm_rsr64("APIBKEYLO_EL1");
 
 		T_EXPECT(apibkey_hi != 0 && apibkey_lo != 0, NULL);
 
@@ -1617,13 +1618,13 @@ arm64_spr_lock_test()
 		thread_block(THREAD_CONTINUE_NULL);
 		T_LOG("Running SPR lock test on cpu %d\n", p->cpu_id);
 
-		uint64_t orig_value = __builtin_arm_rsr64(STR(ARM64_REG_HID8));
+		uint64_t orig_value = __builtin_arm_rsr64(STR(S3_0_C15_C8_0));
 		spr_lock_test_addr = (vm_offset_t)VM_KERNEL_STRIP_PTR(arm64_msr_lock_test);
 		spr_lock_exception_esr = 0;
 		arm64_msr_lock_test(~orig_value);
 		T_EXPECT(spr_lock_exception_esr != 0, "MSR write generated synchronous abort");
 
-		uint64_t new_value = __builtin_arm_rsr64(STR(ARM64_REG_HID8));
+		uint64_t new_value = __builtin_arm_rsr64(STR(S3_0_C15_C8_0));
 		T_EXPECT(orig_value == new_value, "MSR write did not succeed");
 
 		spr_lock_test_addr = 0;

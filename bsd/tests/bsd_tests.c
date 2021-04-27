@@ -69,6 +69,7 @@ struct xnupost_test bsd_post_tests[] = {
 #ifdef __arm64__
 	XNUPOST_TEST_CONFIG_BASIC(arm64_lock_test),
 #endif
+#if !KASAN // <rdar://71151361>
 #if defined(__arm__) || defined(__arm64__)
 	XNUPOST_TEST_CONFIG_BASIC(pmap_test),
 #endif /* defined(__arm__) || defined(__arm64__) */
@@ -78,12 +79,15 @@ struct xnupost_test bsd_post_tests[] = {
 #if __ARM_PAN_AVAILABLE__
 	XNUPOST_TEST_CONFIG_BASIC(arm64_late_pan_test),
 #endif
+#endif /* !KASAN */
 	XNUPOST_TEST_CONFIG_BASIC(kalloc_test),
 	XNUPOST_TEST_CONFIG_BASIC(ipi_test),
 #if HAS_TWO_STAGE_SPR_LOCK
 	XNUPOST_TEST_CONFIG_BASIC(arm64_spr_lock_test),
 #endif
+#if !KASAN
 	XNUPOST_TEST_CONFIG_BASIC(copyio_test),
+#endif /* KASAN */
 };
 
 uint32_t bsd_post_tests_count = sizeof(bsd_post_tests) / sizeof(xnupost_test_data_t);

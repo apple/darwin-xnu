@@ -400,6 +400,13 @@ extern void             thread_call_setup(
 	thread_call_func_t              func,
 	thread_call_param_t             param0);
 
+extern void             thread_call_setup_with_options(
+	thread_call_t                   call,
+	thread_call_func_t              func,
+	thread_call_param_t             param0,
+	thread_call_priority_t          pri,
+	thread_call_options_t           options);
+
 extern void             thread_call_delayed_timer_rescan_all(void);
 extern uint64_t         thread_call_get_armed_deadline(thread_call_t call);
 

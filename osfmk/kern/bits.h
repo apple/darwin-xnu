@@ -312,8 +312,16 @@ bitmap_first(bitmap_t *map, uint nbits)
 inline static void
 bitmap_not(bitmap_t *out, const bitmap_t *in, uint nbits)
 {
-	for (uint i = 0; i <= bitmap_index(nbits - 1); i++) {
+	uint i;
+
+	for (i = 0; i < bitmap_index(nbits - 1); i++) {
 		out[i] = ~in[i];
+	}
+
+	uint nbits_complete = i * 64;
+
+	if (nbits > nbits_complete) {
+		out[i] = ~in[i] & mask(nbits - nbits_complete);
 	}
 }
 
@@ -328,8 +336,16 @@ bitmap_and(bitmap_t *out, const bitmap_t *in1, const bitmap_t *in2, uint nbits)
 inline static void
 bitmap_and_not(bitmap_t *out, const bitmap_t *in1, const bitmap_t *in2, uint nbits)
 {
-	for (uint i = 0; i <= bitmap_index(nbits - 1); i++) {
+	uint i;
+
+	for (i = 0; i < bitmap_index(nbits - 1); i++) {
 		out[i] = in1[i] & ~in2[i];
+	}
+
+	uint nbits_complete = i * 64;
+
+	if (nbits > nbits_complete) {
+		out[i] = (in1[i] & ~in2[i]) & mask(nbits - nbits_complete);
 	}
 }
 

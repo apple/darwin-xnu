@@ -51,10 +51,8 @@
 #include <sys/kern_memorystatus.h>
 
 /* Mutex for global system override state */
-static lck_mtx_t        sys_override_lock;
-static lck_grp_t        *sys_override_mtx_grp;
-static lck_attr_t       *sys_override_mtx_attr;
-static lck_grp_attr_t   *sys_override_mtx_grp_attr;
+static LCK_GRP_DECLARE(sys_override_mtx_grp, "system_override");
+static LCK_MTX_DECLARE(sys_override_lock, &sys_override_mtx_grp);
 
 /*
  * Assertion counts for system properties (add new ones for each new mechanism)
@@ -87,26 +85,12 @@ static int64_t          fast_jetsam_assert_cnt;
 /* Wait Channel for system override */
 static uint64_t         sys_override_wait;
 
-/* Global variable to indicate if system_override is enabled */
-int                     sys_override_enabled;
-
 /* Helper routines */
 static void system_override_begin(uint64_t flags);
 static void system_override_end(uint64_t flags);
 static void system_override_abort(uint64_t flags);
 static void system_override_callouts(uint64_t flags, boolean_t enable_override);
 static __attribute__((noinline)) int PROCESS_OVERRIDING_SYSTEM_DEFAULTS(uint64_t timeout);
-
-void
-init_system_override()
-{
-	sys_override_mtx_grp_attr = lck_grp_attr_alloc_init();
-	sys_override_mtx_grp = lck_grp_alloc_init("system_override", sys_override_mtx_grp_attr);
-	sys_override_mtx_attr = lck_attr_alloc_init();
-	lck_mtx_init(&sys_override_lock, sys_override_mtx_grp, sys_override_mtx_attr);
-	io_throttle_assert_cnt = cpu_throttle_assert_cnt = fast_jetsam_assert_cnt = 0;
-	sys_override_enabled = 1;
-}
 
 /* system call implementation */
 int
@@ -123,12 +107,6 @@ system_override(__unused struct proc *p, struct system_override_args * uap, __un
 
 	/* Check to see if sane flags are specified. */
 	if ((flags & ~SYS_OVERRIDE_FLAGS_MASK) != 0) {
-		error = EINVAL;
-		goto out;
-	}
-
-	/* Make sure that the system override syscall has been initialized */
-	if (!sys_override_enabled) {
 		error = EINVAL;
 		goto out;
 	}

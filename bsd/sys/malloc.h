@@ -144,6 +144,12 @@ ZONE_VIEW_DECLARE(ZV_NAMEI);
 
 #define M_LAST          129     /* Must be last type + 1 */
 
+/*
+ * If you need accounting consider using
+ * KALLOC_HEAP_DEFINE to define a view.
+ */
+#define KM_SHM          KHEAP_DEFAULT
+
 #define MALLOC(space, cast, size, type, flags)                      \
 	({ VM_ALLOC_SITE_STATIC(0, 0);                              \
 	(space) = (cast)__MALLOC(size, type, flags, &site); })

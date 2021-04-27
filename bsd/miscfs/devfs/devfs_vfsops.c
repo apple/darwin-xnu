@@ -495,7 +495,7 @@ devfs_kernel_mount(char * mntname)
 	vfs_context_t ctx = vfs_context_kernel();
 	char fsname[] = "devfs";
 
-	error = kernel_mount(fsname, NULLVP, NULLVP, mntname, NULL, 0, MNT_DONTBROWSE, KERNEL_MOUNT_NOAUTH, ctx);
+	error = kernel_mount(fsname, NULLVP, NULLVP, mntname, NULL, 0, MNT_DONTBROWSE, KERNEL_MOUNT_NOAUTH | KERNEL_MOUNT_DEVFS, ctx);
 	if (error) {
 		printf("devfs_kernel_mount: kernel_mount failed: %d\n", error);
 		return error;

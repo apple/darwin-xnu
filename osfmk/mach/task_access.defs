@@ -56,4 +56,12 @@ routine find_code_signature(
 		task_access_port			: mach_port_t;
 		new_pid					: int32_t);
 
+routine check_task_access_with_flavor(
+		task_access_port			: mach_port_t;
+		calling_pid				: int32_t;
+		calling_gid				: uint32_t;
+		target_pid				: int32_t;
+		flavor                  : mach_task_flavor_t;
+		ServerAuditToken	caller_cred 	: audit_token_t);
+
 /* vim: set ft=c : */

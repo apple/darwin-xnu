@@ -153,7 +153,10 @@ rtclock_init(void)
 	cpu_data_t * cdp;
 
 	clock_timebase_init();
-	ml_init_lock_timeout();
+
+	if (cpu_number() == master_cpu) {
+		ml_init_lock_timeout();
+	}
 
 	cdp = getCpuDatap();
 

@@ -75,7 +75,6 @@
 #include <mach/processor_server.h>
 
 #include <kern/kern_types.h>
-#include <kern/counters.h>
 #include <kern/cpu_data.h>
 #include <kern/cpu_quiesce.h>
 #include <kern/ipc_host.h>
@@ -174,8 +173,6 @@ host_reboot(
 	if (host_priv == HOST_PRIV_NULL) {
 		return KERN_INVALID_HOST;
 	}
-
-	assert(host_priv == &realhost);
 
 #if DEVELOPMENT || DEBUG
 	if (options & HOST_REBOOT_DEBUGGER) {
@@ -465,8 +462,6 @@ host_get_boot_info(
 	if (host_priv == HOST_PRIV_NULL) {
 		return KERN_INVALID_HOST;
 	}
-
-	assert(host_priv == &realhost);
 
 	/*
 	 * Copy first operator string terminated by '\0' followed by

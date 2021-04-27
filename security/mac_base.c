@@ -122,7 +122,7 @@
 #if CONFIG_MACF
 SYSCTL_NODE(, OID_AUTO, security, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
     "Security Controls");
-SYSCTL_NODE(_security, OID_AUTO, mac, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
+SYSCTL_EXTENSIBLE_NODE(_security, OID_AUTO, mac, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
     "TrustedBSD MAC policy controls");
 
 /*
@@ -240,7 +240,8 @@ SYSCTL_UINT(_security_mac, OID_AUTO, vnode_enforce, SECURITY_MAC_CTLFLAGS,
  * For a few special operations involving a change to the list of
  * active policies, the mtx itself must be held.
  */
-static lck_mtx_t *mac_policy_mtx;
+static LCK_GRP_DECLARE(mac_lck_grp, "MAC lock");
+static LCK_MTX_DECLARE(mac_policy_mtx, &mac_lck_grp);
 
 /*
  * Policy list array allocation chunk size. Each entry holds a pointer.
@@ -269,11 +270,11 @@ struct mac_label_element_list_t mac_static_label_element_list;
 static __inline void
 mac_policy_grab_exclusive(void)
 {
-	lck_mtx_lock(mac_policy_mtx);
+	lck_mtx_lock(&mac_policy_mtx);
 	while (mac_policy_busy != 0) {
-		lck_mtx_sleep(mac_policy_mtx, LCK_SLEEP_UNLOCK,
+		lck_mtx_sleep(&mac_policy_mtx, LCK_SLEEP_UNLOCK,
 		    (event_t)&mac_policy_busy, THREAD_UNINT);
-		lck_mtx_lock(mac_policy_mtx);
+		lck_mtx_lock(&mac_policy_mtx);
 	}
 }
 
@@ -282,16 +283,16 @@ mac_policy_release_exclusive(void)
 {
 	KASSERT(mac_policy_busy == 0,
 	    ("mac_policy_release_exclusive(): not exclusive"));
-	lck_mtx_unlock(mac_policy_mtx);
+	lck_mtx_unlock(&mac_policy_mtx);
 	thread_wakeup((event_t) &mac_policy_busy);
 }
 
 void
 mac_policy_list_busy(void)
 {
-	lck_mtx_lock(mac_policy_mtx);
+	lck_mtx_lock(&mac_policy_mtx);
 	mac_policy_busy++;
-	lck_mtx_unlock(mac_policy_mtx);
+	lck_mtx_unlock(&mac_policy_mtx);
 }
 
 int
@@ -303,27 +304,27 @@ mac_policy_list_conditional_busy(void)
 		return 0;
 	}
 
-	lck_mtx_lock(mac_policy_mtx);
+	lck_mtx_lock(&mac_policy_mtx);
 	if (mac_policy_list.numloaded > mac_policy_list.staticmax) {
 		mac_policy_busy++;
 		ret = 1;
 	} else {
 		ret = 0;
 	}
-	lck_mtx_unlock(mac_policy_mtx);
+	lck_mtx_unlock(&mac_policy_mtx);
 	return ret;
 }
 
 void
 mac_policy_list_unbusy(void)
 {
-	lck_mtx_lock(mac_policy_mtx);
+	lck_mtx_lock(&mac_policy_mtx);
 	mac_policy_busy--;
 	KASSERT(mac_policy_busy >= 0, ("MAC_POLICY_LIST_LOCK"));
 	if (mac_policy_busy == 0) {
 		thread_wakeup(&mac_policy_busy);
 	}
-	lck_mtx_unlock(mac_policy_mtx);
+	lck_mtx_unlock(&mac_policy_mtx);
 }
 
 /*
@@ -332,10 +333,6 @@ mac_policy_list_unbusy(void)
 void
 mac_policy_init(void)
 {
-	lck_grp_attr_t *mac_lck_grp_attr;
-	lck_attr_t *mac_lck_attr;
-	lck_grp_t *mac_lck_grp;
-
 	mac_policy_list.numloaded = 0;
 	mac_policy_list.max = MAC_POLICY_LIST_CHUNKSIZE;
 	mac_policy_list.maxindex = 0;
@@ -353,15 +350,6 @@ mac_policy_init(void)
 
 	LIST_INIT(&mac_label_element_list);
 	LIST_INIT(&mac_static_label_element_list);
-
-	mac_lck_grp_attr = lck_grp_attr_alloc_init();
-	mac_lck_grp = lck_grp_alloc_init("MAC lock", mac_lck_grp_attr);
-	mac_lck_attr = lck_attr_alloc_init();
-	lck_attr_setdefault(mac_lck_attr);
-	mac_policy_mtx = lck_mtx_alloc_init(mac_lck_grp, mac_lck_attr);
-	lck_attr_free(mac_lck_attr);
-	lck_grp_attr_free(mac_lck_grp_attr);
-	lck_grp_free(mac_lck_grp);
 }
 
 /* Function pointer set up for loading security extensions.

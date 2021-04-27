@@ -74,14 +74,16 @@ void mac_policy_init(void);
 void mac_policy_initmach(void);
 
 /* tasks */
-int	mac_task_check_expose_task(struct task *t);
-
+int	mac_task_check_expose_task(struct task *t, mach_task_flavor_t flavor);
+int	mac_task_check_task_id_token_get_task(struct task *t, mach_task_flavor_t flavor);
 int	mac_task_check_set_host_special_port(struct task *task,
 	    int id, struct ipc_port *port);
 int	mac_task_check_set_host_exception_port(struct task *task,
 	    unsigned int exception);
 int	mac_task_check_set_host_exception_ports(struct task *task,
 	    unsigned int exception_mask);
+int mac_task_check_get_movable_control_port(void);
+int mac_task_check_dyld_process_info_notify_register(void);
 
 /* See rdar://problem/58989880 */
 #ifndef bitstr_test
@@ -92,7 +94,7 @@ typedef int (*mac_task_mach_filter_cbfunc_t)(struct proc *bsdinfo, int num);
 typedef int (*mac_task_kobj_filter_cbfunc_t)(struct proc *bsdinfo, int msgid, int index);
 extern mac_task_mach_filter_cbfunc_t mac_task_mach_trap_evaluate;
 extern mac_task_kobj_filter_cbfunc_t mac_task_kobj_msg_evaluate;
-extern int mach_trap_count;
+extern const int mach_trap_count;
 extern int mach_kobj_count;
 
 void mac_task_set_mach_filter_mask(struct task *task, uint8_t *maskptr);

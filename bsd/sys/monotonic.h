@@ -176,7 +176,7 @@ __BEGIN_DECLS
 #define MT_KDBG_TMPTH_START(CODE) MT_KDBG_TMPTH_(CODE, DBG_FUNC_START)
 #define MT_KDBG_TMPTH_END(CODE) MT_KDBG_TMPTH_(CODE, DBG_FUNC_END)
 
-extern lck_grp_t * mt_lock_grp;
+extern lck_grp_t mt_lock_grp;
 
 int mt_dev_init(void);
 

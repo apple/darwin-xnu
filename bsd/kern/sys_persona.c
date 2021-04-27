@@ -433,8 +433,8 @@ kpersona_find_syscall(user_addr_t infop, user_addr_t idp, user_addr_t idlenp)
 	login = kinfo.persona_name[0] ? kinfo.persona_name : NULL;
 
 	if (u_idlen > 0) {
-		MALLOC(persona, struct persona **, sizeof(*persona) * u_idlen,
-		    M_TEMP, M_WAITOK | M_ZERO);
+		persona = kheap_alloc(KHEAP_TEMP, sizeof(*persona) * u_idlen,
+		    Z_WAITOK | Z_ZERO);
 		if (!persona) {
 			error = ENOMEM;
 			goto out;
@@ -465,7 +465,7 @@ out:
 		for (size_t i = 0; i < u_idlen; i++) {
 			persona_put(persona[i]);
 		}
-		FREE(persona, M_TEMP);
+		kheap_free(KHEAP_TEMP, persona, sizeof(*persona) * u_idlen);
 	}
 
 	(void)copyout(&k_idlen, idlenp, sizeof(u_idlen));

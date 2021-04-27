@@ -69,7 +69,6 @@
 #include <debug.h>
 #include <mach_assert.h>
 #include <mach_pagemap.h>
-#include <task_swapper.h>
 
 #include <mach/kern_return.h>
 #include <mach/boolean.h>
@@ -430,6 +429,9 @@ extern
 vm_object_t     compressor_object;      /* the single compressor object */
 
 extern
+vm_object_t     retired_pages_object;   /* holds VM pages which should never be used */
+
+extern
 unsigned int    vm_object_absent_max;   /* maximum number of absent pages
                                          *  at a time for each object */
 
@@ -604,24 +606,6 @@ __private_extern__ vm_object_t  vm_object_allocate(vm_object_size_t size);
 __private_extern__ void    _vm_object_allocate(vm_object_size_t size,
     vm_object_t object);
 
-#if     TASK_SWAPPER
-
-__private_extern__ void vm_object_res_reference(
-	vm_object_t             object);
-__private_extern__ void vm_object_res_deallocate(
-	vm_object_t             object);
-#define VM_OBJ_RES_INCR(object) (object)->res_count++
-#define VM_OBJ_RES_DECR(object) (object)->res_count--
-
-#else   /* TASK_SWAPPER */
-
-#define VM_OBJ_RES_INCR(object)
-#define VM_OBJ_RES_DECR(object)
-#define vm_object_res_reference(object)
-#define vm_object_res_deallocate(object)
-
-#endif  /* TASK_SWAPPER */
-
 #define vm_object_reference_locked(object)              \
 	MACRO_BEGIN                                     \
 	vm_object_t RLObject = (object);                \
@@ -629,19 +613,16 @@ __private_extern__ void vm_object_res_deallocate(
 	assert((RLObject)->ref_count > 0);              \
 	(RLObject)->ref_count++;                        \
 	assert((RLObject)->ref_count > 1);              \
-	vm_object_res_reference(RLObject);              \
 	MACRO_END
 
 
-#define vm_object_reference_shared(object)                              \
-	MACRO_BEGIN                                                     \
-	vm_object_t RLObject = (object);                                \
-	vm_object_lock_assert_shared(object);                           \
-	assert((RLObject)->ref_count > 0);                              \
+#define vm_object_reference_shared(object)              \
+	MACRO_BEGIN                                     \
+	vm_object_t RLObject = (object);                \
+	vm_object_lock_assert_shared(object);           \
+	assert((RLObject)->ref_count > 0);              \
 	OSAddAtomic(1, &(RLObject)->ref_count);         \
-	assert((RLObject)->ref_count > 0);                              \
-	/* XXX we would need an atomic version of the following ... */  \
-	vm_object_res_reference(RLObject);                              \
+	assert((RLObject)->ref_count > 0);              \
 	MACRO_END
 
 

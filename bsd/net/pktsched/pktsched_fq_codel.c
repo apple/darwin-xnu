@@ -29,13 +29,41 @@
 #include <sys/types.h>
 #include <sys/param.h>
 #include <kern/zalloc.h>
+#include <net/ethernet.h>
 #include <net/if_var.h>
 #include <net/if.h>
 #include <net/classq/classq.h>
 #include <net/classq/classq_fq_codel.h>
 #include <net/pktsched/pktsched_fq_codel.h>
+#include <os/log.h>
+
+#define FQ_CODEL_DEFAULT_QUANTUM 1500
+
+#define FQ_CODEL_QUANTUM_BK_SYS(_q)    (_q)
+#define FQ_CODEL_QUANTUM_BK(_q)        (_q)
+#define FQ_CODEL_QUANTUM_BE(_q)        (_q)
+#define FQ_CODEL_QUANTUM_RD(_q)        (_q)
+#define FQ_CODEL_QUANTUM_OAM(_q)       (_q)
+#define FQ_CODEL_QUANTUM_AV(_q)        (_q * 2)
+#define FQ_CODEL_QUANTUM_RV(_q)        (_q * 2)
+#define FQ_CODEL_QUANTUM_VI(_q)        (_q * 2)
+#define FQ_CODEL_QUANTUM_VO(_q)        ((_q * 2) / 5)
+#define FQ_CODEL_QUANTUM_CTL(_q)       ((_q * 2) / 5)
+
+#define FQ_CODEL_DRR_MAX_BK_SYS    2
+#define FQ_CODEL_DRR_MAX_BK        2
+#define FQ_CODEL_DRR_MAX_BE        4
+#define FQ_CODEL_DRR_MAX_RD        4
+#define FQ_CODEL_DRR_MAX_OAM       4
+#define FQ_CODEL_DRR_MAX_AV        6
+#define FQ_CODEL_DRR_MAX_RV        6
+#define FQ_CODEL_DRR_MAX_VI        6
+#define FQ_CODEL_DRR_MAX_VO        8
+#define FQ_CODEL_DRR_MAX_CTL       8
 
 static ZONE_DECLARE(fq_if_zone, "pktsched_fq_if", sizeof(fq_if_t), ZC_ZFREE_CLEARMEM);
+
+typedef STAILQ_HEAD(, flowq) flowq_dqlist_t;
 
 static fq_if_t *fq_if_alloc(struct ifnet *, classq_pkt_type_t);
 static void fq_if_destroy(fq_if_t *fqs);
@@ -43,7 +71,7 @@ static void fq_if_classq_init(fq_if_t *fqs, uint32_t priority,
     uint16_t quantum, uint32_t drr_max, uint32_t svc_class);
 static void fq_if_dequeue(fq_if_t *, fq_if_classq_t *, uint32_t,
     int64_t, classq_pkt_t *, classq_pkt_t *, uint32_t *,
-    uint32_t *, boolean_t drvmgmt);
+    uint32_t *, flowq_dqlist_t *, boolean_t drvmgmt);
 void fq_if_stat_sc(fq_if_t *fqs, cqrq_stat_sc_t *stat);
 static void fq_if_purge(fq_if_t *);
 static void fq_if_purge_classq(fq_if_t *, fq_if_classq_t *);
@@ -51,7 +79,7 @@ static void fq_if_purge_flow(fq_if_t *, fq_t *, u_int32_t *, u_int32_t *);
 static void fq_if_empty_new_flow(fq_t *fq, fq_if_classq_t *fq_cl,
     bool add_to_old);
 static void fq_if_empty_old_flow(fq_if_t *fqs, fq_if_classq_t *fq_cl,
-    fq_t *fq, bool remove_hash);
+    fq_t *fq, bool remove_hash, bool destroy);
 
 #define FQ_IF_FLOW_HASH_ID(_flowid_) \
 	(((_flowid_) >> FQ_IF_HASH_TAG_SHIFT) & FQ_IF_HASH_TAG_MASK)
@@ -75,8 +103,8 @@ fq_if_append_mbuf(classq_pkt_t *pkt, classq_pkt_t *next_pkt)
 
 static boolean_t
 fq_getq_flow_mbuf(fq_if_t *fqs, fq_if_classq_t *fq_cl, fq_t *fq,
-    int64_t byte_limit, u_int32_t pkt_limit, classq_pkt_t *top,
-    classq_pkt_t *last, u_int32_t *byte_cnt, u_int32_t *pkt_cnt,
+    int64_t byte_limit, u_int32_t pkt_limit, classq_pkt_t *head,
+    classq_pkt_t *tail, u_int32_t *byte_cnt, u_int32_t *pkt_cnt,
     boolean_t *qempty, u_int32_t pflags)
 {
 	u_int32_t plen;
@@ -95,15 +123,15 @@ fq_getq_flow_mbuf(fq_if_t *fqs, fq_if_classq_t *fq_cl, fq_t *fq,
 		fq->fq_deficit -= plen;
 		pkt.pktsched_pkt_mbuf->m_pkthdr.pkt_flags |= pflags;
 
-		if (top->cp_mbuf == NULL) {
-			*top = pkt.pktsched_pkt;
+		if (head->cp_mbuf == NULL) {
+			*head = pkt.pktsched_pkt;
 		} else {
-			ASSERT(last->cp_mbuf != NULL);
-			ASSERT(last->cp_mbuf->m_nextpkt == NULL);
-			last->cp_mbuf->m_nextpkt = pkt.pktsched_pkt_mbuf;
+			ASSERT(tail->cp_mbuf != NULL);
+			ASSERT(tail->cp_mbuf->m_nextpkt == NULL);
+			tail->cp_mbuf->m_nextpkt = pkt.pktsched_pkt_mbuf;
 		}
-		*last = pkt.pktsched_pkt;
-		last->cp_mbuf->m_nextpkt = NULL;
+		*tail = pkt.pktsched_pkt;
+		tail->cp_mbuf->m_nextpkt = NULL;
 		fq_cl->fcl_stat.fcl_dequeue++;
 		fq_cl->fcl_stat.fcl_dequeue_bytes += plen;
 		*pkt_cnt += 1;
@@ -321,6 +349,11 @@ fq_if_enqueue_classq(struct ifclassq *ifq, classq_pkt_t *head,
 	IFCQ_INC_BYTES(ifq, bytes);
 	IFCQ_UNLOCK(ifq);
 done:
+#if DEBUG || DEVELOPMENT
+	if (__improbable((ret == EQFULL) && (ifclassq_flow_control_adv == 0))) {
+		ret = 0;
+	}
+#endif /* DEBUG || DEVELOPMENT */
 	return ret;
 }
 
@@ -344,9 +377,66 @@ fq_if_dequeue_sc_classq(struct ifclassq *ifq, mbuf_svc_class_t svc,
 	fq_cl = &fqs->fqs_classq[pri];
 
 	fq_if_dequeue(fqs, fq_cl, 1, CLASSQ_DEQUEUE_MAX_BYTE_LIMIT,
-	    pkt, NULL, &total_pktcnt, &total_bytecnt, TRUE);
+	    pkt, NULL, &total_pktcnt, &total_bytecnt, NULL, TRUE);
 
 	IFCQ_XMIT_ADD(ifq, total_pktcnt, total_bytecnt);
+}
+
+static inline void
+fq_dqlist_add(flowq_dqlist_t *fq_dqlist_head, fq_t *fq)
+{
+	ASSERT(fq->fq_dq_head.cp_mbuf == NULL);
+	ASSERT(!fq->fq_in_dqlist);
+	STAILQ_INSERT_TAIL(fq_dqlist_head, fq, fq_dqlink);
+	fq->fq_in_dqlist = true;
+}
+
+static inline void
+fq_dqlist_remove(flowq_dqlist_t *fq_dqlist_head, fq_t *fq, classq_pkt_t *head,
+    classq_pkt_t *tail)
+{
+	ASSERT(fq->fq_in_dqlist);
+	if (fq->fq_dq_head.cp_mbuf == NULL) {
+		goto done;
+	}
+
+	if (head->cp_mbuf == NULL) {
+		*head = fq->fq_dq_head;
+	} else {
+		ASSERT(tail->cp_mbuf != NULL);
+
+		switch (fq->fq_ptype) {
+		case QP_MBUF:
+			ASSERT(tail->cp_mbuf->m_nextpkt == NULL);
+			tail->cp_mbuf->m_nextpkt = fq->fq_dq_head.cp_mbuf;
+			ASSERT(fq->fq_dq_tail.cp_mbuf->m_nextpkt == NULL);
+			break;
+		default:
+			VERIFY(0);
+			/* NOTREACHED */
+			__builtin_unreachable();
+		}
+	}
+	*tail = fq->fq_dq_tail;
+done:
+	STAILQ_REMOVE(fq_dqlist_head, fq, flowq, fq_dqlink);
+	CLASSQ_PKT_INIT(&fq->fq_dq_head);
+	CLASSQ_PKT_INIT(&fq->fq_dq_tail);
+	fq->fq_in_dqlist = false;
+	if (fq->fq_flags & FQF_DESTROYED) {
+		fq_destroy(fq);
+	}
+}
+
+static inline void
+fq_dqlist_get_packet_list(flowq_dqlist_t *fq_dqlist_head, classq_pkt_t *head,
+    classq_pkt_t *tail)
+{
+	fq_t *fq, *tfq;
+
+	STAILQ_FOREACH_SAFE(fq, fq_dqlist_head, fq_dqlink, tfq) {
+		fq_dqlist_remove(fq_dqlist_head, fq, head, tail);
+	}
 }
 
 int
@@ -355,11 +445,12 @@ fq_if_dequeue_classq_multi(struct ifclassq *ifq, u_int32_t maxpktcnt,
     classq_pkt_t *last_packet, u_int32_t *retpktcnt,
     u_int32_t *retbytecnt)
 {
-	u_int32_t pktcnt = 0, bytecnt = 0, total_pktcnt = 0, total_bytecnt = 0;
+	uint32_t total_pktcnt = 0, total_bytecnt = 0;
 	classq_pkt_t first = CLASSQ_PKT_INITIALIZER(fisrt);
 	classq_pkt_t last = CLASSQ_PKT_INITIALIZER(last);
 	classq_pkt_t tmp = CLASSQ_PKT_INITIALIZER(tmp);
 	fq_if_append_pkt_t append_pkt;
+	flowq_dqlist_t fq_dqlist_head;
 	fq_if_classq_t *fq_cl;
 	fq_if_t *fqs;
 	int pri;
@@ -367,6 +458,7 @@ fq_if_dequeue_classq_multi(struct ifclassq *ifq, u_int32_t maxpktcnt,
 	IFCQ_LOCK_ASSERT_HELD(ifq);
 
 	fqs = (fq_if_t *)ifq->ifcq_disc;
+	STAILQ_INIT(&fq_dqlist_head);
 
 	switch (fqs->fqs_ptype) {
 	case QP_MBUF:
@@ -381,7 +473,8 @@ fq_if_dequeue_classq_multi(struct ifclassq *ifq, u_int32_t maxpktcnt,
 	}
 
 	for (;;) {
-		classq_pkt_t top = CLASSQ_PKT_INITIALIZER(top);
+		uint32_t pktcnt = 0, bytecnt = 0;
+		classq_pkt_t head = CLASSQ_PKT_INITIALIZER(head);
 		classq_pkt_t tail = CLASSQ_PKT_INITIALIZER(tail);
 
 		if (fqs->fqs_bitmaps[FQ_IF_ER] == 0 &&
@@ -419,26 +512,22 @@ fq_if_dequeue_classq_multi(struct ifclassq *ifq, u_int32_t maxpktcnt,
 			}
 		}
 		fq_if_dequeue(fqs, fq_cl, (maxpktcnt - total_pktcnt),
-		    (maxbytecnt - total_bytecnt), &top, &tail, &pktcnt,
-		    &bytecnt, FALSE);
-		if (top.cp_mbuf != NULL) {
-			ASSERT(pktcnt > 0 && bytecnt > 0);
+		    (maxbytecnt - total_bytecnt), &head, &tail, &pktcnt,
+		    &bytecnt, &fq_dqlist_head, FALSE);
+		if (head.cp_mbuf != NULL) {
+			ASSERT(STAILQ_EMPTY(&fq_dqlist_head));
 			if (first.cp_mbuf == NULL) {
-				first = top;
-				total_pktcnt = pktcnt;
-				total_bytecnt = bytecnt;
+				first = head;
 			} else {
 				ASSERT(last.cp_mbuf != NULL);
-				append_pkt(&last, &top);
-				total_pktcnt += pktcnt;
-				total_bytecnt += bytecnt;
+				append_pkt(&last, &head);
 			}
 			last = tail;
 			append_pkt(&last, &tmp);
-			fq_cl->fcl_budget -= bytecnt;
-			pktcnt = 0;
-			bytecnt = 0;
 		}
+		fq_cl->fcl_budget -= bytecnt;
+		total_pktcnt += pktcnt;
+		total_bytecnt += bytecnt;
 
 		/*
 		 * If the class has exceeded the budget but still has data
@@ -463,6 +552,8 @@ state_change:
 			break;
 		}
 	}
+
+	fq_dqlist_get_packet_list(&fq_dqlist_head, &first, &last);
 
 	if (__probable(first_packet != NULL)) {
 		*first_packet = first;
@@ -493,6 +584,7 @@ fq_if_dequeue_sc_classq_multi(struct ifclassq *ifq, mbuf_svc_class_t svc,
 	classq_pkt_t first = CLASSQ_PKT_INITIALIZER(fisrt);
 	classq_pkt_t last = CLASSQ_PKT_INITIALIZER(last);
 	fq_if_append_pkt_t append_pkt;
+	flowq_dqlist_t fq_dqlist_head;
 
 	switch (fqs->fqs_ptype) {
 	case QP_MBUF:
@@ -506,6 +598,7 @@ fq_if_dequeue_sc_classq_multi(struct ifclassq *ifq, mbuf_svc_class_t svc,
 		__builtin_unreachable();
 	}
 
+	STAILQ_INIT(&fq_dqlist_head);
 	pri = fq_if_service_to_priority(fqs, svc);
 	fq_cl = &fqs->fqs_classq[pri];
 	/*
@@ -515,27 +608,27 @@ fq_if_dequeue_sc_classq_multi(struct ifclassq *ifq, mbuf_svc_class_t svc,
 	 */
 	while (total_pktcnt < maxpktcnt && total_bytecnt < maxbytecnt &&
 	    fq_cl->fcl_stat.fcl_pkt_cnt > 0) {
-		classq_pkt_t top = CLASSQ_PKT_INITIALIZER(top);
+		classq_pkt_t head = CLASSQ_PKT_INITIALIZER(head);
 		classq_pkt_t tail = CLASSQ_PKT_INITIALIZER(tail);
 		u_int32_t pktcnt = 0, bytecnt = 0;
 
 		fq_if_dequeue(fqs, fq_cl, (maxpktcnt - total_pktcnt),
-		    (maxbytecnt - total_bytecnt), &top, &tail, &pktcnt,
-		    &bytecnt, TRUE);
-		if (top.cp_mbuf != NULL) {
+		    (maxbytecnt - total_bytecnt), &head, &tail, &pktcnt,
+		    &bytecnt, &fq_dqlist_head, TRUE);
+		if (head.cp_mbuf != NULL) {
 			if (first.cp_mbuf == NULL) {
-				first = top;
-				total_pktcnt = pktcnt;
-				total_bytecnt = bytecnt;
+				first = head;
 			} else {
 				ASSERT(last.cp_mbuf != NULL);
-				append_pkt(&last, &top);
-				total_pktcnt += pktcnt;
-				total_bytecnt += bytecnt;
+				append_pkt(&last, &head);
 			}
 			last = tail;
 		}
+		total_pktcnt += pktcnt;
+		total_bytecnt += bytecnt;
 	}
+
+	fq_dqlist_get_packet_list(&fq_dqlist_head, &first, &last);
 
 	if (__probable(first_packet != NULL)) {
 		*first_packet = first;
@@ -581,10 +674,10 @@ fq_if_purge_flow(fq_if_t *fqs, fq_t *fq, u_int32_t *pktsp,
 	if (fq->fq_flags & FQF_NEW_FLOW) {
 		fq_if_empty_new_flow(fq, fq_cl, false);
 	} else if (fq->fq_flags & FQF_OLD_FLOW) {
-		fq_if_empty_old_flow(fqs, fq_cl, fq, false);
+		fq_if_empty_old_flow(fqs, fq_cl, fq, false, true);
 	}
 
-	fq_if_destroy_flow(fqs, fq_cl, fq);
+	fq_if_destroy_flow(fqs, fq_cl, fq, true);
 
 	if (FQ_IF_CLASSQ_IDLE(fq_cl)) {
 		int i;
@@ -663,6 +756,78 @@ fq_if_purge_sc(fq_if_t *fqs, cqrq_purge_sc_t *req)
 	}
 }
 
+static uint16_t
+fq_if_calc_quantum(struct ifnet *ifp)
+{
+	uint16_t quantum;
+
+	switch (ifp->if_family) {
+	case IFNET_FAMILY_ETHERNET:
+		VERIFY((ifp->if_mtu + ETHER_HDR_LEN) <= UINT16_MAX);
+		quantum = (uint16_t)ifp->if_mtu + ETHER_HDR_LEN;
+		break;
+
+	case IFNET_FAMILY_CELLULAR:
+	case IFNET_FAMILY_IPSEC:
+	case IFNET_FAMILY_UTUN:
+		VERIFY(ifp->if_mtu <= UINT16_MAX);
+		quantum = (uint16_t)ifp->if_mtu;
+		break;
+
+	default:
+		quantum = FQ_CODEL_DEFAULT_QUANTUM;
+		break;
+	}
+
+	/*
+	 * XXX: Skywalk native interface doesn't support HW TSO offload.
+	 */
+	if (((ifp->if_eflags & IFEF_SKYWALK_NATIVE) == 0) &&
+	    ((ifp->if_hwassist & IFNET_TSOF) != 0)) {
+		VERIFY(ifp->if_tso_v4_mtu <= UINT16_MAX);
+		VERIFY(ifp->if_tso_v6_mtu <= UINT16_MAX);
+		quantum = (uint16_t)MAX(ifp->if_tso_v4_mtu, ifp->if_tso_v6_mtu);
+		quantum = (quantum != 0) ? quantum : IF_MAXMTU;
+	}
+
+	quantum = MAX(FQ_CODEL_DEFAULT_QUANTUM, quantum);
+#if DEBUG || DEVELOPMENT
+	quantum = (fq_codel_quantum != 0) ? fq_codel_quantum : quantum;
+#endif /* DEBUG || DEVELOPMENT */
+	return quantum;
+}
+
+static void
+fq_if_mtu_update(fq_if_t *fqs)
+{
+#define _FQ_CLASSQ_UPDATE_QUANTUM(_fqs, _s, _q)    \
+	(_fqs)->fqs_classq[FQ_IF_ ## _s ## _INDEX].fcl_quantum = \
+	FQ_CODEL_QUANTUM_ ## _s(_q)
+
+	uint16_t quantum;
+
+	quantum = fq_if_calc_quantum(fqs->fqs_ifq->ifcq_ifp);
+
+	if ((fqs->fqs_flags & FQS_DRIVER_MANAGED) != 0) {
+		_FQ_CLASSQ_UPDATE_QUANTUM(fqs, BK, quantum);
+		_FQ_CLASSQ_UPDATE_QUANTUM(fqs, BE, quantum);
+		_FQ_CLASSQ_UPDATE_QUANTUM(fqs, VI, quantum);
+		_FQ_CLASSQ_UPDATE_QUANTUM(fqs, VO, quantum);
+	} else {
+		_FQ_CLASSQ_UPDATE_QUANTUM(fqs, BK_SYS, quantum);
+		_FQ_CLASSQ_UPDATE_QUANTUM(fqs, BK, quantum);
+		_FQ_CLASSQ_UPDATE_QUANTUM(fqs, BE, quantum);
+		_FQ_CLASSQ_UPDATE_QUANTUM(fqs, RD, quantum);
+		_FQ_CLASSQ_UPDATE_QUANTUM(fqs, OAM, quantum);
+		_FQ_CLASSQ_UPDATE_QUANTUM(fqs, AV, quantum);
+		_FQ_CLASSQ_UPDATE_QUANTUM(fqs, RV, quantum);
+		_FQ_CLASSQ_UPDATE_QUANTUM(fqs, VI, quantum);
+		_FQ_CLASSQ_UPDATE_QUANTUM(fqs, VO, quantum);
+		_FQ_CLASSQ_UPDATE_QUANTUM(fqs, CTL, quantum);
+	}
+#undef _FQ_CLASSQ_UPDATE_QUANTUM
+}
+
 static void
 fq_if_event(fq_if_t *fqs, cqev_t ev)
 {
@@ -672,6 +837,9 @@ fq_if_event(fq_if_t *fqs, cqev_t ev)
 	case CLASSQ_EV_LINK_UP:
 	case CLASSQ_EV_LINK_DOWN:
 		fq_if_purge(fqs);
+		break;
+	case CLASSQ_EV_LINK_MTU:
+		fq_if_mtu_update(fqs);
 		break;
 	default:
 		break;
@@ -782,8 +950,14 @@ fq_if_setup_ifclassq(struct ifclassq *ifq, u_int32_t flags,
     classq_pkt_type_t ptype)
 {
 #pragma unused(flags)
+#define _FQ_CLASSQ_INIT(_fqs, _s, _q)                         \
+	fq_if_classq_init((_fqs), FQ_IF_ ## _s ## _INDEX,     \
+	FQ_CODEL_QUANTUM_ ## _s(_q), FQ_CODEL_DRR_MAX_ ## _s, \
+	MBUF_SC_ ## _s )
+
 	struct ifnet *ifp = ifq->ifcq_ifp;
 	fq_if_t *fqs = NULL;
+	uint16_t quantum;
 	int err = 0;
 
 	IFCQ_LOCK_ASSERT_HELD(ifq);
@@ -795,51 +969,39 @@ fq_if_setup_ifclassq(struct ifclassq *ifq, u_int32_t flags,
 		return ENOMEM;
 	}
 
+	quantum = fq_if_calc_quantum(ifp);
+
 	if (flags & PKTSCHEDF_QALG_DRIVER_MANAGED) {
 		fqs->fqs_flags |= FQS_DRIVER_MANAGED;
-		fq_if_classq_init(fqs, FQ_IF_BK_INDEX, 1500,
-		    2, MBUF_SC_BK);
-		fq_if_classq_init(fqs, FQ_IF_BE_INDEX, 1500,
-		    4, MBUF_SC_BE);
-		fq_if_classq_init(fqs, FQ_IF_VI_INDEX, 3000,
-		    6, MBUF_SC_VI);
-		fq_if_classq_init(fqs, FQ_IF_VO_INDEX, 600,
-		    8, MBUF_SC_VO);
+		_FQ_CLASSQ_INIT(fqs, BK, quantum);
+		_FQ_CLASSQ_INIT(fqs, BE, quantum);
+		_FQ_CLASSQ_INIT(fqs, VI, quantum);
+		_FQ_CLASSQ_INIT(fqs, VO, quantum);
 	} else {
 		/* SIG shares same INDEX with VI */
 		_CASSERT(SCIDX_SIG == SCIDX_VI);
 		_CASSERT(FQ_IF_SIG_INDEX == FQ_IF_VI_INDEX);
 
-		fq_if_classq_init(fqs, FQ_IF_BK_SYS_INDEX, 1500,
-		    2, MBUF_SC_BK_SYS);
-		fq_if_classq_init(fqs, FQ_IF_BK_INDEX, 1500,
-		    2, MBUF_SC_BK);
-		fq_if_classq_init(fqs, FQ_IF_BE_INDEX, 1500,
-		    4, MBUF_SC_BE);
-		fq_if_classq_init(fqs, FQ_IF_RD_INDEX, 1500,
-		    4, MBUF_SC_RD);
-		fq_if_classq_init(fqs, FQ_IF_OAM_INDEX, 1500,
-		    4, MBUF_SC_OAM);
-		fq_if_classq_init(fqs, FQ_IF_AV_INDEX, 3000,
-		    6, MBUF_SC_AV);
-		fq_if_classq_init(fqs, FQ_IF_RV_INDEX, 3000,
-		    6, MBUF_SC_RV);
-		fq_if_classq_init(fqs, FQ_IF_VI_INDEX, 3000,
-		    6, MBUF_SC_VI);
-		fq_if_classq_init(fqs, FQ_IF_VO_INDEX, 600,
-		    8, MBUF_SC_VO);
-		fq_if_classq_init(fqs, FQ_IF_CTL_INDEX, 600,
-		    8, MBUF_SC_CTL);
+		_FQ_CLASSQ_INIT(fqs, BK_SYS, quantum);
+		_FQ_CLASSQ_INIT(fqs, BK, quantum);
+		_FQ_CLASSQ_INIT(fqs, BE, quantum);
+		_FQ_CLASSQ_INIT(fqs, RD, quantum);
+		_FQ_CLASSQ_INIT(fqs, OAM, quantum);
+		_FQ_CLASSQ_INIT(fqs, AV, quantum);
+		_FQ_CLASSQ_INIT(fqs, RV, quantum);
+		_FQ_CLASSQ_INIT(fqs, VI, quantum);
+		_FQ_CLASSQ_INIT(fqs, VO, quantum);
+		_FQ_CLASSQ_INIT(fqs, CTL, quantum);
 	}
 
 	err = ifclassq_attach(ifq, PKTSCHEDT_FQ_CODEL, fqs);
-
 	if (err != 0) {
-		printf("%s: error from ifclassq_attach, "
+		os_log_error(OS_LOG_DEFAULT, "%s: error from ifclassq_attach, "
 		    "failed to attach fq_if: %d\n", __func__, err);
 		fq_if_destroy(fqs);
 	}
 	return err;
+#undef _FQ_CLASSQ_INIT
 }
 
 fq_t *
@@ -893,7 +1055,8 @@ fq_if_hash_pkt(fq_if_t *fqs, u_int32_t flowid, mbuf_svc_class_t svc_class,
 }
 
 void
-fq_if_destroy_flow(fq_if_t *fqs, fq_if_classq_t *fq_cl, fq_t *fq)
+fq_if_destroy_flow(fq_if_t *fqs, fq_if_classq_t *fq_cl, fq_t *fq,
+    bool destroy_now)
 {
 	u_int8_t hash_id;
 	hash_id = FQ_IF_FLOW_HASH_ID(fq->fq_flowhash);
@@ -901,7 +1064,10 @@ fq_if_destroy_flow(fq_if_t *fqs, fq_if_classq_t *fq_cl, fq_t *fq)
 	    fq_hashlink);
 	fq_cl->fcl_stat.fcl_flows_cnt--;
 	IFCQ_CONVERT_LOCK(fqs->fqs_ifq);
-	fq_destroy(fq);
+	fq->fq_flags |= FQF_DESTROYED;
+	if (destroy_now) {
+		fq_destroy(fq);
+	}
 }
 
 inline boolean_t
@@ -913,7 +1079,7 @@ fq_if_at_drop_limit(fq_if_t *fqs)
 
 static void
 fq_if_empty_old_flow(fq_if_t *fqs, fq_if_classq_t *fq_cl, fq_t *fq,
-    bool remove_hash)
+    bool remove_hash, bool destroy)
 {
 	/*
 	 * Remove the flow queue if it is empty
@@ -927,7 +1093,7 @@ fq_if_empty_old_flow(fq_if_t *fqs, fq_if_classq_t *fq_cl, fq_t *fq,
 
 	if (remove_hash) {
 		/* Remove from the hash list */
-		fq_if_destroy_flow(fqs, fq_cl, fq);
+		fq_if_destroy_flow(fqs, fq_cl, fq, destroy);
 	}
 }
 
@@ -986,7 +1152,7 @@ fq_if_drop_packet(fq_if_t *fqs)
 	if (fq_empty(fq)) {
 		fqs->fqs_large_flow = NULL;
 		if (fq->fq_flags & FQF_OLD_FLOW) {
-			fq_if_empty_old_flow(fqs, fq_cl, fq, true);
+			fq_if_empty_old_flow(fqs, fq_cl, fq, true, true);
 		} else {
 			VERIFY(fq->fq_flags & FQF_NEW_FLOW);
 			fq_if_empty_new_flow(fq, fq_cl, true);
@@ -1024,14 +1190,21 @@ fq_if_is_flow_heavy(fq_if_t *fqs, fq_t *fq)
 }
 
 boolean_t
-fq_if_add_fcentry(fq_if_t *fqs, pktsched_pkt_t *pkt, uint32_t flowid,
-    uint8_t flowsrc, fq_if_classq_t *fq_cl)
+fq_if_add_fcentry(fq_if_t *fqs, pktsched_pkt_t *pkt, uint8_t flowsrc,
+    fq_t *fq, fq_if_classq_t *fq_cl)
 {
 	struct flowadv_fcentry *fce;
 
+#if DEBUG || DEVELOPMENT
+	if (__improbable(ifclassq_flow_control_adv == 0)) {
+		os_log(OS_LOG_DEFAULT, "%s: skipped flow control", __func__);
+		return TRUE;
+	}
+#endif /* DEBUG || DEVELOPMENT */
+
 	STAILQ_FOREACH(fce, &fqs->fqs_fclist, fce_link) {
 		if ((uint8_t)fce->fce_flowsrc_type == flowsrc &&
-		    fce->fce_flowid == flowid) {
+		    fce->fce_flowid == fq->fq_flowhash) {
 			/* Already on flowcontrol list */
 			return TRUE;
 		}
@@ -1042,6 +1215,11 @@ fq_if_add_fcentry(fq_if_t *fqs, pktsched_pkt_t *pkt, uint32_t flowid,
 		/* XXX Add number of bytes in the queue */
 		STAILQ_INSERT_TAIL(&fqs->fqs_fclist, fce, fce_link);
 		fq_cl->fcl_stat.fcl_flow_control++;
+		os_log(OS_LOG_DEFAULT, "%s: num: %d, scidx: %d, flowsrc: %d, "
+		    "flow: 0x%x, iface: %s\n", __func__,
+		    fq_cl->fcl_stat.fcl_flow_control,
+		    fq->fq_sc_index, fce->fce_flowsrc_type, fq->fq_flowhash,
+		    if_name(fqs->fqs_ifq->ifcq_ifp));
 	}
 	return (fce != NULL) ? TRUE : FALSE;
 }
@@ -1061,23 +1239,30 @@ fq_if_flow_feedback(fq_if_t *fqs, fq_t *fq, fq_if_classq_t *fq_cl)
 		STAILQ_REMOVE(&fqs->fqs_fclist, fce, flowadv_fcentry,
 		    fce_link);
 		STAILQ_NEXT(fce, fce_link) = NULL;
-		flowadv_add_entry(fce);
 		fq_cl->fcl_stat.fcl_flow_feedback++;
+		os_log(OS_LOG_DEFAULT, "%s: num: %d, scidx: %d, flowsrc: %d, "
+		    "flow: 0x%x, iface: %s\n", __func__,
+		    fq_cl->fcl_stat.fcl_flow_feedback, fq->fq_sc_index,
+		    fce->fce_flowsrc_type, fce->fce_flowid,
+		    if_name(fqs->fqs_ifq->ifcq_ifp));
+		flowadv_add_entry(fce);
 	}
 	fq->fq_flags &= ~FQF_FLOWCTL_ON;
 }
 
 void
 fq_if_dequeue(fq_if_t *fqs, fq_if_classq_t *fq_cl, uint32_t pktlimit,
-    int64_t bytelimit, classq_pkt_t *top, classq_pkt_t *tail,
-    uint32_t *retpktcnt, uint32_t *retbytecnt, boolean_t drvmgmt)
+    int64_t bytelimit, classq_pkt_t *top, classq_pkt_t *bottom,
+    uint32_t *retpktcnt, uint32_t *retbytecnt, flowq_dqlist_t *fq_dqlist,
+    boolean_t drvmgmt)
 {
 	fq_t *fq = NULL, *tfq = NULL;
 	flowq_stailq_t temp_stailq;
-	u_int32_t pktcnt, bytecnt;
+	uint32_t pktcnt, bytecnt;
 	boolean_t qempty, limit_reached = FALSE;
 	classq_pkt_t last = CLASSQ_PKT_INITIALIZER(last);
 	fq_getq_flow_t fq_getq_flow_fn;
+	classq_pkt_t *head, *tail;
 
 	switch (fqs->fqs_ptype) {
 	case QP_MBUF:
@@ -1107,8 +1292,20 @@ fq_if_dequeue(fq_if_t *fqs, fq_if_classq_t *fq_cl, uint32_t pktlimit,
 		ASSERT((fq->fq_flags & (FQF_NEW_FLOW | FQF_OLD_FLOW)) ==
 		    FQF_NEW_FLOW);
 
+		if (fq_dqlist != NULL) {
+			if (!fq->fq_in_dqlist) {
+				fq_dqlist_add(fq_dqlist, fq);
+			}
+			head = &fq->fq_dq_head;
+			tail = &fq->fq_dq_tail;
+		} else {
+			ASSERT(!fq->fq_in_dqlist);
+			head = top;
+			tail = &last;
+		}
+
 		limit_reached = fq_getq_flow_fn(fqs, fq_cl, fq, bytelimit,
-		    pktlimit, top, &last, &bytecnt, &pktcnt, &qempty,
+		    pktlimit, head, tail, &bytecnt, &pktcnt, &qempty,
 		    PKTF_NEW_FLOW);
 
 		if (fq->fq_deficit <= 0 || qempty) {
@@ -1123,12 +1320,26 @@ fq_if_dequeue(fq_if_t *fqs, fq_if_classq_t *fq_cl, uint32_t pktlimit,
 	STAILQ_FOREACH_SAFE(fq, &fq_cl->fcl_old_flows, fq_actlink, tfq) {
 		VERIFY((fq->fq_flags & (FQF_NEW_FLOW | FQF_OLD_FLOW)) ==
 		    FQF_OLD_FLOW);
+		bool destroy = true;
+
+		if (fq_dqlist != NULL) {
+			if (!fq->fq_in_dqlist) {
+				fq_dqlist_add(fq_dqlist, fq);
+			}
+			head = &fq->fq_dq_head;
+			tail = &fq->fq_dq_tail;
+			destroy = false;
+		} else {
+			ASSERT(!fq->fq_in_dqlist);
+			head = top;
+			tail = &last;
+		}
 
 		limit_reached = fq_getq_flow_fn(fqs, fq_cl, fq, bytelimit,
-		    pktlimit, top, &last, &bytecnt, &pktcnt, &qempty, 0);
+		    pktlimit, head, tail, &bytecnt, &pktcnt, &qempty, 0);
 
 		if (qempty) {
-			fq_if_empty_old_flow(fqs, fq_cl, fq, true);
+			fq_if_empty_old_flow(fqs, fq_cl, fq, true, destroy);
 		} else if (fq->fq_deficit <= 0) {
 			STAILQ_REMOVE(&fq_cl->fcl_old_flows, fq,
 			    flowq, fq_actlink);
@@ -1151,18 +1362,17 @@ done:
 	} else if (!STAILQ_EMPTY(&temp_stailq)) {
 		fq_cl->fcl_old_flows = temp_stailq;
 	}
-
 	if (last.cp_mbuf != NULL) {
 		VERIFY(top->cp_mbuf != NULL);
-		if (tail != NULL) {
-			*tail = last;
+		if (bottom != NULL) {
+			*bottom = last;
 		}
-		if (retpktcnt != NULL) {
-			*retpktcnt = pktcnt;
-		}
-		if (retbytecnt != NULL) {
-			*retbytecnt = bytecnt;
-		}
+	}
+	if (retpktcnt != NULL) {
+		*retpktcnt = pktcnt;
+	}
+	if (retbytecnt != NULL) {
+		*retbytecnt = bytecnt;
 	}
 }
 

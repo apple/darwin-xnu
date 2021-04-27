@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -218,6 +218,12 @@ boolean_t cpuid_tsx_supported = false;
 
 static void do_cwas(i386_cpu_info_t *cpuinfo, boolean_t on_slave);
 static void cpuid_do_precpuid_was(void);
+
+#if DEBUG || DEVELOPMENT
+static void cpuid_vmm_detect_pv_interface(i386_vmm_info_t *info_p, const char *signature,
+    bool (*)(i386_vmm_info_t*, const uint32_t, const uint32_t));
+static bool cpuid_vmm_detect_applepv_features(i386_vmm_info_t *info_p, const uint32_t base, const uint32_t max_leaf);
+#endif /* DEBUG || DEVELOPMENT */
 
 static inline cpuid_cache_descriptor_t *
 cpuid_leaf2_find(uint8_t value)
@@ -1437,6 +1443,10 @@ cpuid_init_vmm_info(i386_vmm_info_t *info_p)
 		info_p->cpuid_vmm_bus_frequency = reg[ebx];
 	}
 
+#if DEBUG || DEVELOPMENT
+	cpuid_vmm_detect_pv_interface(info_p, APPLEPV_SIGNATURE, &cpuid_vmm_detect_applepv_features);
+#endif
+
 	DBG(" vmm_vendor          : %s\n", info_p->cpuid_vmm_vendor);
 	DBG(" vmm_family          : %u\n", info_p->cpuid_vmm_family);
 	DBG(" vmm_bus_frequency   : %u\n", info_p->cpuid_vmm_bus_frequency);
@@ -1464,6 +1474,14 @@ cpuid_vmm_family(void)
 {
 	return cpuid_vmm_info()->cpuid_vmm_family;
 }
+
+#if DEBUG || DEVELOPMENT
+uint64_t
+cpuid_vmm_get_applepv_features(void)
+{
+	return cpuid_vmm_info()->cpuid_vmm_applepv_features;
+}
+#endif /* DEBUG || DEVELOPMENT */
 
 cwa_classifier_e
 cpuid_wa_required(cpu_wa_e wa)
@@ -1596,3 +1614,68 @@ cpuid_do_precpuid_was(void)
 		cpuid_tsx_disabled = true;
 	}
 }
+
+
+#if DEBUG || DEVELOPMENT
+
+/*
+ * Hunt for Apple Paravirtualization support in the hypervisor class leaves [0x4000_0000-0x4001_0000].
+ * Hypervisor interfaces are expected to be found at 0x100 boundaries for compatibility.
+ */
+
+static bool
+cpuid_vmm_detect_applepv_features(i386_vmm_info_t *info_p, const uint32_t base, const uint32_t max_leaf)
+{
+	if ((max_leaf - base) < APPLEPV_LEAF_INDEX_MAX) {
+		return false;
+	}
+
+	/*
+	 * Issue cpuid to make sure the interface supports "AH#1" features.
+	 * This avoids a possible collision with "Hv#1" used by Hyper-V.
+	 */
+	uint32_t reg[4];
+	char interface[5];
+	cpuid_fn(base + APPLEPV_INTERFACE_LEAF_INDEX, reg);
+	memcpy(&interface[0], &reg[eax], 4);
+	interface[4] = '\0';
+	if (0 == strcmp(interface, APPLEPV_INTERFACE)) {
+		cpuid_fn(base + APPLEPV_FEATURES_LEAF_INDEX, reg);
+		info_p->cpuid_vmm_applepv_features = quad(reg[ecx], reg[edx]);
+		return true;
+	}
+	return false;
+}
+
+static void
+cpuid_vmm_detect_pv_interface(i386_vmm_info_t *info_p, const char *signature,
+    bool (*searcher)(i386_vmm_info_t*, const uint32_t, const uint32_t))
+{
+	int hcalls;
+	if (PE_parse_boot_argn("hcalls", &hcalls, sizeof(hcalls)) &&
+	    hcalls == 0) {
+		return;
+	}
+
+	assert(info_p);
+	/*
+	 * Look for PV interface matching signature
+	 */
+	for (uint32_t base = 0x40000100; base < 0x40010000; base += 0x100) {
+		uint32_t reg[4];
+		char vendor[13];
+
+		cpuid_fn(base, reg);
+		memcpy(&vendor[0], &reg[ebx], 4);
+		memcpy(&vendor[4], &reg[ecx], 4);
+		memcpy(&vendor[8], &reg[edx], 4);
+		vendor[12] = '\0';
+		if ((0 == strcmp(vendor, signature)) &&
+		    (reg[eax] - base) < 0x100 &&
+		    (*searcher)(info_p, base, reg[eax])) {
+			break;
+		}
+	}
+}
+
+#endif /* DEBUG || DEVELOPMENT */

@@ -66,15 +66,15 @@ struct nfsrv_uc_arg {
 TAILQ_HEAD(nfsrv_uc_q, nfsrv_uc_arg);
 
 static struct nfsrv_uc_queue {
-	lck_mtx_t               *ucq_lock;
+	lck_mtx_t               ucq_lock;
 	struct nfsrv_uc_q       ucq_queue[1];
 	thread_t                ucq_thd;
 	uint32_t                ucq_flags;
 } nfsrv_uc_queue_tbl[NFS_UC_HASH_SZ];
 #define NFS_UC_QUEUE_SLEEPING   0x0001
 
-static lck_grp_t *nfsrv_uc_group;
-static lck_mtx_t *nfsrv_uc_shutdown_lock;
+static LCK_GRP_DECLARE(nfsrv_uc_group, "nfs_upcall_locks");
+static LCK_MTX_DECLARE(nfsrv_uc_shutdown_lock, &nfsrv_uc_group);
 static volatile int nfsrv_uc_shutdown = 0;
 static int32_t nfsrv_uc_thread_count;
 
@@ -100,18 +100,18 @@ nfsrv_uc_thread(void *arg, wait_result_t wr __unused)
 
 	DPRINT("nfsrv_uc_thread %d started\n", qi);
 	while (!nfsrv_uc_shutdown) {
-		lck_mtx_lock(myqueue->ucq_lock);
+		lck_mtx_lock(&myqueue->ucq_lock);
 
 		while (!nfsrv_uc_shutdown && TAILQ_EMPTY(myqueue->ucq_queue)) {
 			myqueue->ucq_flags |= NFS_UC_QUEUE_SLEEPING;
-			error = msleep(myqueue, myqueue->ucq_lock, PSOCK, "nfsd_upcall_handler", NULL);
+			error = msleep(myqueue, &myqueue->ucq_lock, PSOCK, "nfsd_upcall_handler", NULL);
 			myqueue->ucq_flags &= ~NFS_UC_QUEUE_SLEEPING;
 			if (error) {
 				printf("nfsrv_uc_thread received error %d\n", error);
 			}
 		}
 		if (nfsrv_uc_shutdown) {
-			lck_mtx_unlock(myqueue->ucq_lock);
+			lck_mtx_unlock(&myqueue->ucq_lock);
 			break;
 		}
 
@@ -123,7 +123,7 @@ nfsrv_uc_thread(void *arg, wait_result_t wr __unused)
 
 		ep->nua_flags &= ~NFS_UC_QUEUED;
 
-		lck_mtx_unlock(myqueue->ucq_lock);
+		lck_mtx_unlock(&myqueue->ucq_lock);
 
 #ifdef NFS_UC_Q_DEBUG
 		OSDecrementAtomic(&nfsrv_uc_queue_count);
@@ -133,10 +133,10 @@ nfsrv_uc_thread(void *arg, wait_result_t wr __unused)
 		nfsrv_rcv(ep->nua_so, (void *)ep->nua_slp, ep->nua_waitflag);
 	}
 
-	lck_mtx_lock(nfsrv_uc_shutdown_lock);
+	lck_mtx_lock(&nfsrv_uc_shutdown_lock);
 	nfsrv_uc_thread_count--;
 	wakeup(&nfsrv_uc_thread_count);
-	lck_mtx_unlock(nfsrv_uc_shutdown_lock);
+	lck_mtx_unlock(&nfsrv_uc_shutdown_lock);
 
 	thread_terminate(current_thread());
 }
@@ -160,7 +160,7 @@ nfsrv_uc_dequeue(struct nfsrv_sock *slp)
 		return;
 	}
 	/* If we're queued we might race with nfsrv_uc_thread */
-	lck_mtx_lock(myqueue->ucq_lock);
+	lck_mtx_lock(&myqueue->ucq_lock);
 	if (ap->nua_flags & NFS_UC_QUEUED) {
 		printf("nfsrv_uc_dequeue remove %p\n", ap);
 		TAILQ_REMOVE(myqueue->ucq_queue, ap, nua_svcq);
@@ -171,7 +171,7 @@ nfsrv_uc_dequeue(struct nfsrv_sock *slp)
 	}
 	FREE(slp->ns_ua, M_TEMP);
 	slp->ns_ua = NULL;
-	lck_mtx_unlock(myqueue->ucq_lock);
+	lck_mtx_unlock(&myqueue->ucq_lock);
 }
 
 /*
@@ -180,16 +180,12 @@ nfsrv_uc_dequeue(struct nfsrv_sock *slp)
 void
 nfsrv_uc_init(void)
 {
-	int i;
-
-	nfsrv_uc_group = lck_grp_alloc_init("nfs_upcall_locks", LCK_GRP_ATTR_NULL);
-	for (i = 0; i < NFS_UC_HASH_SZ; i++) {
+	for (int i = 0; i < NFS_UC_HASH_SZ; i++) {
 		TAILQ_INIT(nfsrv_uc_queue_tbl[i].ucq_queue);
-		nfsrv_uc_queue_tbl[i].ucq_lock = lck_mtx_alloc_init(nfsrv_uc_group, LCK_ATTR_NULL);
+		lck_mtx_init(&nfsrv_uc_queue_tbl[i].ucq_lock, &nfsrv_uc_group, LCK_ATTR_NULL);
 		nfsrv_uc_queue_tbl[i].ucq_thd = THREAD_NULL;
 		nfsrv_uc_queue_tbl[i].ucq_flags = 0;
 	}
-	nfsrv_uc_shutdown_lock = lck_mtx_alloc_init(nfsrv_uc_group, LCK_ATTR_NULL);
 }
 
 /*
@@ -210,9 +206,9 @@ nfsrv_uc_start(void)
 	DPRINT("nfsrv_uc_start\n");
 
 	/* Wait until previous shutdown finishes */
-	lck_mtx_lock(nfsrv_uc_shutdown_lock);
+	lck_mtx_lock(&nfsrv_uc_shutdown_lock);
 	while (nfsrv_uc_shutdown || nfsrv_uc_thread_count > 0) {
-		msleep(&nfsrv_uc_thread_count, nfsrv_uc_shutdown_lock, PSOCK, "nfsd_upcall_shutdown_wait", NULL);
+		msleep(&nfsrv_uc_thread_count, &nfsrv_uc_shutdown_lock, PSOCK, "nfsd_upcall_shutdown_wait", NULL);
 	}
 
 	/* Start up-call threads */
@@ -234,7 +230,7 @@ out:
 	nfsrv_uc_queue_count = 0ULL;
 	nfsrv_uc_queue_max_seen = 0ULL;
 #endif
-	lck_mtx_unlock(nfsrv_uc_shutdown_lock);
+	lck_mtx_unlock(&nfsrv_uc_shutdown_lock);
 }
 
 /*
@@ -252,15 +248,15 @@ nfsrv_uc_stop(void)
 	/* Signal up-call threads to stop */
 	nfsrv_uc_shutdown = 1;
 	for (i = 0; i < thread_count; i++) {
-		lck_mtx_lock(nfsrv_uc_queue_tbl[i].ucq_lock);
+		lck_mtx_lock(&nfsrv_uc_queue_tbl[i].ucq_lock);
 		wakeup(&nfsrv_uc_queue_tbl[i]);
-		lck_mtx_unlock(nfsrv_uc_queue_tbl[i].ucq_lock);
+		lck_mtx_unlock(&nfsrv_uc_queue_tbl[i].ucq_lock);
 	}
 
 	/* Wait until they are done shutting down */
-	lck_mtx_lock(nfsrv_uc_shutdown_lock);
+	lck_mtx_lock(&nfsrv_uc_shutdown_lock);
 	while (nfsrv_uc_thread_count > 0) {
-		msleep(&nfsrv_uc_thread_count, nfsrv_uc_shutdown_lock, PSOCK, "nfsd_upcall_shutdown_stop", NULL);
+		msleep(&nfsrv_uc_thread_count, &nfsrv_uc_shutdown_lock, PSOCK, "nfsd_upcall_shutdown_stop", NULL);
 	}
 
 	/* Deallocate old threads */
@@ -273,7 +269,7 @@ nfsrv_uc_stop(void)
 
 	/* Enable restarting */
 	nfsrv_uc_shutdown = 0;
-	lck_mtx_unlock(nfsrv_uc_shutdown_lock);
+	lck_mtx_unlock(&nfsrv_uc_shutdown_lock);
 }
 
 /*
@@ -296,13 +292,13 @@ nfsrv_uc_cleanup(void)
 	for (i = 0; i < NFS_UC_HASH_SZ; i++) {
 		struct nfsrv_uc_queue *queue = &nfsrv_uc_queue_tbl[i];
 
-		lck_mtx_lock(queue->ucq_lock);
+		lck_mtx_lock(&queue->ucq_lock);
 		while (!TAILQ_EMPTY(queue->ucq_queue)) {
 			struct nfsrv_uc_arg *ep = TAILQ_FIRST(queue->ucq_queue);
 			TAILQ_REMOVE(queue->ucq_queue, ep, nua_svcq);
 			ep->nua_flags &= ~NFS_UC_QUEUED;
 		}
-		lck_mtx_unlock(queue->ucq_lock);
+		lck_mtx_unlock(&queue->ucq_lock);
 	}
 
 	nfsrv_uc_stop();
@@ -323,11 +319,11 @@ nfsrv_uc_proxy(socket_t so, void *arg, int waitflag)
 	int qi = uap->nua_qi;
 	struct nfsrv_uc_queue *myqueue = &nfsrv_uc_queue_tbl[qi];
 
-	lck_mtx_lock(myqueue->ucq_lock);
+	lck_mtx_lock(&myqueue->ucq_lock);
 	DPRINT("nfsrv_uc_proxy called for %p (%p)\n", uap, uap->nua_slp);
 	DPRINT("\tUp-call queued on %d for wakeup of %p\n", qi, myqueue);
 	if (uap == NULL || uap->nua_flags & NFS_UC_QUEUED) {
-		lck_mtx_unlock(myqueue->ucq_lock);
+		lck_mtx_unlock(&myqueue->ucq_lock);
 		return;  /* Already queued or freed */
 	}
 
@@ -355,7 +351,7 @@ nfsrv_uc_proxy(socket_t so, void *arg, int waitflag)
 		}
 	}
 #endif
-	lck_mtx_unlock(myqueue->ucq_lock);
+	lck_mtx_unlock(&myqueue->ucq_lock);
 }
 
 

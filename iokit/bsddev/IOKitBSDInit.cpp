@@ -55,6 +55,8 @@ extern dev_t mdevlookup(int devid);
 extern void mdevremoveall(void);
 extern int mdevgetrange(int devid, uint64_t *base, uint64_t *size);
 extern void di_root_ramfile(IORegistryEntry * entry);
+extern int IODTGetDefault(const char *key, void *infoAddr, unsigned int infoSize);
+extern boolean_t cpuid_vmm_present(void);
 
 #define ROUNDUP(a, b) (((a) + ((b) - 1)) & (~((b) - 1)))
 
@@ -542,6 +544,26 @@ do_reboot:
 	}
 
 	return true;
+}
+
+int
+IOGetVMMPresent(void)
+{
+	int hv_vmm_present = 0;
+
+#if defined(__arm64__)
+	if (IODTGetDefault("vmm-present", &hv_vmm_present, sizeof(hv_vmm_present)) < 0) {
+		return 0;
+	}
+
+	if (hv_vmm_present != 0) {
+		hv_vmm_present = 1;
+	}
+#elif defined(__x86_64__)
+	hv_vmm_present = cpuid_vmm_present();
+#endif
+
+	return hv_vmm_present;
 }
 
 kern_return_t

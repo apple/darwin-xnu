@@ -37,7 +37,6 @@
 #include <kern/misc_protos.h>
 #include <pexpert/pexpert.h>
 #include <prng/entropy.h>
-#include <crypto/entropy/entropy_sysctl.h>
 #include <machine/machine_routines.h>
 #include <libkern/section_keywords.h>
 #include <sys/cdefs.h>
@@ -160,7 +159,6 @@ entropy_analysis_init(uint32_t sample_count)
 	entropy_analysis_max_sample_count = sample_count;
 	entropy_analysis_buffer_size = sample_count * sizeof(entropy_sample_t);
 	entropy_analysis_buffer = zalloc_permanent(entropy_analysis_buffer_size, ZALIGN(entropy_sample_t));
-	entropy_analysis_register_sysctls();
 }
 
 __startup_func

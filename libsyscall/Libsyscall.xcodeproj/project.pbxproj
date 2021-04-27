@@ -116,6 +116,7 @@
 		24B8C2621237F53900D36CC3 /* remove-counter.c in Sources */ = {isa = PBXBuildFile; fileRef = 24B8C2611237F53900D36CC3 /* remove-counter.c */; };
 		24D1158311E671B20063D54D /* SYS.h in Headers */ = {isa = PBXBuildFile; fileRef = 24D1157411E671B20063D54D /* SYS.h */; };
 		24E4782712088267009A384D /* _libc_funcptr.c in Sources */ = {isa = PBXBuildFile; fileRef = 24E47824120881DF009A384D /* _libc_funcptr.c */; };
+		2561E8AA25082E6300EAA925 /* task.c in Sources */ = {isa = PBXBuildFile; fileRef = 2561E8A925082E6300EAA925 /* task.c */; };
 		291D3C281354FDD100D46061 /* mach_port.c in Sources */ = {isa = PBXBuildFile; fileRef = 291D3C261354FDD100D46061 /* mach_port.c */; };
 		291D3C291354FDD100D46061 /* mach_vm.c in Sources */ = {isa = PBXBuildFile; fileRef = 291D3C271354FDD100D46061 /* mach_vm.c */; };
 		29A59AE2183B0DE000E8B896 /* renameat.c in Sources */ = {isa = PBXBuildFile; fileRef = 29A59AE1183B0DE000E8B896 /* renameat.c */; };
@@ -553,6 +554,7 @@
 		24D1159811E672270063D54D /* syscall.map */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = syscall.map; sourceTree = "<group>"; };
 		24D1159911E6723E0063D54D /* create-syscalls.pl */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.script.perl; path = "create-syscalls.pl"; sourceTree = "<group>"; };
 		24E47824120881DF009A384D /* _libc_funcptr.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = _libc_funcptr.c; sourceTree = "<group>"; };
+		2561E8A925082E6300EAA925 /* task.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = task.c; sourceTree = "<group>"; };
 		291D3C261354FDD100D46061 /* mach_port.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = mach_port.c; sourceTree = "<group>"; };
 		291D3C271354FDD100D46061 /* mach_vm.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = mach_vm.c; sourceTree = "<group>"; };
 		29A59AE1183B0DE000E8B896 /* renameat.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = renameat.c; sourceTree = "<group>"; };
@@ -761,6 +763,7 @@
 				C9D9BCCC114B00600000D8B9 /* err_libkern.sub */,
 				C9D9BCCD114B00600000D8B9 /* err_mach_ipc.sub */,
 				C9D9BCCE114B00600000D8B9 /* err_server.sub */,
+				2561E8A925082E6300EAA925 /* task.c */,
 				C9D9BCCF114B00600000D8B9 /* err_us.sub */,
 				C9D9BCD0114B00600000D8B9 /* error_codes.c */,
 				C9D9BCD1114B00600000D8B9 /* errorlib.h */,
@@ -1487,6 +1490,7 @@
 				24A7C5C111FF8DA6007669EB /* getsockname.c in Sources */,
 				925559921CBC23C300E527CE /* mach_boottime.c in Sources */,
 				24A7C5C211FF8DA6007669EB /* lchown.c in Sources */,
+				2561E8AA25082E6300EAA925 /* task.c in Sources */,
 				24A7C5C311FF8DA6007669EB /* listen.c in Sources */,
 				24A7C5C411FF8DA6007669EB /* recvfrom.c in Sources */,
 				13CBF78224575F9F00B26F7D /* open-base.c in Sources */,

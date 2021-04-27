@@ -132,7 +132,11 @@ extern int cansignal(struct proc *, kauth_cred_t, struct proc *, int); /* bsd/ke
 
 #define KEV_EVTID(code) BSDDBG_CODE(DBG_BSD_KEVENT, (code))
 
-MALLOC_DEFINE(M_KQUEUE, "kqueue", "memory for kqueue system");
+/*
+ * If you need accounting for KM_KQUEUE consider using
+ * KALLOC_HEAP_DEFINE to define a zone view.
+ */
+#define KM_KQUEUE       KHEAP_DEFAULT
 
 #define KQ_EVENT        NO_EVENT64
 
@@ -3474,8 +3478,8 @@ knotes_dealloc(proc_t p)
 			}
 		}
 		/* free the table */
-		FREE(fdp->fd_knlist, M_KQUEUE);
-		fdp->fd_knlist = NULL;
+		kheap_free(KM_KQUEUE, fdp->fd_knlist,
+		    fdp->fd_knlistsize * sizeof(struct klist *));
 	}
 	fdp->fd_knlistsize = 0;
 
@@ -6366,8 +6370,8 @@ kq_add_knote(struct kqueue *kq, struct knote *kn, struct knote_lock_ctx *knlc,
 				goto out_locked;
 			}
 
-			MALLOC(list, struct klist *,
-			    size * sizeof(struct klist *), M_KQUEUE, M_WAITOK);
+			list = kheap_alloc(KM_KQUEUE, size * sizeof(struct klist *),
+			    Z_WAITOK);
 			if (list == NULL) {
 				ret = ENOMEM;
 				goto out_locked;
@@ -6378,7 +6382,8 @@ kq_add_knote(struct kqueue *kq, struct knote *kn, struct knote_lock_ctx *knlc,
 			bzero((caddr_t)list +
 			    fdp->fd_knlistsize * sizeof(struct klist *),
 			    (size - fdp->fd_knlistsize) * sizeof(struct klist *));
-			FREE(fdp->fd_knlist, M_KQUEUE);
+			kheap_free(KM_KQUEUE, fdp->fd_knlist,
+			    fdp->fd_knlistsize * sizeof(struct klist *));
 			fdp->fd_knlist = list;
 			fdp->fd_knlistsize = size;
 		}
@@ -8551,7 +8556,7 @@ kevt_pcblist SYSCTL_HANDLER_ARGS
 	    ROUNDUP64(sizeof(struct xsockstat_n));
 	struct kern_event_pcb  *ev_pcb;
 
-	buf = _MALLOC(item_size, M_TEMP, M_WAITOK | M_ZERO);
+	buf = kheap_alloc(KHEAP_TEMP, item_size, Z_WAITOK | Z_ZERO);
 	if (buf == NULL) {
 		return ENOMEM;
 	}
@@ -8643,10 +8648,7 @@ kevt_pcblist SYSCTL_HANDLER_ARGS
 done:
 	lck_rw_done(&kev_rwlock);
 
-	if (buf != NULL) {
-		FREE(buf, M_TEMP);
-	}
-
+	kheap_free(KHEAP_TEMP, buf, item_size);
 	return error;
 }
 
@@ -8982,10 +8984,7 @@ pid_kqueue_extinfo(proc_t p, struct kqueue *kq, user_addr_t ubuf,
 	err = copyout(kqext, ubuf, sizeof(struct kevent_extinfo) * MIN(buflen, nknotes));
 
 out:
-	if (kqext) {
-		kheap_free(KHEAP_TEMP, kqext, buflen * sizeof(struct kevent_extinfo));
-		kqext = NULL;
-	}
+	kheap_free(KHEAP_TEMP, kqext, buflen * sizeof(struct kevent_extinfo));
 
 	if (!err) {
 		*retval = (int32_t)MIN(nknotes, PROC_PIDFDKQUEUE_KNOTES_MAX);

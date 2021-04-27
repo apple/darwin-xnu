@@ -30,6 +30,7 @@
 #include <stdbool.h>
 #include <strings.h>
 #include <unistd.h>
+#include <mach/vm_page_size.h>
 #include "_libkernel_init.h"
 
 extern int mach_init(void);
@@ -81,6 +82,19 @@ __libkernel_init(_libkernel_functions_t fns,
 		_dlsym = fns->dlsym;
 	}
 	mach_init();
+#if TARGET_OS_OSX
+	for (size_t i = 0; envp[i]; i++) {
+
+#if defined(__i386__) || defined(__x86_64__)
+		const char *VM_KERNEL_PAGE_SHIFT_ENV = "VM_KERNEL_PAGE_SIZE_4K=1";
+		if (vm_kernel_page_shift != 12 && strcmp(VM_KERNEL_PAGE_SHIFT_ENV, envp[i]) == 0) {
+			vm_kernel_page_shift = 12;
+			vm_kernel_page_size = 1 << vm_kernel_page_shift;
+			vm_kernel_page_mask = vm_kernel_page_size - 1;
+		}
+#endif /* defined(__i386__) || defined(__x86_64__) */
+	}
+#endif /* TARGET_OS_OSX */
 }
 
 void

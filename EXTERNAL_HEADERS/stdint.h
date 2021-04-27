@@ -60,12 +60,51 @@ typedef uint64_t        uint_fast64_t;
 
 
 /* 7.18.1.5 Greatest-width integer types */
-typedef long long                intmax_t;
-typedef unsigned long long      uintmax_t;
+#ifdef __INTMAX_TYPE__
+typedef __INTMAX_TYPE__ intmax_t;
+#else
+#ifdef __LP64__
+typedef long int intmax_t;
+#else
+typedef long long int intmax_t;
+#endif /* __LP64__ */
+#endif /* __INTMAX_TYPE__ */
+#ifdef __UINTMAX_TYPE__
+typedef __UINTMAX_TYPE__ uintmax_t;
+#else
+#ifdef __LP64__
+typedef long unsigned int uintmax_t;
+#else
+typedef long long unsigned int uintmax_t;
+#endif /* __LP64__ */
+#endif /* __UINTMAX_TYPE__ */
+
+/* 7.18.4 Macros for integer constants */
+#define INT8_C(v)    (v)
+#define INT16_C(v)   (v)
+#define INT32_C(v)   (v)
+#define INT64_C(v)   (v ## LL)
+
+#define UINT8_C(v)   (v)
+#define UINT16_C(v)  (v)
+#define UINT32_C(v)  (v ## U)
+#define UINT64_C(v)  (v ## ULL)
+
+#ifdef __LP64__
+#define INTMAX_C(v)  (v ## L)
+#define UINTMAX_C(v) (v ## UL)
+#else
+#define INTMAX_C(v)  (v ## LL)
+#define UINTMAX_C(v) (v ## ULL)
+#endif
 
 /* 7.18.2 Limits of specified-width integer types:
  *   These #defines specify the minimum and maximum limits
  *   of each of the types declared above.
+ *
+ *   They must have "the same type as would an expression that is an
+ *   object of the corresponding type converted according to the integer
+ *   promotion".
  */
 
 
@@ -126,43 +165,33 @@ typedef unsigned long long      uintmax_t;
 /* 7.18.2.4 Limits of integer types capable of holding object pointers */
 
 #if __WORDSIZE == 64
-#define INTPTR_MIN	  INT64_MIN
-#define INTPTR_MAX	  INT64_MAX
+#define INTPTR_MAX        9223372036854775807L
 #else
-#define INTPTR_MIN        INT32_MIN
-#define INTPTR_MAX        INT32_MAX
+#define INTPTR_MAX        2147483647L
 #endif
+#define INTPTR_MIN        (-INTPTR_MAX-1)
 
 #if __WORDSIZE == 64
-#define UINTPTR_MAX	  UINT64_MAX
+#define UINTPTR_MAX       18446744073709551615UL
 #else
-#define UINTPTR_MAX       UINT32_MAX
+#define UINTPTR_MAX       4294967295UL
 #endif
 
 /* 7.18.2.5 Limits of greatest-width integer types */
-#define INTMAX_MIN        INT64_MIN
-#define INTMAX_MAX        INT64_MAX
-
-#define UINTMAX_MAX       UINT64_MAX
+#define INTMAX_MAX        INTMAX_C(9223372036854775807)
+#define UINTMAX_MAX       UINTMAX_C(18446744073709551615)
+#define INTMAX_MIN        (-INTMAX_MAX-1)
 
 /* 7.18.3 "Other" */
 #if __WORDSIZE == 64
-#define PTRDIFF_MIN	  INT64_MIN
-#define PTRDIFF_MAX	  INT64_MAX
+#define PTRDIFF_MIN	  INTMAX_MIN
+#define PTRDIFF_MAX	  INTMAX_MAX
 #else
 #define PTRDIFF_MIN       INT32_MIN
 #define PTRDIFF_MAX       INT32_MAX
 #endif
 
-/* We have no sig_atomic_t yet, so no SIG_ATOMIC_{MIN,MAX}.
-   Should end up being {-127,127} or {0,255} ... or bigger.
-   My bet would be on one of {U}INT32_{MIN,MAX}. */
-
-#if __WORDSIZE == 64
-#define SIZE_MAX	  UINT64_MAX
-#else
-#define SIZE_MAX          UINT32_MAX
-#endif
+#define SIZE_MAX          UINTPTR_MAX
 
 #if defined(__STDC_WANT_LIB_EXT1__) && __STDC_WANT_LIB_EXT1__ >= 1
 #define RSIZE_MAX         (SIZE_MAX >> 1)
@@ -193,20 +222,6 @@ typedef unsigned long long      uintmax_t;
 
 #define SIG_ATOMIC_MIN	  INT32_MIN
 #define SIG_ATOMIC_MAX	  INT32_MAX
-
-/* 7.18.4 Macros for integer constants */
-#define INT8_C(v)    (v)
-#define INT16_C(v)   (v)
-#define INT32_C(v)   (v)
-#define INT64_C(v)   (v ## LL)
-
-#define UINT8_C(v)   (v ## U)
-#define UINT16_C(v)  (v ## U)
-#define UINT32_C(v)  (v ## U)
-#define UINT64_C(v)  (v ## ULL)
-
-#define INTMAX_C(v)  (v ## LL)
-#define UINTMAX_C(v) (v ## ULL)
 
 #endif /* KERNEL */
 

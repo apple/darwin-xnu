@@ -15,6 +15,11 @@ if [ "${OUTPUT##*.}" != "plist" -o "${PLIST##*.}" != "plist" ]; then
 fi
 shift 2
 
+if [ $(egrep -c 'CFBundleIdentifier|OSBundleCompatibleVersion|CFBundleVersion' $PLIST) -lt 3 ]; then
+    echo "error: Invalid input Info.plist $PLIST" 1>&2
+    exit 1
+fi
+
 printf \
 '<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

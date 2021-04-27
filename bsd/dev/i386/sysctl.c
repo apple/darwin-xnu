@@ -42,6 +42,10 @@
 #include <i386/mp.h>
 #include <kern/kalloc.h>
 
+#if DEBUG || DEVELOPMENT
+#include <kern/hvg_hypercall.h>
+#endif
+
 
 static int
 _i386_cpu_info SYSCTL_HANDLER_ARGS
@@ -1102,5 +1106,88 @@ extern int traptrace_enabled;
 SYSCTL_INT(_machdep_misc, OID_AUTO, traptrace_enabled,
     CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
     &traptrace_enabled, 0, "Enabled/disable trap trace");
+
+
+/*
+ * Trigger a guest kernel core dump (internal only)
+ * Usage: sysctl kern.trigger_kernel_coredump = 1
+ * (option selector must be 1, other values reserved)
+ */
+
+static int
+sysctl_trigger_kernel_coredump(struct sysctl_oid *oidp __unused, void *arg1, int arg2, struct sysctl_req *req)
+{
+	int error = 0;
+	hvg_hcall_return_t hv_ret;
+	char buf[2]; // 1 digit for dump option + 1 '\0'
+
+	if (req->newptr) {
+		// Write request
+		if (req->newlen > 1) {
+			return EINVAL;
+		}
+		error = SYSCTL_IN(req, buf, req->newlen);
+		buf[req->newlen] = '\0';
+		if (!error) {
+			if (strcmp(buf, "1") != 0) {
+				return EINVAL;
+			}
+			/* Issue hypercall to trigger a dump */
+			hv_ret = hvg_hcall_trigger_dump(arg1, HVG_HCALL_DUMP_OPTION_REGULAR);
+
+			/* Translate hypercall error code to syscall error code */
+			switch (hv_ret) {
+			case HVG_HCALL_SUCCESS:
+				error = SYSCTL_OUT(req, arg1, 41);
+				break;
+			case HVG_HCALL_ACCESS_DENIED:
+				error = EPERM;
+				break;
+			case HVG_HCALL_INVALID_CODE:
+			case HVG_HCALL_INVALID_PARAMETER:
+				error = EINVAL;
+				break;
+			case HVG_HCALL_IO_FAILED:
+				error = EIO;
+				break;
+			case HVG_HCALL_FEAT_DISABLED:
+			case HVG_HCALL_UNSUPPORTED:
+				error = ENOTSUP;
+				break;
+			default:
+				error = ENODEV;
+			}
+		}
+	} else {
+		// Read request
+		error = SYSCTL_OUT(req, arg1, arg2);
+	}
+	return error;
+}
+
+
+static hvg_hcall_vmcore_file_t sysctl_vmcore;
+
+void
+hvg_bsd_init(void)
+{
+	if (!cpuid_vmm_present()) {
+		return;
+	}
+
+	if ((cpuid_vmm_get_applepv_features() & CPUID_LEAF_FEATURE_COREDUMP) != 0) {
+		/* Register an OID in the sysctl MIB tree for kern.trigger_kernel_coredump */
+		struct sysctl_oid *hcall_trigger_dump_oid = zalloc_permanent(sizeof(struct sysctl_oid), ZALIGN(struct sysctl_oid));
+		struct sysctl_oid oid = SYSCTL_STRUCT_INIT(_kern,
+		    OID_AUTO,
+		    trigger_kernel_coredump,
+		    CTLTYPE_STRING | CTLFLAG_RW,
+		    &sysctl_vmcore, sizeof(sysctl_vmcore),
+		    sysctl_trigger_kernel_coredump,
+		    "A", "Request that the hypervisor take a live kernel dump");
+		*hcall_trigger_dump_oid = oid;
+		sysctl_register_oid(hcall_trigger_dump_oid);
+	}
+}
 
 #endif /* DEVELOPMENT || DEBUG */

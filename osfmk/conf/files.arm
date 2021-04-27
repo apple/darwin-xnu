@@ -53,6 +53,7 @@ osfmk/arm/trustcache.c		standard
 osfmk/arm/model_dep.c		standard
 osfmk/arm/pcb.c		standard
 osfmk/arm/rtclock.c		standard
+osfmk/arm/counter.c		standard
 osfmk/arm/status.c		standard
 osfmk/arm/status_shared.c	standard
 osfmk/arm/trap.c		standard

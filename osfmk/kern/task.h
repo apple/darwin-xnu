@@ -98,6 +98,7 @@
 #ifdef XNU_KERNEL_PRIVATE
 #include <kern/kern_cdata.h>
 #include <mach/sfi_class.h>
+#include <kern/counter.h>
 #include <kern/queue.h>
 #include <sys/kern_sysctl.h>
 #endif /* XNU_KERNEL_PRIVATE */
@@ -152,11 +153,12 @@ struct task_watchports;
 
 struct task {
 	/* Synchronization/destruction information */
-	decl_lck_mtx_data(, lock);               /* Task's lock */
+	decl_lck_mtx_data(, lock);      /* Task's lock */
 	os_refcnt_t     ref_count;      /* Number of references to me */
-	boolean_t       active;         /* Task has not been terminated */
-	boolean_t       halting;        /* Task is being halted */
-	boolean_t       message_app_suspended;  /* Let iokit know when pidsuspended */
+	bool            active;         /* Task has not been terminated */
+	bool            ipc_active;     /* IPC with the task ports is allowed */
+	bool            halting;        /* Task is being halted */
+	bool            message_app_suspended;  /* Let iokit know when pidsuspended */
 
 	/* Virtual timers */
 	uint32_t                vtimers;
@@ -207,19 +209,21 @@ struct task {
 	 * Different flavors of task port.
 	 * These flavors TASK_FLAVOR_* are defined in mach_types.h
 	 */
-	struct ipc_port * XNU_PTRAUTH_SIGNED_PTR("task.itk_self") itk_self[TASK_SELF_PORT_COUNT];    /* does not hold right */
-	struct ipc_port * XNU_PTRAUTH_SIGNED_PTR("task.itk_settable_self") itk_settable_self; /* a send right */
+	struct ipc_port * XNU_PTRAUTH_SIGNED_PTR("task.itk_task_ports") itk_task_ports[TASK_SELF_PORT_COUNT];
+	struct ipc_port * XNU_PTRAUTH_SIGNED_PTR("task.itk_settable_self") itk_settable_self;   /* a send right */
+	struct ipc_port * XNU_PTRAUTH_SIGNED_PTR("task.itk_self") itk_self;                     /* immovable/pinned task port, does not hold right */
 	struct exception_action exc_actions[EXC_TYPES_COUNT];
 	/* a send right each valid element  */
-	struct ipc_port * XNU_PTRAUTH_SIGNED_PTR("task.itk_host") itk_host;      /* a send right */
-	struct ipc_port * XNU_PTRAUTH_SIGNED_PTR("task.itk_bootstrap") itk_bootstrap; /* a send right */
-	struct ipc_port * XNU_PTRAUTH_SIGNED_PTR("task.itk_seatbelt") itk_seatbelt;  /* a send right */
-	struct ipc_port * XNU_PTRAUTH_SIGNED_PTR("task.itk_gssd") itk_gssd;      /* yet another send right */
-	struct ipc_port * XNU_PTRAUTH_SIGNED_PTR("task.itk_debug_control") itk_debug_control; /* send right for debugmode communications */
-	struct ipc_port * XNU_PTRAUTH_SIGNED_PTR("task.itk_task_access") itk_task_access; /* and another send right */
-	struct ipc_port * XNU_PTRAUTH_SIGNED_PTR("task.itk_resume") itk_resume;    /* a receive right to resume this task */
+	struct ipc_port * XNU_PTRAUTH_SIGNED_PTR("task.itk_host") itk_host;                     /* a send right */
+	struct ipc_port * XNU_PTRAUTH_SIGNED_PTR("task.itk_bootstrap") itk_bootstrap;           /* a send right */
+	struct ipc_port * XNU_PTRAUTH_SIGNED_PTR("task.itk_seatbelt") itk_seatbelt;             /* a send right */
+	struct ipc_port * XNU_PTRAUTH_SIGNED_PTR("task.itk_gssd") itk_gssd;                     /* yet another send right */
+	struct ipc_port * XNU_PTRAUTH_SIGNED_PTR("task.itk_debug_control") itk_debug_control;   /* send right for debugmode communications */
+	struct ipc_port * XNU_PTRAUTH_SIGNED_PTR("task.itk_task_access") itk_task_access;       /* and another send right */
+	struct ipc_port * XNU_PTRAUTH_SIGNED_PTR("task.itk_resume") itk_resume;                 /* a receive right to resume this task */
 	struct ipc_port * XNU_PTRAUTH_SIGNED_PTR("task.itk_registered") itk_registered[TASK_PORT_REGISTER_MAX];
 	/* all send rights */
+	ipc_port_t * XNU_PTRAUTH_SIGNED_PTR("task.itk_dyld_notify") itk_dyld_notify; /* lazy send rights array of size DYLD_MAX_PROCESS_INFO_NOTIFY_COUNT */
 
 	struct ipc_space * XNU_PTRAUTH_SIGNED_PTR("task.itk_space") itk_space;
 
@@ -233,7 +237,7 @@ struct task {
 
 	MACHINE_TASK
 
-	integer_t faults;              /* faults counter */
+	counter_t faults;              /* faults counter */
 	integer_t decompressions;      /* decompression counter */
 	integer_t pageins;             /* pageins counter */
 	integer_t cow_faults;          /* copy on write fault counter */
@@ -478,6 +482,8 @@ struct task {
 #if CONFIG_PHYS_WRITE_ACCT
 	uint64_t        task_fs_metadata_writes;
 #endif /* CONFIG_PHYS_WRITE_ACCT */
+	uint32_t task_shared_region_slide;   /* cached here to avoid locking during telemetry */
+	uuid_t   task_shared_region_uuid;
 };
 
 /*
@@ -594,6 +600,14 @@ task_watchport_elem_deallocate(
 
 extern boolean_t
 task_has_watchports(task_t task);
+
+void
+task_dyld_process_info_update_helper(
+	task_t                  task,
+	size_t                  active_count,
+	vm_map_address_t        magic_addr,
+	ipc_port_t             *release_ports,
+	size_t                  release_count);
 
 #else   /* MACH_KERNEL_PRIVATE */
 
@@ -1047,6 +1061,7 @@ extern boolean_t get_task_frozen(task_t);
 
 /* Convert from a task to a port */
 extern ipc_port_t convert_task_to_port(task_t);
+extern ipc_port_t convert_task_to_port_pinned(task_t);
 extern ipc_port_t convert_task_name_to_port(task_name_t);
 extern ipc_port_t convert_task_inspect_to_port(task_inspect_t);
 extern ipc_port_t convert_task_read_to_port(task_read_t);

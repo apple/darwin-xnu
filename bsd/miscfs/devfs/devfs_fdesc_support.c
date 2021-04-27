@@ -113,8 +113,8 @@ u_long fdhash;
 
 static int fdesc_attr(int fd, struct vnode_attr *vap, vfs_context_t a_context);
 
-lck_mtx_t fdesc_mtx;
-lck_grp_t *fdesc_lckgrp;
+static LCK_GRP_DECLARE(fdesc_lckgrp, "fdesc");
+static LCK_MTX_DECLARE(fdesc_mtx, &fdesc_lckgrp);
 
 static void
 fdesc_lock(void)
@@ -141,8 +141,6 @@ devfs_fdesc_init()
 
 	/* XXX Make sure you have the right path... */
 	fdhashtbl = hashinit(NFDCACHE, M_CACHE, &fdhash);
-	fdesc_lckgrp = lck_grp_alloc_init("fdesc", NULL);
-	lck_mtx_init(&fdesc_mtx, fdesc_lckgrp, NULL);
 
 	DEVFS_LOCK();
 	dev_add_entry("fd", rootdir, DEV_DEVFD, NULL, NULL, NULL, &direntp);
@@ -311,7 +309,7 @@ devfs_devfd_lookup(struct vnop_lookup_args *ap)
 		*vpp = dvp;
 
 		if ((error = vnode_get(dvp))) {
-			return error;
+			goto bad;
 		}
 		return 0;
 	}

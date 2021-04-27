@@ -224,34 +224,6 @@ ipc_entry_claim(
 }
 
 /*
- *	Routine:	ipc_entry_get
- *	Purpose:
- *		Tries to allocate an entry out of the space.
- *	Conditions:
- *		The space is write-locked and active throughout.
- *		An object may be locked.  Will not allocate memory.
- *	Returns:
- *		KERN_SUCCESS		A free entry was found.
- *		KERN_NO_SPACE		No entry allocated.
- */
-
-kern_return_t
-ipc_entry_get(
-	ipc_space_t             space,
-	mach_port_name_t        *namep,
-	ipc_entry_t             *entryp)
-{
-	kern_return_t kr;
-
-	kr = ipc_entries_hold(space, 1);
-	if (KERN_SUCCESS != kr) {
-		return kr;
-	}
-
-	return ipc_entry_claim(space, namep, entryp);
-}
-
-/*
  *	Routine:	ipc_entry_alloc
  *	Purpose:
  *		Allocate an entry out of the space.
@@ -281,9 +253,9 @@ ipc_entry_alloc(
 			return KERN_INVALID_TASK;
 		}
 
-		kr = ipc_entry_get(space, namep, entryp);
+		kr = ipc_entries_hold(space, 1);
 		if (kr == KERN_SUCCESS) {
-			return kr;
+			return ipc_entry_claim(space, namep, entryp);
 		}
 
 		kr = ipc_entry_grow_table(space, ITS_SIZE_NONE);
@@ -409,7 +381,6 @@ ipc_entry_alloc_name(
 		 */
 		kern_return_t kr;
 		kr = ipc_entry_grow_table(space, index + 1);
-		assert(kr != KERN_NO_SPACE);
 		if (kr != KERN_SUCCESS) {
 			/* space is unlocked */
 			return kr;

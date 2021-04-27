@@ -65,25 +65,16 @@ static int routefserr_lookup(__unused struct vnop_lookup_args * args);
 static int routefserr_setlabel(__unused struct vnop_setlabel_args * args);
 
 
-lck_grp_t       * routefs_lck_grp;
-lck_grp_attr_t  * routefs_lck_grp_attr;
-lck_attr_t      * routefs_lck_attr;
-lck_mtx_t         routefs_mutex;
+LCK_GRP_DECLARE(routefs_lck_grp, "routefs_lock");
+LCK_MTX_DECLARE(routefs_mutex, &routefs_lck_grp);;
 
 #define ROUTEFS_LOCK()    lck_mtx_lock(&routefs_mutex)
 #define ROUTEFS_UNLOCK()  lck_mtx_unlock(&routefs_mutex)
-static int _lock_inited = 0;
 static boolean_t _fs_alreadyMounted = FALSE;  /* atleast a mount of this filesystem is present */
 
 static int
 routefs_init(__unused struct vfsconf *vfsp)
 {
-	routefs_lck_grp_attr = lck_grp_attr_alloc_init();
-	routefs_lck_grp = lck_grp_alloc_init("routefs_lock", routefs_lck_grp_attr);
-	routefs_lck_attr = lck_attr_alloc_init();
-	lck_mtx_init(&routefs_mutex, routefs_lck_grp, routefs_lck_attr);
-	_lock_inited = 1;
-
 	return 0;
 }
 

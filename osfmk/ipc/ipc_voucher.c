@@ -364,7 +364,7 @@ unsafe_convert_port_to_voucher(
 		 * keeps the voucher bound to the port (and active).
 		 */
 		if (ip_kotype(port) == IKOT_VOUCHER) {
-			return (uintptr_t)port->ip_kobject;
+			return (uintptr_t)ipc_kobject_get(port);
 		}
 	}
 	return (uintptr_t)IV_NULL;
@@ -492,7 +492,7 @@ convert_voucher_to_port(ipc_voucher_t voucher)
 	 * if this is the first send right
 	 */
 	if (!ipc_kobject_make_send_lazy_alloc_port(&voucher->iv_port,
-	    (ipc_kobject_t)voucher, IKOT_VOUCHER, false, 0)) {
+	    (ipc_kobject_t)voucher, IKOT_VOUCHER, IPC_KOBJECT_ALLOC_NONE, false, 0)) {
 		ipc_voucher_release(voucher);
 	}
 	return voucher->iv_port;
@@ -706,7 +706,7 @@ convert_voucher_attr_control_to_port(ipc_voucher_attr_control_t control)
 	 * ipc_voucher_attr_control_notify if this is the first send right
 	 */
 	if (!ipc_kobject_make_send_lazy_alloc_port(&control->ivac_port,
-	    (ipc_kobject_t)control, IKOT_VOUCHER_ATTR_CONTROL, false, 0)) {
+	    (ipc_kobject_t)control, IKOT_VOUCHER_ATTR_CONTROL, IPC_KOBJECT_ALLOC_NONE, false, 0)) {
 		ivac_release(control);
 	}
 	return control->ivac_port;
@@ -2876,7 +2876,7 @@ struct user_data_value_element {
 	iv_index_t                              e_sum;
 	iv_index_t                              e_hash;
 	queue_chain_t                           e_hash_link;
-	uint8_t                                 e_data[];
+	uint8_t                                *e_data;
 };
 
 typedef struct user_data_value_element *user_data_element_t;
@@ -2967,6 +2967,13 @@ ipc_voucher_attr_control_t test_control;
 #define USER_DATA_ASSERT_KEY(key) assert(MACH_VOUCHER_ATTR_KEY_TEST == (key))
 #endif
 
+static void
+user_data_value_element_free(user_data_element_t elem)
+{
+	kheap_free(KHEAP_DATA_BUFFERS, elem->e_data, elem->e_size);
+	kfree(elem, sizeof(struct user_data_value_element));
+}
+
 /*
  *	Routine:	user_data_release_value
  *	Purpose:
@@ -2996,7 +3003,7 @@ user_data_release_value(
 	if (sync == elem->e_made) {
 		queue_remove(&user_data_bucket[hash], elem, user_data_element_t, e_hash_link);
 		user_data_unlock();
-		kfree(elem, sizeof(*elem) + elem->e_size);
+		user_data_value_element_free(elem);
 		return KERN_SUCCESS;
 	}
 	assert(sync < elem->e_made);
@@ -3076,7 +3083,7 @@ retry:
 			user_data_unlock();
 
 			if (NULL != alloc) {
-				kfree(alloc, sizeof(*alloc) + content_size);
+				user_data_value_element_free(alloc);
 			}
 
 			return elem;
@@ -3086,11 +3093,12 @@ retry:
 	if (NULL == alloc) {
 		user_data_unlock();
 
-		alloc = (user_data_element_t)kalloc(sizeof(*alloc) + content_size);
+		alloc = kalloc(sizeof(struct user_data_value_element));
 		alloc->e_made = 1;
 		alloc->e_size = content_size;
 		alloc->e_sum = sum;
 		alloc->e_hash = hash;
+		alloc->e_data = kheap_alloc(KHEAP_DATA_BUFFERS, content_size, Z_WAITOK | Z_NOFAIL);
 		memcpy(alloc->e_data, content, content_size);
 		goto retry;
 	}

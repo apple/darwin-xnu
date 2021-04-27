@@ -404,6 +404,7 @@ struct  proc {
 	uint32_t          p_memstat_freeze_sharedanon_pages; /* shared pages left behind after freeze */
 	uint32_t          p_memstat_frozen_count;
 	uint32_t          p_memstat_thaw_count;
+	uint32_t          p_memstat_last_thaw_interval; /* In which freezer interval was this last thawed? */
 #endif /* CONFIG_FREEZE */
 #endif /* CONFIG_MEMORYSTATUS */
 
@@ -526,7 +527,10 @@ struct proc_ident {
 #define P_VFS_IOPOLICY_STATFS_NO_DATA_VOLUME            0x0008
 #define P_VFS_IOPOLICY_TRIGGER_RESOLVE_DISABLE          0x0010
 #define P_VFS_IOPOLICY_IGNORE_CONTENT_PROTECTION        0x0020
-#define P_VFS_IOPOLICY_VALID_MASK                       (P_VFS_IOPOLICY_ATIME_UPDATES | P_VFS_IOPOLICY_FORCE_HFS_CASE_SENSITIVITY | P_VFS_IOPOLICY_MATERIALIZE_DATALESS_FILES | P_VFS_IOPOLICY_STATFS_NO_DATA_VOLUME | P_VFS_IOPOLICY_TRIGGER_RESOLVE_DISABLE | P_VFS_IOPOLICY_IGNORE_CONTENT_PROTECTION)
+#define P_VFS_IOPOLICY_IGNORE_NODE_PERMISSIONS          0x0040
+#define P_VFS_IOPOLICY_SKIP_MTIME_UPDATE                                0x0080
+#define P_VFS_IOPOLICY_VALID_MASK                       (P_VFS_IOPOLICY_ATIME_UPDATES | P_VFS_IOPOLICY_FORCE_HFS_CASE_SENSITIVITY | P_VFS_IOPOLICY_MATERIALIZE_DATALESS_FILES | P_VFS_IOPOLICY_STATFS_NO_DATA_VOLUME | \
+	        P_VFS_IOPOLICY_TRIGGER_RESOLVE_DISABLE | P_VFS_IOPOLICY_IGNORE_CONTENT_PROTECTION | P_VFS_IOPOLICY_IGNORE_NODE_PERMISSIONS | P_VFS_IOPOLICY_SKIP_MTIME_UPDATE)
 
 /* process creation arguments */
 #define PROC_CREATE_FORK        0       /* independent child (running) */
@@ -690,8 +694,7 @@ extern unsigned int proc_shutdown_exitcount;
 
 #define PID_MAX         99999
 #define NO_PID          100000
-extern lck_mtx_t * proc_list_mlock;
-extern lck_mtx_t * proc_klist_mlock;
+extern lck_mtx_t proc_list_mlock;
 
 #define BSD_SIMUL_EXECS         33 /* 32 , allow for rounding */
 #define BSD_PAGEABLE_SIZE_PER_EXEC      (NCARGS + PAGE_SIZE + PAGE_SIZE) /* page for apple vars, page for executable header */
@@ -712,16 +715,15 @@ extern u_long pgrphash;
 extern LIST_HEAD(sesshashhead, session) * sesshashtbl;
 extern u_long sesshash;
 
-extern lck_grp_t * proc_lck_grp;
-extern lck_grp_t * proc_fdmlock_grp;
-extern lck_grp_t * proc_kqhashlock_grp;
-extern lck_grp_t * proc_knhashlock_grp;
-extern lck_grp_t * proc_mlock_grp;
-extern lck_grp_t * proc_ucred_mlock_grp;
-extern lck_grp_t * proc_slock_grp;
-extern lck_grp_t * proc_dirslock_grp;
-extern lck_grp_attr_t * proc_lck_grp_attr;
-extern lck_attr_t * proc_lck_attr;
+extern lck_attr_t proc_lck_attr;
+extern lck_grp_t proc_fdmlock_grp;
+extern lck_grp_t proc_lck_grp;
+extern lck_grp_t proc_kqhashlock_grp;
+extern lck_grp_t proc_knhashlock_grp;
+extern lck_grp_t proc_slock_grp;
+extern lck_grp_t proc_mlock_grp;
+extern lck_grp_t proc_ucred_mlock_grp;
+extern lck_grp_t proc_dirslock_grp;
 
 LIST_HEAD(proclist, proc);
 extern struct proclist allproc;         /* List of all processes. */
@@ -919,5 +921,11 @@ extern zone_t proc_stats_zone;
 extern zone_t proc_sigacts_zone;
 
 extern struct proc_ident proc_ident(proc_t p);
+
+/*
+ * True if the process ignores file permissions in case it owns the
+ * file/directory
+ */
+bool proc_ignores_node_permissions(proc_t proc);
 
 #endif  /* !_SYS_PROC_INTERNAL_H_ */

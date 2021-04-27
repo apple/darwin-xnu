@@ -1059,7 +1059,8 @@ typedef void mpo_file_label_init_t(
  *
  *  Determine whether the subject identified by the credential can open an
  *  I/O Kit device at the passed path of the passed user client class and
- *  type.
+ *  type.  This check is performed after instantiating the user client.
+ *  See also mpo_iokit_check_open_service_t.
  *
  *  @return Return 0 if access is granted, or an appropriate value for
  *  errno should be returned.
@@ -1067,6 +1068,25 @@ typedef void mpo_file_label_init_t(
 typedef int mpo_iokit_check_open_t(
 	kauth_cred_t cred,
 	io_object_t user_client,
+	unsigned int user_client_type
+	);
+/**
+ *  @brief Access control check for opening an I/O Kit device
+ *  @param cred Subject credential
+ *  @param service Service instance
+ *  @param user_client_type User client type
+ *
+ *  Determine whether the subject identified by the credential can open a
+ *  I/O Kit user client of the passed service and user client type.
+ *  This check is performed before instantiating the user client.  See also
+ *  mpo_iokit_check_open_t.
+ *
+ *  @return Return 0 if access is granted, or an appropriate value for
+ *  errno should be returned.
+ */
+typedef int mpo_iokit_check_open_service_t(
+	kauth_cred_t cred,
+	io_object_t service,
 	unsigned int user_client_type
 	);
 /**
@@ -2151,6 +2171,27 @@ typedef int mpo_proc_check_set_host_special_port_t(
 typedef int mpo_proc_check_set_host_exception_port_t(
 	kauth_cred_t cred,
 	unsigned int exception
+	);
+/**
+ *  @brief Access control check for getting movable task/thread control port for current task.
+ *  @param cred Subject credential
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned.
+ */
+typedef int mpo_proc_check_get_movable_control_port_t(
+	kauth_cred_t cred
+	);
+/**
+ *  @brief Access control check for calling task_dyld_process_info_notify_register
+ *  and task_dyld_process_info_notify_deregister.
+ *  @param cred Subject credential
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned.
+ */
+typedef int mpo_proc_check_dyld_process_info_notify_register_t(
+	kauth_cred_t cred
 	);
 /**
  *  @brief Access control over pid_suspend, pid_resume and family
@@ -3495,6 +3536,26 @@ typedef int mpo_proc_check_get_task_t(
 	);
 
 /**
+ *  @brief Access control check for getting a process's task ports of different flavors
+ *  @param cred Subject credential
+ *  @param pident Object unique process identifier
+ *  @param flavor Requested task port flavor
+ *
+ *  Determine whether the subject identified by the credential can get
+ *  the passed process's task port of given flavor.
+ *  This call is used by the task_{,read,inspect,name}_for_pid(2) API.
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned. Suggested failure: EACCES for label mismatch,
+ *  EPERM for lack of privilege, or ESRCH to hide visibility of the target.
+ */
+typedef int mpo_proc_check_get_task_with_flavor_t(
+	kauth_cred_t cred,
+	struct proc_ident *pident,
+	mach_task_flavor_t flavor
+	);
+
+/**
  *  @brief Access control check for exposing a process's task port
  *  @param cred Subject credential
  *  @param pident Object unique process identifier
@@ -3511,6 +3572,47 @@ typedef int mpo_proc_check_get_task_t(
 typedef int mpo_proc_check_expose_task_t(
 	kauth_cred_t cred,
 	struct proc_ident *pident
+	);
+
+/**
+ *  @brief Access control check for exposing a process's task ports of different flavors
+ *  @param cred Subject credential
+ *  @param pident Object unique process identifier
+ *  @param flavor Requested task port flavor
+ *
+ *  Determine whether the subject identified by the credential can expose
+ *  the passed process's task port of given flavor.
+ *  This call is used by the accessor APIs like processor_set_tasks() and
+ *  processor_set_threads().
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned. Suggested failure: EACCES for label mismatch,
+ *  EPERM for lack of privilege, or ESRCH to hide visibility of the target.
+ */
+typedef int mpo_proc_check_expose_task_with_flavor_t(
+	kauth_cred_t cred,
+	struct proc_ident *pident,
+	mach_task_flavor_t flavor
+	);
+
+/**
+ *  @brief Access control check for upgrading to task port with a task identity token
+ *  @param cred Subject credential
+ *  @param pident Object unique process identifier
+ *  @param flavor Requested task port flavor
+ *
+ *  Determine whether the subject identified by the credential can upgrade to task port
+ *  of given flavor with a task identity token of the passed process.
+ *  This call is used by task_identity_token_get_task_port().
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned. Suggested failure: EACCES for label mismatch,
+ *  EPERM for lack of privilege, or ESRCH to hide visibility of the target.
+ */
+typedef int mpo_proc_check_task_id_token_get_task_t(
+	kauth_cred_t cred,
+	struct proc_ident *pident,
+	mach_task_flavor_t flavor
 	);
 
 /**
@@ -5342,7 +5444,7 @@ typedef void mpo_reserved_hook_t(void);
  * Please note that this should be kept in sync with the check assumptions
  * policy in bsd/kern/policy_check.c (policy_ops struct).
  */
-#define MAC_POLICY_OPS_VERSION 69 /* inc when new reserved slots are taken */
+#define MAC_POLICY_OPS_VERSION 74 /* inc when new reserved slots are taken */
 struct mac_policy_ops {
 	mpo_audit_check_postselect_t            *mpo_audit_check_postselect;
 	mpo_audit_check_preselect_t             *mpo_audit_check_preselect;
@@ -5450,9 +5552,9 @@ struct mac_policy_ops {
 	mpo_mount_label_init_t                  *mpo_mount_label_init;
 	mpo_mount_label_internalize_t           *mpo_mount_label_internalize;
 
-	mpo_reserved_hook_t                     *mpo_reserved38;
-	mpo_reserved_hook_t                     *mpo_reserved39;
-	mpo_reserved_hook_t                     *mpo_reserved40;
+	mpo_proc_check_expose_task_with_flavor_t *mpo_proc_check_expose_task_with_flavor;
+	mpo_proc_check_get_task_with_flavor_t   *mpo_proc_check_get_task_with_flavor;
+	mpo_proc_check_task_id_token_get_task_t *mpo_proc_check_task_id_token_get_task;
 
 	mpo_pipe_check_ioctl_t                  *mpo_pipe_check_ioctl;
 	mpo_pipe_check_kqfilter_t               *mpo_pipe_check_kqfilter;
@@ -5481,7 +5583,7 @@ struct mac_policy_ops {
 	mpo_proc_notify_exec_complete_t         *mpo_proc_notify_exec_complete;
 	mpo_proc_notify_cs_invalidated_t        *mpo_proc_notify_cs_invalidated;
 	mpo_proc_check_syscall_unix_t           *mpo_proc_check_syscall_unix;
-	mpo_proc_check_expose_task_t            *mpo_proc_check_expose_task;
+	mpo_proc_check_expose_task_t            *mpo_proc_check_expose_task;            /* Deprecating, use mpo_proc_check_expose_task_with_flavor instead */
 	mpo_proc_check_set_host_special_port_t  *mpo_proc_check_set_host_special_port;
 	mpo_proc_check_set_host_exception_port_t *mpo_proc_check_set_host_exception_port;
 	mpo_exc_action_check_exception_send_t   *mpo_exc_action_check_exception_send;
@@ -5518,8 +5620,8 @@ struct mac_policy_ops {
 
 	mpo_proc_check_debug_t                  *mpo_proc_check_debug;
 	mpo_proc_check_fork_t                   *mpo_proc_check_fork;
-	mpo_proc_check_get_task_name_t          *mpo_proc_check_get_task_name;
-	mpo_proc_check_get_task_t               *mpo_proc_check_get_task;
+	mpo_proc_check_get_task_name_t          *mpo_proc_check_get_task_name; /* Deprecating, use mpo_proc_check_get_task_with_flavor instead */
+	mpo_proc_check_get_task_t               *mpo_proc_check_get_task;      /* Deprecating, use mpo_proc_check_get_task_with_flavor instead */
 	mpo_proc_check_getaudit_t               *mpo_proc_check_getaudit;
 	mpo_proc_check_getauid_t                *mpo_proc_check_getauid;
 	mpo_proc_check_getlcid_t                *mpo_proc_check_getlcid;
@@ -5550,8 +5652,8 @@ struct mac_policy_ops {
 	mpo_socket_check_setsockopt_t           *mpo_socket_check_setsockopt;
 	mpo_socket_check_getsockopt_t           *mpo_socket_check_getsockopt;
 
-	mpo_reserved_hook_t                     *mpo_reserved50;
-	mpo_reserved_hook_t                     *mpo_reserved51;
+	mpo_proc_check_get_movable_control_port_t *mpo_proc_check_get_movable_control_port;
+	mpo_proc_check_dyld_process_info_notify_register_t *mpo_proc_check_dyld_process_info_notify_register;
 	mpo_reserved_hook_t                     *mpo_reserved52;
 	mpo_reserved_hook_t                     *mpo_reserved53;
 	mpo_reserved_hook_t                     *mpo_reserved54;
@@ -5562,7 +5664,8 @@ struct mac_policy_ops {
 	mpo_reserved_hook_t                     *mpo_reserved59;
 	mpo_reserved_hook_t                     *mpo_reserved60;
 	mpo_reserved_hook_t                     *mpo_reserved61;
-	mpo_reserved_hook_t                     *mpo_reserved62;
+
+	mpo_iokit_check_open_service_t          *mpo_iokit_check_open_service;
 
 	mpo_system_check_acct_t                 *mpo_system_check_acct;
 	mpo_system_check_audit_t                *mpo_system_check_audit;

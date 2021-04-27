@@ -2003,7 +2003,7 @@ tryagain:
 			return NULL;
 		}
 		bzero(newnoop, sizeof(*newnoop));
-		lck_mtx_init(&newnoop->noo_lock, nfs_open_grp, LCK_ATTR_NULL);
+		lck_mtx_init(&newnoop->noo_lock, &nfs_open_grp, LCK_ATTR_NULL);
 		newnoop->noo_mount = nmp;
 		kauth_cred_ref(cred);
 		newnoop->noo_cred = cred;
@@ -2039,7 +2039,7 @@ nfs_open_owner_destroy(struct nfs_open_owner *noop)
 	if (noop->noo_cred) {
 		kauth_cred_unref(&noop->noo_cred);
 	}
-	lck_mtx_destroy(&noop->noo_lock, nfs_open_grp);
+	lck_mtx_destroy(&noop->noo_lock, &nfs_open_grp);
 	FREE(noop, M_TEMP);
 }
 
@@ -2228,7 +2228,7 @@ alloc:
 			return ENOMEM;
 		}
 		bzero(newnofp, sizeof(*newnofp));
-		lck_mtx_init(&newnofp->nof_lock, nfs_open_grp, LCK_ATTR_NULL);
+		lck_mtx_init(&newnofp->nof_lock, &nfs_open_grp, LCK_ATTR_NULL);
 		newnofp->nof_owner = noop;
 		nfs_open_owner_ref(noop);
 		newnofp->nof_np = np;
@@ -2272,7 +2272,7 @@ nfs_open_file_destroy(struct nfs_open_file *nofp)
 	TAILQ_REMOVE(&nofp->nof_owner->noo_opens, nofp, nof_oolink);
 	lck_mtx_unlock(&nofp->nof_owner->noo_lock);
 	nfs_open_owner_rele(nofp->nof_owner);
-	lck_mtx_destroy(&nofp->nof_lock, nfs_open_grp);
+	lck_mtx_destroy(&nofp->nof_lock, &nfs_open_grp);
 	FREE(nofp, M_TEMP);
 }
 
@@ -3351,7 +3351,7 @@ tryagain:
 			return NULL;
 		}
 		bzero(newnlop, sizeof(*newnlop));
-		lck_mtx_init(&newnlop->nlo_lock, nfs_open_grp, LCK_ATTR_NULL);
+		lck_mtx_init(&newnlop->nlo_lock, &nfs_open_grp, LCK_ATTR_NULL);
 		newnlop->nlo_pid = pid;
 		newnlop->nlo_pid_start = p->p_start;
 		newnlop->nlo_name = OSAddAtomic(1, &nfs_lock_owner_seqnum);
@@ -3387,7 +3387,7 @@ nfs_lock_owner_destroy(struct nfs_lock_owner *nlop)
 		nfs_open_owner_rele(nlop->nlo_open_owner);
 		nlop->nlo_open_owner = NULL;
 	}
-	lck_mtx_destroy(&nlop->nlo_lock, nfs_open_grp);
+	lck_mtx_destroy(&nlop->nlo_lock, &nfs_open_grp);
 	FREE(nlop, M_TEMP);
 }
 
@@ -4199,7 +4199,14 @@ restart:
 			error = EIO;
 		}
 		if (!error) {
+			if (busy) {
+				nfs_open_state_clear_busy(np);
+				busy = 0;
+			}
 			error = nmp->nm_funcs->nf_setlock_rpc(np, nofp, newnflp, 0, 0, vfs_context_thread(ctx), vfs_context_ucred(ctx));
+			if (!busy && !nfs_open_state_set_busy(np, vfs_context_thread(ctx))) {
+				busy = 1;
+			}
 		}
 		if (!error || ((error != NFSERR_DENIED) && (error != NFSERR_GRACE))) {
 			break;
@@ -7479,13 +7486,13 @@ nfs4_vnop_rmdir(
 		 * again if another object gets created with the same filehandle
 		 * before this vnode gets reclaimed
 		 */
-		lck_mtx_lock(nfs_node_hash_mutex);
+		lck_mtx_lock(&nfs_node_hash_mutex);
 		if (np->n_hflag & NHHASHED) {
 			LIST_REMOVE(np, n_hash);
 			np->n_hflag &= ~NHHASHED;
 			FSDBG(266, 0, np, np->n_flag, 0xb1eb1e);
 		}
-		lck_mtx_unlock(nfs_node_hash_mutex);
+		lck_mtx_unlock(&nfs_node_hash_mutex);
 	}
 	FREE(dul, M_TEMP);
 	return error;

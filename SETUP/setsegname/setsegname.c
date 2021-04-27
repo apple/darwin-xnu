@@ -107,7 +107,7 @@ readFile(const char *path, vm_offset_t * objAddr, vm_size_t * objSize)
 static void
 usage(void)
 {
-	fprintf(stderr, "Usage: %s [-s OLDSEGNAME] -n NEWSEGNAME input -o output\n", getprogname());
+	fprintf(stderr, "Usage: %s [-s OLDSEGNAME] [-i IGNORESEGNAME] -n NEWSEGNAME input -o output\n", getprogname());
 	exit(1);
 }
 
@@ -120,6 +120,7 @@ main(int argc, char * argv[])
 	const char            * output_name = NULL;
 	const char            * input_name = NULL;
 	const char            * oldseg_name = NULL;
+	const char            * ignoreseg_name = NULL;
 	const char            * newseg_name = NULL;
 	struct mach_header    * hdr;
 	struct mach_header_64 * hdr64;
@@ -137,10 +138,13 @@ main(int argc, char * argv[])
 	int                     ch;
 
 
-	while ((ch = getopt(argc, argv, "s:n:o:")) != -1) {
+	while ((ch = getopt(argc, argv, "s:i:n:o:")) != -1) {
 		switch (ch) {
 		case 's':
 			oldseg_name = optarg;
+			break;
+		case 'i':
+			ignoreseg_name = optarg;
 			break;
 		case 'n':
 			newseg_name = optarg;
@@ -234,7 +238,8 @@ main(int argc, char * argv[])
 				attr = OSSwapInt32(attr);
 			}
 
-			if (!(S_ATTR_DEBUG & attr)) {
+			if (!(S_ATTR_DEBUG & attr) && (!ignoreseg_name ||
+			    0 != strncmp(ignoreseg_name, (char *)names, sizeof(*names)))) {
 				if (!oldseg_name ||
 				    0 == strncmp(oldseg_name, (char *)names, sizeof(*names))) {
 					memset(names, 0x0, sizeof(*names));

@@ -34,7 +34,6 @@
 #include <mach/mach_traps.h>
 #include <mach/vm_param.h>
 
-#include <kern/counters.h>
 #include <kern/cpu_data.h>
 #include <arm/cpu_data_internal.h>
 #include <kern/mach_param.h>
@@ -164,7 +163,7 @@ dtrace_get_cpu_int_stack_top(void)
 	return getCpuDatap()->intstack_top;
 }
 #endif /* CONFIG_DTRACE */
-extern const char *mach_syscall_name_table[];
+extern const char *const mach_syscall_name_table[];
 
 /* ARM64_TODO: remove this. still TODO?*/
 extern struct proc* current_proc(void);

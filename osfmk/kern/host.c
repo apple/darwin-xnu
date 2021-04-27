@@ -109,11 +109,40 @@
 
 #include <pexpert/pexpert.h>
 
-vm_statistics64_data_t PERCPU_DATA(vm_stat);
-uint64_t PERCPU_DATA(vm_page_grab_count);
+SCALABLE_COUNTER_DEFINE(vm_statistics_zero_fill_count);        /* # of zero fill pages */
+SCALABLE_COUNTER_DEFINE(vm_statistics_reactivations);          /* # of pages reactivated */
+SCALABLE_COUNTER_DEFINE(vm_statistics_pageins);                /* # of pageins */
+SCALABLE_COUNTER_DEFINE(vm_statistics_pageouts);               /* # of pageouts */
+SCALABLE_COUNTER_DEFINE(vm_statistics_faults);                 /* # of faults */
+SCALABLE_COUNTER_DEFINE(vm_statistics_cow_faults);             /* # of copy-on-writes */
+SCALABLE_COUNTER_DEFINE(vm_statistics_lookups);                /* object cache lookups */
+SCALABLE_COUNTER_DEFINE(vm_statistics_hits);                   /* object cache hits */
+SCALABLE_COUNTER_DEFINE(vm_statistics_purges);                 /* # of pages purged */
+SCALABLE_COUNTER_DEFINE(vm_statistics_decompressions);         /* # of pages decompressed */
+SCALABLE_COUNTER_DEFINE(vm_statistics_compressions);           /* # of pages compressed */
+SCALABLE_COUNTER_DEFINE(vm_statistics_swapins);                /* # of pages swapped in (via compression segments) */
+SCALABLE_COUNTER_DEFINE(vm_statistics_swapouts);               /* # of pages swapped out (via compression segments) */
+SCALABLE_COUNTER_DEFINE(vm_statistics_total_uncompressed_pages_in_compressor); /* # of pages (uncompressed) held within the compressor. */
+SCALABLE_COUNTER_DEFINE(vm_page_grab_count);
 
 host_data_t realhost;
 
+static void
+get_host_vm_stats(vm_statistics64_t out)
+{
+	out->zero_fill_count = counter_load(&vm_statistics_zero_fill_count);
+	out->reactivations = counter_load(&vm_statistics_reactivations);
+	out->pageins = counter_load(&vm_statistics_pageins);
+	out->pageouts = counter_load(&vm_statistics_pageouts);
+	out->faults = counter_load(&vm_statistics_faults);
+	out->cow_faults = counter_load(&vm_statistics_cow_faults);
+	out->lookups = counter_load(&vm_statistics_lookups);
+	out->hits = counter_load(&vm_statistics_hits);
+	out->compressions = counter_load(&vm_statistics_compressions);
+	out->decompressions = counter_load(&vm_statistics_decompressions);
+	out->swapins = counter_load(&vm_statistics_swapins);
+	out->swapouts = counter_load(&vm_statistics_swapouts);
+}
 vm_extmod_statistics_data_t host_extmod_statistics;
 
 kern_return_t
@@ -122,8 +151,6 @@ host_processors(host_priv_t host_priv, processor_array_t * out_array, mach_msg_t
 	if (host_priv == HOST_PRIV_NULL) {
 		return KERN_INVALID_ARGUMENT;
 	}
-
-	assert(host_priv == &realhost);
 
 	unsigned int count = processor_count;
 	assert(count != 0);
@@ -402,19 +429,7 @@ host_statistics(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_ty
 			return KERN_FAILURE;
 		}
 
-		host_vm_stat = *PERCPU_GET_MASTER(vm_stat);
-
-		percpu_foreach_secondary(stat, vm_stat) {
-			vm_statistics64_data_t data = *stat;
-			host_vm_stat.zero_fill_count += data.zero_fill_count;
-			host_vm_stat.reactivations += data.reactivations;
-			host_vm_stat.pageins += data.pageins;
-			host_vm_stat.pageouts += data.pageouts;
-			host_vm_stat.faults += data.faults;
-			host_vm_stat.cow_faults += data.cow_faults;
-			host_vm_stat.lookups += data.lookups;
-			host_vm_stat.hits += data.hits;
-		}
+		get_host_vm_stats(&host_vm_stat);
 
 		stat32 = (vm_statistics_t)info;
 
@@ -427,11 +442,11 @@ host_statistics(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_ty
 			}
 		}
 		stat32->inactive_count = VM_STATISTICS_TRUNCATE_TO_32_BIT(vm_page_inactive_count);
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 		stat32->wire_count = VM_STATISTICS_TRUNCATE_TO_32_BIT(vm_page_wire_count);
-#else
+#else /* !XNU_TARGET_OS_OSX */
 		stat32->wire_count = VM_STATISTICS_TRUNCATE_TO_32_BIT(vm_page_wire_count + vm_page_throttled_count + vm_lopage_free_count);
-#endif
+#endif /* !XNU_TARGET_OS_OSX */
 		stat32->zero_fill_count = VM_STATISTICS_TRUNCATE_TO_32_BIT(host_vm_stat.zero_fill_count);
 		stat32->reactivations = VM_STATISTICS_TRUNCATE_TO_32_BIT(host_vm_stat.reactivations);
 		stat32->pageins = VM_STATISTICS_TRUNCATE_TO_32_BIT(host_vm_stat.pageins);
@@ -793,24 +808,7 @@ vm_stats(void *info, unsigned int *count)
 	if (*count < HOST_VM_INFO64_REV0_COUNT) {
 		return KERN_FAILURE;
 	}
-
-	host_vm_stat = *PERCPU_GET_MASTER(vm_stat);
-
-	percpu_foreach_secondary(stat, vm_stat) {
-		vm_statistics64_data_t data = *stat;
-		host_vm_stat.zero_fill_count += data.zero_fill_count;
-		host_vm_stat.reactivations += data.reactivations;
-		host_vm_stat.pageins += data.pageins;
-		host_vm_stat.pageouts += data.pageouts;
-		host_vm_stat.faults += data.faults;
-		host_vm_stat.cow_faults += data.cow_faults;
-		host_vm_stat.lookups += data.lookups;
-		host_vm_stat.hits += data.hits;
-		host_vm_stat.compressions += data.compressions;
-		host_vm_stat.decompressions += data.decompressions;
-		host_vm_stat.swapins += data.swapins;
-		host_vm_stat.swapouts += data.swapouts;
-	}
+	get_host_vm_stats(&host_vm_stat);
 
 	vm_statistics64_t stat = (vm_statistics64_t)info;
 
@@ -827,11 +825,11 @@ vm_stats(void *info, unsigned int *count)
 		}
 	}
 	stat->inactive_count = vm_page_inactive_count;
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 	stat->wire_count = vm_page_wire_count;
-#else
+#else /* !XNU_TARGET_OS_OSX */
 	stat->wire_count = vm_page_wire_count + vm_page_throttled_count + vm_lopage_free_count;
-#endif
+#endif /* !XNU_TARGET_OS_OSX */
 	stat->zero_fill_count = host_vm_stat.zero_fill_count;
 	stat->reactivations = host_vm_stat.reactivations;
 	stat->pageins = host_vm_stat.pageins;
@@ -980,20 +978,6 @@ set_sched_stats_active(boolean_t active)
 	sched_stats_active = active;
 	return KERN_SUCCESS;
 }
-
-
-uint64_t
-get_pages_grabbed_count(void)
-{
-	uint64_t pages_grabbed_count = 0;
-
-	percpu_foreach(count, vm_page_grab_count) {
-		pages_grabbed_count += *count;
-	}
-
-	return pages_grabbed_count;
-}
-
 
 kern_return_t
 get_sched_statistics(struct _processor_statistics_np * out, uint32_t * count)
@@ -1290,6 +1274,10 @@ host_set_special_port_from_user(host_priv_t host_priv, int id, ipc_port_t port)
 		return KERN_NO_ACCESS;
 	}
 
+	if (IP_VALID(port) && (port->ip_immovable_receive || port->ip_immovable_send)) {
+		return KERN_INVALID_RIGHT;
+	}
+
 	return host_set_special_port(host_priv, id, port);
 }
 
@@ -1414,8 +1402,6 @@ host_set_multiuser_config_flags(host_priv_t host_priv, uint32_t multiuser_config
 	if (host_priv == HOST_PRIV_NULL) {
 		return KERN_INVALID_ARGUMENT;
 	}
-
-	assert(host_priv == &realhost);
 
 	/*
 	 * Always enforce that the multiuser bit is set

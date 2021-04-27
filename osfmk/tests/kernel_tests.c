@@ -85,6 +85,7 @@ extern kern_return_t console_serial_parallel_log_tests(void);
 extern kern_return_t test_os_log(void);
 extern kern_return_t test_os_log_parallel(void);
 extern kern_return_t bitmap_post_test(void);
+extern kern_return_t counter_tests(void);
 
 #ifdef __arm64__
 extern kern_return_t arm64_munger_test(void);
@@ -138,7 +139,8 @@ struct xnupost_test kernel_post_tests[] = {XNUPOST_TEST_CONFIG_BASIC(zalloc_test
 #if __ARM_VFP__
 	                                   XNUPOST_TEST_CONFIG_BASIC(vfp_state_test),
 #endif
-	                                   XNUPOST_TEST_CONFIG_BASIC(vm_tests), };
+	                                   XNUPOST_TEST_CONFIG_BASIC(vm_tests),
+	                                   XNUPOST_TEST_CONFIG_BASIC(counter_tests)};
 
 uint32_t kernel_post_tests_count = sizeof(kernel_post_tests) / sizeof(xnupost_test_data_t);
 
@@ -405,7 +407,7 @@ zalloc_test(void)
 	    ZC_DESTRUCTIBLE);
 	T_ASSERT_NOTNULL(test_zone, NULL);
 
-	T_ASSERT_EQ_INT(test_zone->countfree, 0, NULL);
+	T_ASSERT_EQ_INT(test_zone->z_elems_free, 0, NULL);
 	T_SETUPEND;
 
 	T_ASSERT_NOTNULL(test_ptr = zalloc(test_zone), NULL);

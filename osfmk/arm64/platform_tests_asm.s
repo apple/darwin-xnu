@@ -34,6 +34,6 @@
 	.align 2
 	.globl EXT(arm64_msr_lock_test)
 LEXT(arm64_msr_lock_test)
-	msr		ARM64_REG_HID8, x0
+	msr		S3_0_C15_C8_0, x0
 	ret
 #endif

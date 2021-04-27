@@ -124,6 +124,14 @@ uint64_t interrupt_masked_timeout = 0xd0000;
 uint64_t stackshot_interrupt_masked_timeout = 0xf9999;
 #endif
 
+/*
+ * A 6-second timeout will give the watchdog code a chance to run
+ * before a panic is triggered by the xcall routine.
+ */
+#define XCALL_ACK_TIMEOUT_NS ((uint64_t) 6000000000)
+uint64_t xcall_ack_timeout_abstime;
+
+
 boot_args const_boot_args __attribute__((section("__DATA, __const")));
 boot_args      *BootArgs __attribute__((section("__DATA, __const")));
 
@@ -145,6 +153,8 @@ SECURITY_READ_ONLY_LATE(boolean_t) diversify_user_jop = TRUE;
 
 SECURITY_READ_ONLY_LATE(uint64_t) gDramBase;
 SECURITY_READ_ONLY_LATE(uint64_t) gDramSize;
+
+SECURITY_READ_ONLY_LATE(bool) serial_console_enabled = false;
 
 /*
  * Forward definition
@@ -435,7 +445,11 @@ arm_init(
 	}
 
 	PE_parse_boot_argn("interrupt_masked_debug_timeout", &interrupt_masked_timeout, sizeof(interrupt_masked_timeout));
-#endif
+
+#endif /* INTERRUPT_MASKED_DEBUG */
+
+	nanoseconds_to_absolutetime(XCALL_ACK_TIMEOUT_NS, &xcall_ack_timeout_abstime);
+
 
 #if HAS_BP_RET
 	PE_parse_boot_argn("bpret", &bp_ret, sizeof(bp_ret));
@@ -496,6 +510,7 @@ arm_init(
 	}
 
 	if (serialmode & SERIALMODE_OUTPUT) {                 /* Start serial if requested */
+		serial_console_enabled = true;
 		(void)switch_to_serial_console(); /* Switch into serial mode */
 		disableConsoleOutput = FALSE;     /* Allow printfs to happen */
 	}

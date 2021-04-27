@@ -39,9 +39,7 @@
 #include <sys/mount_internal.h>
 #include <sys/vnode_internal.h>
 
-lck_attr_t * mockfs_mtx_attr = (lck_attr_t *) 0;
-lck_grp_attr_t * mockfs_grp_attr = (lck_grp_attr_t *) 0;
-lck_grp_t * mockfs_mtx_grp = (lck_grp_t *) 0;
+static LCK_GRP_DECLARE(mockfs_mtx_grp, "mockfs-mutex");
 
 int mockfs_mountroot(mount_t mp, vnode_t rvp, __unused vfs_context_t ctx);
 
@@ -111,7 +109,7 @@ mockfs_mountroot(mount_t mp, vnode_t rvp, __unused vfs_context_t ctx)
 		}
 	}
 
-	lck_mtx_init(&mockfs_mount_data->mockfs_mnt_mtx, mockfs_mtx_grp, mockfs_mtx_attr);
+	lck_mtx_init(&mockfs_mount_data->mockfs_mnt_mtx, &mockfs_mtx_grp, LCK_ATTR_NULL);
 
 	/*
 	 * All of the needed nodes/structures have been set up; now we just need to establish the relationships
@@ -140,7 +138,7 @@ done:
 			mockfs_fsnode_destroy(root_fsnode);
 		}
 		if (mockfs_mount_data) {
-			lck_mtx_destroy(&mockfs_mount_data->mockfs_mnt_mtx, mockfs_mtx_grp);
+			lck_mtx_destroy(&mockfs_mount_data->mockfs_mnt_mtx, &mockfs_mtx_grp);
 			FREE(mockfs_mount_data, M_TEMP);
 		}
 	}
@@ -193,7 +191,7 @@ mockfs_unmount(struct mount *mp, int mntflags, __unused vfs_context_t ctx)
 		panic("mockfs_unmount: Failed to destroy the fsnode tree");
 	}
 
-	lck_mtx_destroy(&mockfs_mnt->mockfs_mnt_mtx, mockfs_mtx_grp);
+	lck_mtx_destroy(&mockfs_mnt->mockfs_mnt_mtx, &mockfs_mtx_grp);
 	FREE(mockfs_mnt, M_TEMP);
 	mp->mnt_data = NULL;
 
@@ -227,28 +225,9 @@ mockfs_sync(__unused struct mount *mp, __unused int waitfor, __unused vfs_contex
 	return 0;
 }
 
-/*
- * mockfs_init:
- *   Run once (during VFS initialization); takes care of generic mockfs initialization (which for now, means
- *   global lock information).
- *
- * Returns 0 on success, or an error.
- */
 int
 mockfs_init(__unused struct vfsconf * vfsc)
 {
-	mockfs_mtx_attr = lck_attr_alloc_init();
-	mockfs_grp_attr = lck_grp_attr_alloc_init();
-	mockfs_mtx_grp = lck_grp_alloc_init("mockfs-mutex", mockfs_grp_attr);
-
-	/*
-	 * If we've failed to allocate this early in boot, something is horrendously wrong; it should be fine to
-	 *   panic (for now).
-	 */
-	if (!mockfs_mtx_attr || !mockfs_grp_attr || !mockfs_mtx_grp) {
-		panic("mockfs_init failed to allocate lock information");
-	}
-
 	return 0;
 }
 

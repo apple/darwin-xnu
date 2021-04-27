@@ -52,7 +52,7 @@ static const mbuf_flags_t mbuf_cflags_mask = (MBUF_EXT);
 #define MAX_MBUF_TX_COMPL_FUNC 32
 mbuf_tx_compl_func
     mbuf_tx_compl_table[MAX_MBUF_TX_COMPL_FUNC];
-extern lck_rw_t *mbuf_tx_compl_tbl_lock;
+extern lck_rw_t mbuf_tx_compl_tbl_lock;
 u_int32_t mbuf_tx_compl_index = 0;
 
 #if (DEVELOPMENT || DEBUG)
@@ -1782,11 +1782,11 @@ get_tx_compl_callback_index(mbuf_tx_compl_func callback)
 {
 	u_int32_t i;
 
-	lck_rw_lock_shared(mbuf_tx_compl_tbl_lock);
+	lck_rw_lock_shared(&mbuf_tx_compl_tbl_lock);
 
 	i = get_tx_compl_callback_index_locked(callback);
 
-	lck_rw_unlock_shared(mbuf_tx_compl_tbl_lock);
+	lck_rw_unlock_shared(&mbuf_tx_compl_tbl_lock);
 
 	return i;
 }
@@ -1800,9 +1800,9 @@ m_get_tx_compl_callback(u_int32_t idx)
 		ASSERT(0);
 		return NULL;
 	}
-	lck_rw_lock_shared(mbuf_tx_compl_tbl_lock);
+	lck_rw_lock_shared(&mbuf_tx_compl_tbl_lock);
 	cb = mbuf_tx_compl_table[idx];
-	lck_rw_unlock_shared(mbuf_tx_compl_tbl_lock);
+	lck_rw_unlock_shared(&mbuf_tx_compl_tbl_lock);
 	return cb;
 }
 
@@ -1816,7 +1816,7 @@ mbuf_register_tx_compl_callback(mbuf_tx_compl_func callback)
 		return EINVAL;
 	}
 
-	lck_rw_lock_exclusive(mbuf_tx_compl_tbl_lock);
+	lck_rw_lock_exclusive(&mbuf_tx_compl_tbl_lock);
 
 	i = get_tx_compl_callback_index_locked(callback);
 	if (i != -1) {
@@ -1834,7 +1834,7 @@ mbuf_register_tx_compl_callback(mbuf_tx_compl_func callback)
 		}
 	}
 unlock:
-	lck_rw_unlock_exclusive(mbuf_tx_compl_tbl_lock);
+	lck_rw_unlock_exclusive(&mbuf_tx_compl_tbl_lock);
 
 	return error;
 }
@@ -1849,7 +1849,7 @@ mbuf_unregister_tx_compl_callback(mbuf_tx_compl_func callback)
 		return EINVAL;
 	}
 
-	lck_rw_lock_exclusive(mbuf_tx_compl_tbl_lock);
+	lck_rw_lock_exclusive(&mbuf_tx_compl_tbl_lock);
 
 	/* assume the worst */
 	error = ENOENT;
@@ -1861,7 +1861,7 @@ mbuf_unregister_tx_compl_callback(mbuf_tx_compl_func callback)
 		}
 	}
 unlock:
-	lck_rw_unlock_exclusive(mbuf_tx_compl_tbl_lock);
+	lck_rw_unlock_exclusive(&mbuf_tx_compl_tbl_lock);
 
 	return error;
 }
@@ -1950,9 +1950,9 @@ m_do_tx_compl_callback(struct mbuf *m, struct ifnet *ifp)
 			continue;
 		}
 
-		lck_rw_lock_shared(mbuf_tx_compl_tbl_lock);
+		lck_rw_lock_shared(&mbuf_tx_compl_tbl_lock);
 		callback = mbuf_tx_compl_table[i];
-		lck_rw_unlock_shared(mbuf_tx_compl_tbl_lock);
+		lck_rw_unlock_shared(&mbuf_tx_compl_tbl_lock);
 
 		if (callback != NULL) {
 			callback(m->m_pkthdr.pkt_compl_context,

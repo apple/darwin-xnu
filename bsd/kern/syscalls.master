@@ -856,7 +856,7 @@
 536	AUE_NULL	ALL	{ int shared_region_map_and_slide_2_np(uint32_t files_count, const struct shared_file_np *files, uint32_t mappings_count, const struct shared_file_mapping_slide_np *mappings) NO_SYSCALL_STUB; }
 537	AUE_NULL	ALL { int pivot_root(const char *new_rootfs_path_before, const char *old_rootfs_path_after); }
 538 AUE_TASKINSPECTFORPID	ALL { int task_inspect_for_pid(mach_port_name_t target_tport, int pid, mach_port_name_t *t); }
-539 AUE_TASKINSPECTFORPID	ALL { int task_read_for_pid(mach_port_name_t target_tport, int pid, mach_port_name_t *t); }
+539 AUE_TASKREADFORPID	ALL { int task_read_for_pid(mach_port_name_t target_tport, int pid, mach_port_name_t *t); }
 540	AUE_PREADV	ALL	{ user_ssize_t sys_preadv(int fd, struct iovec *iovp, int iovcnt, off_t offset); }
 541	AUE_PWRITEV	ALL	{ user_ssize_t sys_pwritev(int fd, struct iovec *iovp, int iovcnt, off_t offset); }
 542	AUE_PREADV	ALL	{ user_ssize_t sys_preadv_nocancel(int fd, struct iovec *iovp, int iovcnt, off_t offset) NO_SYSCALL_STUB; }

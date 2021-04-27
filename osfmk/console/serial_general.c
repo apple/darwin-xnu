@@ -113,8 +113,13 @@ switch_to_video_console(void)
 int
 switch_to_serial_console(void)
 {
+	extern bool serial_console_enabled;
 	int old_cons_ops = cons_ops_index;
-	cons_ops_index = SERIAL_CONS_OPS;
+
+	if (serial_console_enabled) {
+		cons_ops_index = SERIAL_CONS_OPS;
+	}
+
 	return old_cons_ops;
 }
 

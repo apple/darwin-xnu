@@ -16,6 +16,8 @@
 #include <darwintest.h>
 #include <darwintest_utils.h>
 
+#include "test_utils.h"
+
 T_GLOBAL_META(
 	T_META_NAMESPACE("xnu.vm"),
 	T_META_CHECK_LEAKS(false)
@@ -76,25 +78,6 @@ static char *child_exit_why[] = {
 	"invalid memsize argument to child",
 	"malloc() failed",
 };
-
-/*
- * Corpse collection only happens in development kernels.
- * So we need this to detect if the test is relevant.
- */
-static boolean_t
-is_development_kernel(void)
-{
-	int ret;
-	int dev = 0;
-	size_t dev_size = sizeof(dev);
-
-	ret = sysctlbyname("kern.development", &dev, &dev_size, NULL, 0);
-	if (ret != 0) {
-		return FALSE;
-	}
-
-	return dev != 0;
-}
 
 /*
  * Set/Get the sysctl used to determine if corpse collection occurs.

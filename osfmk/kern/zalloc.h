@@ -425,6 +425,15 @@ extern void    *zalloc_permanent(
 #define zalloc_permanent_type(type_t) \
 	((type_t *)zalloc_permanent(sizeof(type_t), ZALIGN(type_t)))
 
+/*!
+ * @function zalloc_first_proc_made()
+ *
+ * @abstract
+ * Declare that the "early" allocation phase is done.
+ */
+extern void
+zalloc_first_proc_made(void);
+
 #pragma mark XNU only: per-cpu allocations
 
 /*!
@@ -692,6 +701,7 @@ __enum_decl(zone_reserved_id_t, zone_id_t, {
 	ZONE_ID_PROC,
 	ZONE_ID_VM_MAP_COPY,
 	ZONE_ID_PMAP,
+	ZONE_ID_VM_MAP,
 
 	ZONE_ID__FIRST_DYNAMIC,
 });
@@ -727,6 +737,7 @@ const char     *zone_heap_name(
  * @param zone          the specified zone
  * @returns             the zone (sub)map this zone allocates from.
  */
+__pure2
 extern vm_map_t zone_submap(
 	zone_t                  zone);
 
@@ -813,6 +824,8 @@ extern zone_t   zone_create_ext(
  * - isn't sensitive to @c zone_t::elem_size being compromised,
  * - is slightly faster as it saves one load and a multiplication.
  *
+ * @warning: zones using foreign memory can't use this interface.
+ *
  * @param zone_id       the zone ID the address needs to belong to.
  * @param elem_size     the size of elements for this zone.
  * @param addr          the element address to check.
@@ -822,30 +835,47 @@ extern void     zone_id_require(
 	vm_size_t               elem_size,
 	void                   *addr);
 
+/*!
+ * @function zone_id_require_allow_foreign
+ *
+ * @abstract
+ * Requires for a given pointer to belong to the specified zone, by ID and size.
+ *
+ * @discussion
+ * This is a version of @c zone_id_require() that works with zones allowing
+ * foreign memory.
+ */
+extern void     zone_id_require_allow_foreign(
+	zone_id_t               zone_id,
+	vm_size_t               elem_size,
+	void                   *addr);
+
 /*
  * Zone submap indices
  *
- * Z_SUBMAP_IDX_VA_RESTRICTED_MAP (LP64)
+ * Z_SUBMAP_IDX_VA_RESTRICTED (LP64)
  * used to restrict VM allocations lower in the kernel VA space,
  * for pointer packing
  *
- * Z_SUBMAP_IDX_GENERAL_MAP
+ * Z_SUBMAP_IDX_VA_RESERVE (ILP32)
+ * used to keep a reserve of VA space for the urgent allocations
+ * backing allocations of crucial VM types (fictious pages, holes, ...)
+ *
+ * Z_SUBMAP_IDX_GENERAL
  * used for unrestricted allocations
  *
- * Z_SUBMAP_IDX_BAG_OF_BYTES_MAP
+ * Z_SUBMAP_IDX_BAG_OF_BYTES
  * used to sequester bags of bytes from all other allocations and allow VA reuse
  * within the map
  */
-#if !defined(__LP64__)
-#define Z_SUBMAP_IDX_GENERAL_MAP        0
-#define Z_SUBMAP_IDX_BAG_OF_BYTES_MAP   1
-#define Z_SUBMAP_IDX_COUNT              2
+#if defined(__LP64__)
+#define Z_SUBMAP_IDX_VA_RESTRICTED  0
 #else
-#define Z_SUBMAP_IDX_VA_RESTRICTED_MAP  0
-#define Z_SUBMAP_IDX_GENERAL_MAP        1
-#define Z_SUBMAP_IDX_BAG_OF_BYTES_MAP   2
-#define Z_SUBMAP_IDX_COUNT              3
+#define Z_SUBMAP_IDX_VA_RESERVE     0
 #endif
+#define Z_SUBMAP_IDX_GENERAL        1
+#define Z_SUBMAP_IDX_BAG_OF_BYTES   2
+#define Z_SUBMAP_IDX_COUNT          3
 
 /* Change zone sub-map, to be called from the zone_create_ext() setup hook */
 extern void     zone_set_submap_idx(
@@ -855,23 +885,30 @@ extern void     zone_set_submap_idx(
 /* Make zone as non expandable, to be called from the zone_create_ext() setup hook */
 extern void     zone_set_noexpand(
 	zone_t          zone,
-	vm_size_t       maxsize);
+	vm_size_t       max_elements);
 
 /* Make zone exhaustible, to be called from the zone_create_ext() setup hook */
 extern void     zone_set_exhaustible(
 	zone_t          zone,
-	vm_size_t       maxsize);
+	vm_size_t       max_elements);
 
-/* Initially fill zone with specified number of elements */
-extern int      zfill(
+/*!
+ * @function zone_fill_initially
+ *
+ * @brief
+ * Initially fill a non collectable zone to have the specified amount of
+ * elements.
+ *
+ * @discussion
+ * This function must be called on a non collectable permanent zone before it
+ * has been used yet.
+ *
+ * @param zone          The zone to fill.
+ * @param nelems        The number of elements to be able to hold.
+ */
+extern void     zone_fill_initially(
 	zone_t          zone,
-	int             nelem);
-
-/* Fill zone with memory */
-extern void     zcram(
-	zone_t          zone,
-	vm_offset_t     newmem,
-	vm_size_t       size);
+	vm_size_t       nelems);
 
 #pragma mark XNU only: misc & implementation details
 
@@ -939,6 +976,26 @@ extern void zone_view_startup_init(
 #define __zpcpu_addr(e)         ((vm_address_t)(e))
 #define __zpcpu_cast(ptr, e)    ((typeof(ptr))(e))
 #define __zpcpu_next(ptr)       __zpcpu_cast(ptr, __zpcpu_addr(ptr) + PAGE_SIZE)
+
+/**
+ * @macro __zpcpu_mangle_for_boot()
+ *
+ * @discussion
+ * Per-cpu variables allocated in zones (as opposed to percpu globals) that need
+ * to function early during boot (before @c STARTUP_SUB_ZALLOC) might use static
+ * storage marked @c __startup_data and replace it with the proper allocation
+ * at the end of the @c STARTUP_SUB_ZALLOC phase (@c STARTUP_RANK_LAST).
+ *
+ * However, some devices boot from a cpu where @c cpu_number() != 0. This macro
+ * provides the proper mangling of the storage into a "fake" percpu pointer so
+ * that accesses through @c zpercpu_get() functions properly.
+ *
+ * This is invalid to use after the @c STARTUP_SUB_ZALLOC phase has completed.
+ */
+#define __zpcpu_mangle_for_boot(ptr)  ({ \
+	assert(startup_phase < STARTUP_SUB_ZALLOC); \
+	__zpcpu_cast(ptr, __zpcpu_mangle(__zpcpu_addr(ptr) - ptoa(cpu_number()))); \
+})
 
 extern unsigned zpercpu_count(void) __pure2;
 

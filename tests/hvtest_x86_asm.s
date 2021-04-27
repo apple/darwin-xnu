@@ -482,5 +482,42 @@ _radar60691363_entry:
 
 	vmcall
 
+.code16
+
+	// Perform a fixed number of port I/Os with various arguments.
+	.global _pio_entry
+_pio_entry:
+
+	movl	$0xaa, %eax
+
+	outl	%eax, $0xab
+
+	movl	$3, %ecx
+1:	outb	%al, $0xab
+	loop	1b
+
+	movl	$10, %ecx
+1:	outb	%al, $0xcd
+	loop	1b
+
+	movl	$10, %ecx
+1:	outb	%al, $0xef
+	loop	1b
+
+	movl	$0x23456, %eax
+	vmcall
+
+.code16
+	// Perform 10 port I/Os on 0xef.
+	.global _pio_entry_basic
+_pio_entry_basic:
+
+	movl	$10, %ecx
+1:	outb	%al, $0xef
+	loop	1b
+
+	movl	$0x23456, %eax
+	vmcall
+
 	.global _hvtest_end
 _hvtest_end:

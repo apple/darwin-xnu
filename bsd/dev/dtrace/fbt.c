@@ -460,7 +460,7 @@ fbt_provide_module_kernel_syms(struct modctl *ctl)
 	for (seg = firstsegfromheader(mh); seg != NULL; seg = nextsegfromheader(mh, seg)) {
 		kernel_section_t *sect = firstsect(seg);
 
-		if (strcmp(seg->segname, "__KLD") == 0) {
+		if (strcmp(seg->segname, "__KLD") == 0 || strcmp(seg->segname, "__KLDDATA") == 0) {
 			continue;
 		}
 

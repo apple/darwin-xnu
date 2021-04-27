@@ -293,9 +293,9 @@ options   CONFIG_MFCTBLSIZ=16			# <bsmall>
 #
 # configurable kernel message buffer size
 #
-options   CONFIG_MSG_BSIZE_REL=4096		# <msgb_small>
-options   CONFIG_MSG_BSIZE_DEV=4096		# <msgb_small>
-options   CONFIG_MSG_BSIZE_REL=16384		# <msgb_large>
+options   CONFIG_MSG_BSIZE_REL=16384		# <msgb_small>
+options   CONFIG_MSG_BSIZE_DEV=131072		# <msgb_small>
+options   CONFIG_MSG_BSIZE_REL=131072		# <msgb_large>
 options   CONFIG_MSG_BSIZE_DEV=131072		# <msgb_large>
 options   CONFIG_MSG_BSIZE=CONFIG_MSG_BSIZE_REL	# <!development,debug>
 options   CONFIG_MSG_BSIZE=CONFIG_MSG_BSIZE_DEV	# <development,debug>
@@ -305,6 +305,12 @@ options   CONFIG_MSG_BSIZE=CONFIG_MSG_BSIZE_DEV	# <development,debug>
 #
 options   CONFIG_IPC_TABLE_ENTRIES_STEPS=64  	# 137898 entries	# <bsmall,small,xsmall>
 options   CONFIG_IPC_TABLE_ENTRIES_STEPS=256 	# 300714 entries	# <medium,large,xlarge>
+
+#
+# maximum copyout size for IPC debugging tools
+#
+options CONFIG_IPC_KERNEL_MAP_SIZE=16	# 16M	# <bsmall,small,xsmall>
+options CONFIG_IPC_KERNEL_MAP_SIZE=64	# 64M	# <medium,large,xlarge>
 
 #
 #  configurable kernel - use these options to strip strings from panic
@@ -573,11 +579,6 @@ options		CONFIG_KAS_INFO		# kas_info support	# <config_kas_info>
 #
 # MACH configuration options.
 #
-# TASK_SWAPPER enables code that manages demand for physical memory by
-#	forcibly suspending tasks when the demand exceeds supply. This
-#	option should be on.
-#
-options		TASK_SWAPPER	#	<task_swapper_disabled>
 
 #
 # This defines configuration options that are normally used only during
@@ -607,7 +608,6 @@ options		MACH_VM_DEBUG	#				# <debug>
 #	hardclock device driver.
 #
 options		MACH_MP_DEBUG	#				# <debug>
-options		CONFIG_ZCACHE 	# Enable per-cpu caching for zones	# <config_zcache>
 options		CONFIG_ZLEAKS	# Live zone leak debugging	# <zleaks>
 
 #
@@ -649,10 +649,6 @@ options     KPC                    # <kpc>
 
 
 options     PGO                    # <pgo>
-
-# MACH_COUNTERS enables code that handles various counters in the system.
-#
-options		MACH_COUNTERS	#			    # <debug>
 
 # DEVELOPMENT define for development builds
 options		DEVELOPMENT	# dev kernel	    	    # <development>
@@ -742,6 +738,7 @@ options		CONFIG_SERIAL_KDP   # KDP over serial	# <config_serial_kdp>
 options		CONFIG_KDP_INTERACTIVE_DEBUGGING	# <kdp_interactive_debugging>
 
 options 	CONFIG_TASKWATCH
+options 	CONFIG_USER_NOTIFICATION		# <config_user_notification>
 #
 # Kernel Power On Self Tests
 #
@@ -751,11 +748,6 @@ options		CONFIG_XNUPOST				# <config_xnupost>
 # Kernel proc reference instrumentation
 #
 options PROC_REF_DEBUG					# <proc_ref_debug>
-
-#
-# Kernel OS reason debug instrumentation
-#
-options OS_REASON_DEBUG					# <os_reason_debug>
 
 #
 # Kernel Voucher Attr Manager for Activity Trace
@@ -771,6 +763,9 @@ options		CONFIG_SYSDIAGNOSE			# <config_sysdiagnose>
 # Configurable Security Restrictions
 options		CONFIG_CSR				# <config_csr>
 options		CONFIG_CSR_FROM_DT		# <config_csr_from_dt>
+
+# Enable collection of IO Compression statistics
+options		CONFIG_IO_COMPRESSION_STATS		# <config_io_compression_stats>
 
 #
 # Console options

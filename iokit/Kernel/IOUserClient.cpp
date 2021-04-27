@@ -4213,6 +4213,11 @@ is_io_service_open_extended(
 		return kIOReturnBadArgument;
 	}
 
+#if CONFIG_MACF
+	if (mac_iokit_check_open_service(kauth_cred_get(), service, connect_type) != 0) {
+		return kIOReturnNotPermitted;
+	}
+#endif
 	do{
 		if (properties) {
 			return kIOReturnUnsupported;

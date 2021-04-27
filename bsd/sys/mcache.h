@@ -306,23 +306,17 @@ typedef struct mcache {
 	u_int32_t       mc_nwretry_cnt; /* # of no-wait retry attempts */
 	u_int32_t       mc_nwfail_cnt;  /* # of no-wait retries that failed */
 	decl_lck_mtx_data(, mc_sync_lock); /* protects purges and reenables */
-	lck_attr_t      *mc_sync_lock_attr;
 	lck_grp_t       *mc_sync_lock_grp;
-	lck_grp_attr_t  *mc_sync_lock_grp_attr;
 	/*
 	 * Keep CPU and buckets layers lock statistics separate.
 	 */
-	lck_attr_t      *mc_cpu_lock_attr;
 	lck_grp_t       *mc_cpu_lock_grp;
-	lck_grp_attr_t  *mc_cpu_lock_grp_attr;
 
 	/*
 	 * Bucket layer common to all CPUs
 	 */
 	decl_lck_mtx_data(, mc_bkt_lock);
-	lck_attr_t      *mc_bkt_lock_attr;
 	lck_grp_t       *mc_bkt_lock_grp;
-	lck_grp_attr_t  *mc_bkt_lock_grp_attr;
 	mcache_bkttype_t *cache_bkttype;        /* bucket type */
 	mcache_bktlist_t mc_full;               /* full buckets */
 	mcache_bktlist_t mc_empty;              /* empty buckets */
@@ -356,6 +350,8 @@ typedef struct mcache {
 #define MCACHE_STACK_DEPTH 16
 
 #define MCA_TRN_MAX     2               /* Number of transactions to record */
+
+#define DUMP_MCA_BUF_SIZE       512
 
 typedef struct mcache_audit {
 	struct mcache_audit *mca_next;  /* next audit struct */
@@ -404,7 +400,7 @@ __private_extern__ void mcache_audit_free_verify(mcache_audit_t *,
     void *, size_t, size_t);
 __private_extern__ void mcache_audit_free_verify_set(mcache_audit_t *,
     void *, size_t, size_t);
-__private_extern__ char *mcache_dump_mca(mcache_audit_t *);
+__private_extern__ char *mcache_dump_mca(char buf[DUMP_MCA_BUF_SIZE], mcache_audit_t *);
 __private_extern__ void mcache_audit_panic(mcache_audit_t *, void *, size_t,
     int64_t, int64_t) __abortlike;
 

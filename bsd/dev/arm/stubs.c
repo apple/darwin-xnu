@@ -16,10 +16,12 @@
 #include <sys/kauth.h>
 #include <sys/ucred.h>
 #include <sys/proc_internal.h>
+#include <sys/sysproto.h>
 #include <sys/user.h>
 #include <kern/task.h>
 #include <kern/thread.h>
 #include <vm/vm_map.h>
+
 
 /*
  * copy a null terminated string from the kernel address space into the user
@@ -90,3 +92,4 @@ copywithin(void *src, void *dst, size_t count)
 	bcopy(src, dst, count);
 	return 0;
 }
+

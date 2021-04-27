@@ -117,12 +117,12 @@ protected:
 
 	unsigned int   flags:14,
 	    length:18;
-	char         * OS_PTRAUTH_SIGNED_PTR("OSString.string") string;;
+	char         * OS_PTRAUTH_SIGNED_PTR("OSString.string") string;
 
 #else /* APPLE_KEXT_ALIGN_CONTAINERS */
 
 protected:
-	char         * OS_PTRAUTH_SIGNED_PTR("OSString.string") string;;
+	char         * OS_PTRAUTH_SIGNED_PTR("OSString.string") string;
 	unsigned int   flags;
 	unsigned int   length;
 

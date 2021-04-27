@@ -144,7 +144,6 @@ struct lockd_notify {
 
 
 #ifdef KERNEL
-void    nfs_lockinit(void);
 void    nfs_lockd_mount_register(struct nfsmount *);
 void    nfs_lockd_mount_unregister(struct nfsmount *);
 int     nfs3_lockd_request(nfsnode_t, int, LOCKD_MSG_REQUEST *, int, thread_t);

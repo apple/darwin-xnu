@@ -41,7 +41,6 @@
 
 #include <kern/clock.h>
 #include <kern/spl.h>
-#include <kern/counters.h>
 #include <kern/queue.h>
 #include <kern/zalloc.h>
 #include <kern/thread.h>
@@ -182,6 +181,12 @@ iokit_release_port( ipc_port_t port )
 }
 
 EXTERN void
+iokit_make_port_send( ipc_port_t port )
+{
+	ipc_port_make_send( port );
+}
+
+EXTERN void
 iokit_release_port_send( ipc_port_t port )
 {
 	ipc_port_release_send( port );
@@ -310,9 +315,8 @@ iokit_make_send_right( task_t task, io_object_t obj, ipc_kobject_type_t type )
 		// thread-argument-passing and its value should not be garbage
 		current_thread()->ith_knote = ITH_KNOTE_NULL;
 		kr = ipc_object_copyout( task->itk_space, ip_to_object(sendPort),
-		    MACH_MSG_TYPE_PORT_SEND, NULL, NULL, &name);
+		    MACH_MSG_TYPE_PORT_SEND, IPC_OBJECT_COPYOUT_FLAGS_NONE, NULL, NULL, &name);
 		if (kr != KERN_SUCCESS) {
-			ipc_port_release_send( sendPort );
 			name = MACH_PORT_NULL;
 		}
 	} else if (sendPort == IP_NULL) {

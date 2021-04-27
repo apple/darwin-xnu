@@ -403,6 +403,9 @@ null_get_lowerparent(vnode_t lvp, vnode_t * dvpp, vfs_context_t ctx)
 	error = vnode_getattr(lvp, &va, ctx);
 
 	if (error || !VATTR_IS_SUPPORTED(&va, va_parentid)) {
+		if (!error) {
+			error = ENOTSUP;
+		}
 		goto end;
 	}
 
@@ -605,11 +608,10 @@ notdot:
 		if (error == 0) {
 			*ap->a_vpp = vp;
 		}
-	}
-
-	/* if we got lvp, drop the iocount from VNOP_LOOKUP */
-	if (lvp != NULL) {
-		vnode_put(lvp);
+		/* if we got lvp, drop the iocount from VNOP_LOOKUP */
+		if (lvp != NULL) {
+			vnode_put(lvp);
+		}
 	}
 
 	nullfs_cleanup_patched_context(null_mp, ectx);

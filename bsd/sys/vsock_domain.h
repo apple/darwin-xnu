@@ -56,11 +56,8 @@ struct vsockpcb {
 
 struct vsockpcbinfo {
 	// PCB locking.
-	lck_attr_t *vsock_lock_attr;
-	lck_grp_t *vsock_lock_grp;
-	lck_grp_attr_t *vsock_lock_grp_attr;
-	lck_rw_t *all_lock;
-	lck_rw_t *bound_lock;
+	lck_rw_t all_lock;
+	lck_rw_t bound_lock;
 	// PCB lists.
 	TAILQ_HEAD(, vsockpcb) all;
 	LIST_HEAD(, vsockpcb) bound;

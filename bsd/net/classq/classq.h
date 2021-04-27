@@ -93,6 +93,11 @@ typedef struct classq_pkt {
 #define CLASSQ_PKT_INITIALIZER(_p)      \
 	(classq_pkt_t){ .cp_mbuf = NULL, .cp_ptype = QP_INVALID }
 
+#define CLASSQ_PKT_INIT(_p)    do {    \
+	(_p)->cp_ptype = QP_INVALID;   \
+	(_p)->cp_mbuf = NULL;          \
+} while (0)
+
 #define CLASSQ_PKT_INIT_MBUF(_p, _m)    do {    \
 	(_p)->cp_ptype = QP_MBUF;               \
 	(_p)->cp_mbuf = (_m);                   \
@@ -183,6 +188,9 @@ typedef struct _class_queue_ {
 #define CLASSQF_ECN     (CLASSQF_ECN4 | CLASSQF_ECN6)
 
 extern u_int32_t classq_verbose;
+#if DEBUG || DEVELOPMENT
+extern uint16_t fq_codel_quantum;
+#endif /* DEBUG || DEVELOPMENT */
 
 SYSCTL_DECL(_net_classq);
 

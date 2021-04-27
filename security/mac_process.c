@@ -75,6 +75,8 @@
 #include <mach/mach_types.h>
 #include <kern/task.h>
 
+#include <os/hash.h>
+
 #include <security/mac_internal.h>
 #include <security/mac_mach_internal.h>
 
@@ -106,10 +108,38 @@ mac_cred_label_free(struct label *label)
 	mac_labelzone_free(label);
 }
 
-int
-mac_cred_label_compare(struct label *a, struct label *b)
+bool
+mac_cred_label_is_equal(const struct label *a, const struct label *b)
 {
-	return bcmp(a, b, sizeof(*a)) == 0;
+	if (a->l_flags != b->l_flags) {
+		return false;
+	}
+	for (int slot = 0; slot < MAC_MAX_SLOTS; slot++) {
+		const void *pa = a->l_perpolicy[slot].l_ptr;
+		const void *pb = b->l_perpolicy[slot].l_ptr;
+
+		if (pa != pb) {
+			return false;
+		}
+	}
+	return true;
+}
+
+uint32_t
+mac_cred_label_hash_update(const struct label *a, uint32_t hash)
+{
+	hash = os_hash_jenkins_update(&a->l_flags,
+	    sizeof(a->l_flags), hash);
+#if __has_feature(ptrauth_calls)
+	for (int slot = 0; slot < MAC_MAX_SLOTS; slot++) {
+		const void *ptr = a->l_perpolicy[slot].l_ptr;
+		hash = os_hash_jenkins_update(&ptr, sizeof(ptr), hash);
+	}
+#else
+	hash = os_hash_jenkins_update(&a->l_perpolicy,
+	    sizeof(a->l_perpolicy), hash);
+#endif
+	return hash;
 }
 
 int
@@ -410,31 +440,48 @@ mac_proc_check_fork(proc_t curp)
 }
 
 int
-mac_proc_check_get_task_name(struct ucred *cred, proc_ident_t pident)
+mac_proc_check_get_task(struct ucred *cred, proc_ident_t pident, mach_task_flavor_t flavor)
 {
 	int error;
 
-	MAC_CHECK(proc_check_get_task_name, cred, pident);
+	assert(flavor <= TASK_FLAVOR_NAME);
+
+	/* Also call the old hook for compatability, deprecating in rdar://66356944. */
+	if (flavor == TASK_FLAVOR_CONTROL) {
+		MAC_CHECK(proc_check_get_task, cred, pident);
+		if (error) {
+			return error;
+		}
+	}
+
+	if (flavor == TASK_FLAVOR_NAME) {
+		MAC_CHECK(proc_check_get_task_name, cred, pident);
+		if (error) {
+			return error;
+		}
+	}
+
+	MAC_CHECK(proc_check_get_task_with_flavor, cred, pident, flavor);
 
 	return error;
 }
 
 int
-mac_proc_check_get_task(struct ucred *cred, proc_ident_t pident)
+mac_proc_check_expose_task(struct ucred *cred, proc_ident_t pident, mach_task_flavor_t flavor)
 {
 	int error;
 
-	MAC_CHECK(proc_check_get_task, cred, pident);
+	assert(flavor <= TASK_FLAVOR_NAME);
 
-	return error;
-}
+	/* Also call the old hook for compatability, deprecating in rdar://66356944. */
+	if (flavor == TASK_FLAVOR_CONTROL) {
+		MAC_CHECK(proc_check_expose_task, cred, pident);
+		if (error) {
+			return error;
+		}
+	}
 
-int
-mac_proc_check_expose_task(struct ucred *cred, proc_ident_t pident)
-{
-	int error;
-
-	MAC_CHECK(proc_check_expose_task, cred, pident);
+	MAC_CHECK(proc_check_expose_task_with_flavor, cred, pident, flavor);
 
 	return error;
 }

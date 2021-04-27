@@ -68,6 +68,7 @@
 
 
 
+
 #ifndef __arm64__
 #error Should only be compiling for arm64.
 #endif
@@ -109,6 +110,9 @@ void panic_with_thread_kernel_state(const char *msg, arm_saved_state_t *ss) __ab
 
 void sleh_synchronous_sp1(arm_context_t *, uint32_t, vm_offset_t) __abortlike;
 void sleh_synchronous(arm_context_t *, uint32_t, vm_offset_t);
+
+
+
 void sleh_irq(arm_saved_state_t *);
 void sleh_fiq(arm_saved_state_t *);
 void sleh_serror(arm_context_t *context, uint32_t esr, vm_offset_t far);
@@ -324,12 +328,12 @@ arm64_implementation_specific_error(arm_saved_state_t *state, uint32_t esr, vm_o
 #if defined(NO_ECORE)
 	uint64_t l2c_err_sts, l2c_err_adr, l2c_err_inf;
 
-	mmu_err_sts = __builtin_arm_rsr64(STR(ARM64_REG_MMU_ERR_STS));
-	l2c_err_sts = __builtin_arm_rsr64(STR(ARM64_REG_L2C_ERR_STS));
-	l2c_err_adr = __builtin_arm_rsr64(STR(ARM64_REG_L2C_ERR_ADR));
-	l2c_err_inf = __builtin_arm_rsr64(STR(ARM64_REG_L2C_ERR_INF));
-	lsu_err_sts = __builtin_arm_rsr64(STR(ARM64_REG_LSU_ERR_STS));
-	fed_err_sts = __builtin_arm_rsr64(STR(ARM64_REG_FED_ERR_STS));
+	mmu_err_sts = __builtin_arm_rsr64(STR(S3_6_C15_C0_0));
+	l2c_err_sts = __builtin_arm_rsr64(STR(S3_3_C15_C8_0));
+	l2c_err_adr = __builtin_arm_rsr64(STR(S3_3_C15_C9_0));
+	l2c_err_inf = __builtin_arm_rsr64(STR(S3_3_C15_C10_0));
+	lsu_err_sts = __builtin_arm_rsr64(STR(S3_3_C15_C0_0));
+	fed_err_sts = __builtin_arm_rsr64(STR(S3_4_C15_C0_0));
 
 	panic_plain("Unhandled " CPU_NAME
 	    " implementation specific error. state=%p esr=%#x far=%p\n"
@@ -343,13 +347,13 @@ arm64_implementation_specific_error(arm_saved_state_t *state, uint32_t esr, vm_o
 	uint64_t l2c_err_sts, l2c_err_adr, l2c_err_inf, mpidr, migsts;
 
 	mpidr = __builtin_arm_rsr64("MPIDR_EL1");
-	migsts = __builtin_arm_rsr64(STR(ARM64_REG_MIGSTS_EL1));
-	mmu_err_sts = __builtin_arm_rsr64(STR(ARM64_REG_MMU_ERR_STS));
-	l2c_err_sts = __builtin_arm_rsr64(STR(ARM64_REG_L2C_ERR_STS));
-	l2c_err_adr = __builtin_arm_rsr64(STR(ARM64_REG_L2C_ERR_ADR));
-	l2c_err_inf = __builtin_arm_rsr64(STR(ARM64_REG_L2C_ERR_INF));
-	lsu_err_sts = __builtin_arm_rsr64(STR(ARM64_REG_LSU_ERR_STS));
-	fed_err_sts = __builtin_arm_rsr64(STR(ARM64_REG_FED_ERR_STS));
+	migsts = __builtin_arm_rsr64(STR(MIGSTS_EL1));
+	mmu_err_sts = __builtin_arm_rsr64(STR(S3_6_C15_C0_0));
+	l2c_err_sts = __builtin_arm_rsr64(STR(S3_3_C15_C8_0));
+	l2c_err_adr = __builtin_arm_rsr64(STR(S3_3_C15_C9_0));
+	l2c_err_inf = __builtin_arm_rsr64(STR(S3_3_C15_C10_0));
+	lsu_err_sts = __builtin_arm_rsr64(STR(S3_3_C15_C0_0));
+	fed_err_sts = __builtin_arm_rsr64(STR(S3_4_C15_C0_0));
 
 	panic_plain("Unhandled " CPU_NAME
 	    " implementation specific error. state=%p esr=%#x far=%p p-core?%d migsts=%p\n"
@@ -361,24 +365,24 @@ arm64_implementation_specific_error(arm_saved_state_t *state, uint32_t esr, vm_o
 #else // !defined(NO_ECORE) && !defined(HAS_MIGSTS)
 	uint64_t llc_err_sts, llc_err_adr, llc_err_inf, mpidr;
 #if defined(HAS_DPC_ERR)
-	uint64_t dpc_err_sts = __builtin_arm_rsr64(STR(ARM64_REG_DPC_ERR_STS));
+	uint64_t dpc_err_sts = __builtin_arm_rsr64(STR(S3_5_C15_C0_5));
 #endif // defined(HAS_DPC_ERR)
 
 	mpidr = __builtin_arm_rsr64("MPIDR_EL1");
 
 	if (mpidr & MPIDR_PNE) {
-		mmu_err_sts = __builtin_arm_rsr64(STR(ARM64_REG_MMU_ERR_STS));
-		lsu_err_sts = __builtin_arm_rsr64(STR(ARM64_REG_LSU_ERR_STS));
-		fed_err_sts = __builtin_arm_rsr64(STR(ARM64_REG_FED_ERR_STS));
+		mmu_err_sts = __builtin_arm_rsr64(STR(S3_6_C15_C0_0));
+		lsu_err_sts = __builtin_arm_rsr64(STR(S3_3_C15_C0_0));
+		fed_err_sts = __builtin_arm_rsr64(STR(S3_4_C15_C0_0));
 	} else {
-		mmu_err_sts = __builtin_arm_rsr64(STR(ARM64_REG_E_MMU_ERR_STS));
-		lsu_err_sts = __builtin_arm_rsr64(STR(ARM64_REG_E_LSU_ERR_STS));
-		fed_err_sts = __builtin_arm_rsr64(STR(ARM64_REG_E_FED_ERR_STS));
+		mmu_err_sts = __builtin_arm_rsr64(STR(S3_6_C15_C2_0));
+		lsu_err_sts = __builtin_arm_rsr64(STR(S3_3_C15_C2_0));
+		fed_err_sts = __builtin_arm_rsr64(STR(S3_4_C15_C0_2));
 	}
 
-	llc_err_sts = __builtin_arm_rsr64(STR(ARM64_REG_L2C_ERR_STS));
-	llc_err_adr = __builtin_arm_rsr64(STR(ARM64_REG_L2C_ERR_ADR));
-	llc_err_inf = __builtin_arm_rsr64(STR(ARM64_REG_L2C_ERR_INF));
+	llc_err_sts = __builtin_arm_rsr64(STR(S3_3_C15_C8_0));
+	llc_err_adr = __builtin_arm_rsr64(STR(S3_3_C15_C9_0));
+	llc_err_inf = __builtin_arm_rsr64(STR(S3_3_C15_C10_0));
 
 	panic_plain("Unhandled " CPU_NAME
 	    " implementation specific error. state=%p esr=%#x far=%p p-core?%d"
@@ -555,7 +559,7 @@ __attribute__((__always_inline__))
 static inline void
 task_vtimer_check(thread_t thread)
 {
-	if (__improbable(thread->task->vtimers)) {
+	if (__improbable((thread->task != NULL) && thread->task->vtimers)) {
 		thread->ast |= AST_BSD;
 		thread->machine.CpuDatap->cpu_pending_ast |= AST_BSD;
 	}
@@ -893,6 +897,7 @@ handle_uncategorized(arm_saved_state_t *state)
 			 */
 			DebuggerCall(exception, state);
 
+			current_thread()->machine.kpcb = NULL;
 			(void) ml_set_interrupts_enabled(interrupt_state);
 			return;
 		} else {
@@ -1292,9 +1297,9 @@ handle_user_abort(arm_saved_state_t *state, uint32_t esr, vm_offset_t fault_addr
 	thread->iotier_override = THROTTLE_LEVEL_NONE; /* Reset IO tier override before handling abort from userspace */
 
 	if (is_vm_fault(fault_code)) {
-		kern_return_t   result = KERN_FAILURE;
 		vm_map_t        map = thread->map;
 		vm_offset_t     vm_fault_addr = fault_addr;
+		kern_return_t   result = KERN_FAILURE;
 
 		assert(map != kernel_map);
 
@@ -1330,21 +1335,22 @@ handle_user_abort(arm_saved_state_t *state, uint32_t esr, vm_offset_t fault_addr
 			}
 		}
 #endif
-
 		/* check to see if it is just a pmap ref/modify fault */
 
-		if ((result != KERN_SUCCESS) && !is_translation_fault(fault_code)) {
+		if (!is_translation_fault(fault_code)) {
 			result = arm_fast_fault(map->pmap,
 			    vm_fault_addr,
 			    fault_type, (fault_code == FSC_ACCESS_FLAG_FAULT_L3), TRUE);
 		}
-		if (result != KERN_SUCCESS) {
-			{
-				/* We have to fault the page in */
-				result = vm_fault(map, vm_fault_addr, fault_type,
-				    /* change_wiring */ FALSE, VM_KERN_MEMORY_NONE, THREAD_ABORTSAFE,
-				    /* caller_pmap */ NULL, /* caller_pmap_addr */ 0);
-			}
+		if (result == KERN_SUCCESS) {
+			return;
+		}
+
+		{
+			/* We have to fault the page in */
+			result = vm_fault(map, vm_fault_addr, fault_type,
+			    /* change_wiring */ FALSE, VM_KERN_MEMORY_NONE, THREAD_ABORTSAFE,
+			    /* caller_pmap */ NULL, /* caller_pmap_addr */ 0);
 		}
 		if (result == KERN_SUCCESS || result == KERN_ABORTED) {
 			return;
@@ -1519,7 +1525,15 @@ handle_kernel_abort(arm_saved_state_t *state, uint32_t esr, vm_offset_t fault_ad
 			interruptible = THREAD_UNINT;
 		} else {
 			map = thread->map;
-			interruptible = THREAD_ABORTSAFE;
+
+			/**
+			 * In the case that the recovery handler is set (e.g., during copyio
+			 * and dtrace probes), we don't want the vm_fault() operation to be
+			 * aborted early. Those code paths can't handle restarting the
+			 * vm_fault() operation so don't allow it to return early without
+			 * creating the wanted mapping.
+			 */
+			interruptible = (recover) ? THREAD_UNINT : THREAD_ABORTSAFE;
 		}
 
 #if CONFIG_PGTRACE
@@ -1629,10 +1643,11 @@ handle_svc(arm_saved_state_t *state)
 	mach_kauth_cred_uthread_update();
 
 	if (trap_no < 0) {
-		if (trap_no == MACH_ARM_TRAP_ABSTIME) {
+		switch (trap_no) {
+		case MACH_ARM_TRAP_ABSTIME:
 			handle_mach_absolute_time_trap(state);
 			return;
-		} else if (trap_no == MACH_ARM_TRAP_CONTTIME) {
+		case MACH_ARM_TRAP_CONTTIME:
 			handle_mach_continuous_time_trap(state);
 			return;
 		}
@@ -1664,6 +1679,7 @@ handle_mach_continuous_time_trap(arm_saved_state_t *state)
 	uint64_t now = mach_continuous_time();
 	saved_state64(state)->x[0] = now;
 }
+
 
 __attribute__((noreturn))
 static void
@@ -1780,7 +1796,7 @@ sleh_fiq(arm_saved_state_t *state)
 	uint64_t     ipi_sr = 0;
 
 	if (gFastIPI) {
-		MRS(ipi_sr, ARM64_REG_IPI_SR);
+		MRS(ipi_sr, "S3_5_C15_C1_1");
 
 		if (ipi_sr & 1) {
 			is_ipi = TRUE;
@@ -1802,6 +1818,7 @@ sleh_fiq(arm_saved_state_t *state)
 
 	sleh_interrupt_handler_prologue(state, type);
 
+
 #if defined(HAS_IPI)
 	if (is_ipi) {
 		/*
@@ -1812,7 +1829,7 @@ sleh_fiq(arm_saved_state_t *state)
 		 * IPI to this CPU may be lost.  ISB is required to ensure the msr
 		 * is retired before execution of cpu_signal_handler().
 		 */
-		MSR(ARM64_REG_IPI_SR, ipi_sr);
+		MSR("S3_5_C15_C1_1", ipi_sr);
 		__builtin_arm_isb(ISB_SY);
 		cpu_signal_handler();
 	} else
@@ -1843,6 +1860,7 @@ sleh_fiq(arm_saved_state_t *state)
 		rtclock_intr(TRUE);
 		INTERRUPT_MASKED_DEBUG_END();
 	}
+
 
 	sleh_interrupt_handler_epilogue();
 #if MACH_ASSERT

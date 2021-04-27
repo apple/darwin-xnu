@@ -1082,6 +1082,8 @@ PEHaltRestartInternal(unsigned int type, uint32_t details)
 				IOCPURunPlatformPanicActions(type, details);
 			}
 		}
+	} else if (type == kPEPanicDiagnosticsDone) {
+		IOCPURunPlatformPanicActions(type, details);
 	}
 
 skip_to_haltRestart:

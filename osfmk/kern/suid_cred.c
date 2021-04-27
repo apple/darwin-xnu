@@ -113,7 +113,7 @@ suid_cred_destroy(ipc_port_t port)
 
 	ip_lock(port);
 	assert(ip_kotype(port) == IKOT_SUID_CRED);
-	sc = (suid_cred_t)port->ip_kobject;
+	sc = (suid_cred_t)ipc_kobject_get(port);
 	ipc_kobject_set_atomically(port, IKO_NULL, IKOT_NONE);
 	ip_unlock(port);
 
@@ -143,7 +143,7 @@ convert_suid_cred_to_port(suid_cred_t sc)
 	}
 
 	if (!ipc_kobject_make_send_lazy_alloc_port(&sc->port,
-	    (ipc_kobject_t) sc, IKOT_SUID_CRED, false, 0)) {
+	    (ipc_kobject_t) sc, IKOT_SUID_CRED, IPC_KOBJECT_ALLOC_NONE, false, 0)) {
 		suid_cred_free(sc);
 		return IP_NULL;
 	}
@@ -177,7 +177,7 @@ suid_cred_verify(ipc_port_t port, struct vnode *vnode, uint32_t *uid)
 		return -1;
 	}
 
-	sc = (suid_cred_t)port->ip_kobject;
+	sc = (suid_cred_t)ipc_kobject_get(port);
 
 	if (vnode != sc->vnode) {
 		ip_unlock(port);

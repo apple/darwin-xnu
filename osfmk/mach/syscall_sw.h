@@ -86,6 +86,7 @@
 kernel_trap(_kernelrpc_mach_vm_allocate_trap,-10,5) /* 4 args, +1 for mach_vm_size_t */
 kernel_trap(_kernelrpc_mach_vm_purgable_control_trap,-11,5) /* 4 args, +1 for mach_vm_offset_t */
 kernel_trap(_kernelrpc_mach_vm_deallocate_trap,-12,5) /* 3 args, +2 for mach_vm_size_t and mach_vm_address_t */
+kernel_trap(task_dyld_process_info_notify_get,-13,4) /* 2 args, +2 for mach_vm_address_t */
 kernel_trap(_kernelrpc_mach_vm_protect_trap,-14,7) /* 5 args, +2 for mach_vm_address_t and mach_vm_size_t */
 kernel_trap(_kernelrpc_mach_vm_map_trap,-15,9)
 kernel_trap(_kernelrpc_mach_port_allocate_trap,-16,3)

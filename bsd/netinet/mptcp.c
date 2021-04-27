@@ -792,7 +792,7 @@ mptcp_subflow_is_slow(struct mptses *mpte, struct mptsub *mpts)
 	struct tcpcb *tp = sototcpcb(mpts->mpts_socket);
 	int fail_thresh = mptcp_fail_thresh;
 
-	if (mpte->mpte_svctype == MPTCP_SVCTYPE_HANDOVER) {
+	if (mpte->mpte_svctype == MPTCP_SVCTYPE_HANDOVER || mpte->mpte_svctype == MPTCP_SVCTYPE_PURE_HANDOVER) {
 		fail_thresh *= 2;
 	}
 
@@ -908,7 +908,9 @@ mptcp_get_subflow(struct mptses *mpte, struct mptsub **preferred)
 	 * Second Step: Among best and second_best. Choose the one that is
 	 * most appropriate for this particular service-type.
 	 */
-	if (mpte->mpte_svctype == MPTCP_SVCTYPE_HANDOVER) {
+	if (mpte->mpte_svctype == MPTCP_SVCTYPE_PURE_HANDOVER) {
+		return mptcp_return_subflow(best);
+	} else if (mpte->mpte_svctype == MPTCP_SVCTYPE_HANDOVER) {
 		/*
 		 * Only handover if Symptoms tells us to do so.
 		 */
@@ -1363,16 +1365,6 @@ mptcp_handle_deferred_upcalls(struct mppcb *mpp, uint32_t flag)
 	}
 }
 
-void
-mptcp_ask_for_nat64(struct ifnet *ifp)
-{
-	in6_post_msg(ifp, KEV_INET6_REQUEST_NAT64_PREFIX, NULL, NULL);
-
-	os_log_info(mptcp_log_handle,
-	    "%s: asked for NAT64-prefix on %s\n", __func__,
-	    ifp->if_name);
-}
-
 static void
 mptcp_reset_itfinfo(struct mpt_itf_info *info)
 {
@@ -1517,7 +1509,7 @@ mptcp_session_necp_cb(void *handle, int action, uint32_t interface_index,
 		}
 
 		dst = mptcp_get_session_dst(mpte, has_v6, has_v4);
-		if (dst && (dst->sa_family == AF_INET || dst->sa_family == 0) &&
+		if (dst && dst->sa_family == AF_INET &&
 		    has_v6 && !has_nat64 && !has_v4) {
 			if (found_slot) {
 				mpte->mpte_itfinfo[slot_index].ifindex = ifindex;
@@ -1525,7 +1517,6 @@ mptcp_session_necp_cb(void *handle, int action, uint32_t interface_index,
 				mpte->mpte_itfinfo[slot_index].has_v6_conn = has_v6;
 				mpte->mpte_itfinfo[slot_index].has_nat64_conn = has_nat64;
 			}
-			mptcp_ask_for_nat64(ifp);
 			goto out;
 		}
 

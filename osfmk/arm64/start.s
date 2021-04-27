@@ -137,48 +137,6 @@ LEXT(reset_vector)
 #endif
 
 
-#if defined(KERNEL_INTEGRITY_KTRR)
-	/*
-	 * Set KTRR registers immediately after wake/resume
-	 *
-	 * During power on reset, XNU stashed the kernel text region range values
-	 * into __DATA,__const which should be protected by AMCC RoRgn at this point.
-	 * Read this data and program/lock KTRR registers accordingly.
-	 * If either values are zero, we're debugging kernel so skip programming KTRR.
-	 */
-
-	/* refuse to boot if machine_lockdown() hasn't completed */
-	adrp	x17, EXT(lockdown_done)@page
-	ldr	w17, [x17, EXT(lockdown_done)@pageoff]
-	cbz	w17, .
-
-	// load stashed rorgn_begin
-	adrp	x17, EXT(ctrr_begin)@page
-	add		x17, x17, EXT(ctrr_begin)@pageoff
-	ldr		x17, [x17]
-#if DEBUG || DEVELOPMENT || CONFIG_DTRACE
-	// if rorgn_begin is zero, we're debugging. skip enabling ktrr
-	cbz		x17, Lskip_ktrr
-#else
-	cbz		x17, .
-#endif
-
-	// load stashed rorgn_end
-	adrp	x19, EXT(ctrr_end)@page
-	add		x19, x19, EXT(ctrr_end)@pageoff
-	ldr		x19, [x19]
-#if DEBUG || DEVELOPMENT || CONFIG_DTRACE
-	cbz		x19, Lskip_ktrr
-#else
-	cbz		x19, .
-#endif
-
-	msr		ARM64_REG_KTRR_LOWER_EL1, x17
-	msr		ARM64_REG_KTRR_UPPER_EL1, x19
-	mov		x17, #1
-	msr		ARM64_REG_KTRR_LOCK_EL1, x17
-Lskip_ktrr:
-#endif /* defined(KERNEL_INTEGRITY_KTRR) */
 
 	// Process reset handlers
 	adrp	x19, EXT(ResetHandlerData)@page			// Get address of the reset handler data
@@ -203,62 +161,6 @@ Lnext_cpu_data_entry:
 	b.eq	Lskip_cpu_reset_handler				// Not found
 	b		Lcheck_cpu_data_entry	// loop
 Lfound_cpu_data_entry:
-#if defined(KERNEL_INTEGRITY_CTRR)
-	/*
-	 * Program and lock CTRR if this CPU is non-boot cluster master. boot cluster will be locked
-	 * in machine_lockdown. pinst insns protected by VMSA_LOCK
-	 * A_PXN and A_MMUON_WRPROTECT options provides something close to KTRR behavior
-	 */
-
-	/* refuse to boot if machine_lockdown() hasn't completed */
-	adrp	x17, EXT(lockdown_done)@page
-	ldr	w17, [x17, EXT(lockdown_done)@pageoff]
-	cbz	w17, .
-
-	// load stashed rorgn_begin
-	adrp	x17, EXT(ctrr_begin)@page
-	add		x17, x17, EXT(ctrr_begin)@pageoff
-	ldr		x17, [x17]
-#if DEBUG || DEVELOPMENT || CONFIG_DTRACE
-	// if rorgn_begin is zero, we're debugging. skip enabling ctrr
-	cbz		x17, Lskip_ctrr
-#else
-	cbz		x17, .
-#endif
-
-	// load stashed rorgn_end
-	adrp	x19, EXT(ctrr_end)@page
-	add		x19, x19, EXT(ctrr_end)@pageoff
-	ldr		x19, [x19]
-#if DEBUG || DEVELOPMENT || CONFIG_DTRACE
-	cbz		x19, Lskip_ctrr
-#else
-	cbz		x19, .
-#endif
-
-	mrs		x18, ARM64_REG_CTRR_LOCK_EL1
-	cbnz	x18, Lskip_ctrr  /* don't touch if already locked */
-	msr		ARM64_REG_CTRR_A_LWR_EL1, x17
-	msr		ARM64_REG_CTRR_A_UPR_EL1, x19
-	mov		x18, #(CTRR_CTL_EL1_A_PXN | CTRR_CTL_EL1_A_MMUON_WRPROTECT)
-	msr		ARM64_REG_CTRR_CTL_EL1, x18
-	mov		x18, #1
-	msr		ARM64_REG_CTRR_LOCK_EL1, x18
-
-
-	isb
-	tlbi 	vmalle1
-	dsb 	ish
-	isb
-Lspin_ctrr_unlocked:
-	/* we shouldn't ever be here as cpu start is serialized by cluster in cpu_start(),
-	 * and first core started in cluster is designated cluster master and locks
-	 * both core and cluster. subsequent cores in same cluster will run locked from
-	 * from reset vector */
-	mrs		x18, ARM64_REG_CTRR_LOCK_EL1
-	cbz		x18, Lspin_ctrr_unlocked
-Lskip_ctrr:
-#endif
 	adrp	x20, EXT(const_boot_args)@page
 	add		x20, x20, EXT(const_boot_args)@pageoff
 	ldr		x0, [x21, CPU_RESET_HANDLER]		// Call CPU reset handler
@@ -780,7 +682,7 @@ common_start:
 #if defined(APPLEHURRICANE)
 	// <rdar://problem/26726624> Increase Snoop reservation in EDB to reduce starvation risk
 	// Needs to be done before MMU is enabled
-	HID_INSERT_BITS	ARM64_REG_HID5, ARM64_REG_HID5_CrdEdbSnpRsvd_mask, ARM64_REG_HID5_CrdEdbSnpRsvd_VALUE, x12
+	HID_INSERT_BITS	HID5, ARM64_REG_HID5_CrdEdbSnpRsvd_mask, ARM64_REG_HID5_CrdEdbSnpRsvd_VALUE, x12
 #endif
 
 #if defined(BCM2837)
@@ -876,26 +778,16 @@ common_start:
 
 
 #if defined(APPLE_ARM64_ARCH_FAMILY)
-	// Initialization common to all Apple targets
+	// Initialization common to all non-virtual Apple targets
 	ARM64_IS_PCORE x15
-	ARM64_READ_EP_SPR x15, x12, ARM64_REG_EHID4, ARM64_REG_HID4
+	ARM64_READ_EP_SPR x15, x12, S3_0_C15_C4_1, S3_0_C15_C4_0
 	orr		x12, x12, ARM64_REG_HID4_DisDcMVAOps
 	orr		x12, x12, ARM64_REG_HID4_DisDcSWL2Ops
-	ARM64_WRITE_EP_SPR x15, x12, ARM64_REG_EHID4, ARM64_REG_HID4
+	ARM64_WRITE_EP_SPR x15, x12, S3_0_C15_C4_1, S3_0_C15_C4_0
 #endif  // APPLE_ARM64_ARCH_FAMILY
 
 	// Read MIDR before start of per-SoC tunables
 	mrs x12, MIDR_EL1
-
-#if defined(APPLELIGHTNING)
-	// Cebu <B0 is deprecated and unsupported (see rdar://problem/42835678)
-	EXEC_COREEQ_REVLO MIDR_CEBU_LIGHTNING, CPU_VERSION_B0, x12, x13
-	b .
-	EXEC_END
-	EXEC_COREEQ_REVLO MIDR_CEBU_THUNDER, CPU_VERSION_B0, x12, x13
-	b .
-	EXEC_END
-#endif
 
 	APPLY_TUNABLES x12, x13
 
@@ -903,9 +795,9 @@ common_start:
 
 #if HAS_CLUSTER
 	// Unmask external IRQs if we're restarting from non-retention WFI
-	mrs		x9, ARM64_REG_CYC_OVRD
+	mrs		x9, CPU_OVRD
 	and		x9, x9, #(~(ARM64_REG_CYC_OVRD_irq_mask | ARM64_REG_CYC_OVRD_fiq_mask))
-	msr		ARM64_REG_CYC_OVRD, x9
+	msr		CPU_OVRD, x9
 #endif
 
 	// If x21 != 0, we're doing a warm reset, so we need to trampoline to the kernel pmap.

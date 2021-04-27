@@ -32,6 +32,7 @@ extern "C" {
 #include <machine/machine_routines.h>
 };
 
+#include <stdint.h>
 #include <IOKit/IOService.h>
 
 /*!
@@ -44,14 +45,24 @@ class IOPMGR : public IOService
 
 public:
 	/*!
-	 * @function      enableCPUCore
-	 * @abstract      Enable a single CPU core.
-	 * @discussion    Release a secondary CPU core from reset, and enable
-	 *                external IRQ delivery to the core.  XNU will not
-	 *                invoke this method on the boot CPU's cpu_id.
-	 * @param cpu_id  Logical CPU ID of the core.
+	 * @function        enableCPUCore
+	 * @abstract        Enable a single CPU core.
+	 * @discussion      Release a secondary CPU core from reset, and enable
+	 *                  external IRQ delivery to the core.  XNU will not
+	 *                  invoke this method on the boot CPU's cpu_id.
+	 * @param cpu_id    Logical CPU ID of the core.
+	 * @param entry_pa  Physical address to use as the reset vector on the
+	 *                  secondary CPU.  Not all platforms will honor this
+	 *                  parameter; on Apple Silicon RVBAR_EL1 is programmed
+	 *                  by iBoot.
 	 */
-	virtual void enableCPUCore(unsigned int cpu_id) = 0;
+	virtual void enableCPUCore(unsigned int cpu_id, uint64_t entry_pa);
+
+	/*!
+	 * @function      enableCPUCore
+	 * @abstract      Deprecated - Enable a single CPU core.
+	 */
+	virtual void enableCPUCore(unsigned int cpu_id);
 
 	/*!
 	 * @function      disableCPUCore

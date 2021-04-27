@@ -842,6 +842,10 @@ extern boolean_t pmap_is_empty(pmap_t           pmap,
 kern_return_t
     pmap_permissions_verify(pmap_t, vm_map_t, vm_offset_t, vm_offset_t);
 
+#if DEVELOPMENT || DEBUG
+extern kern_return_t pmap_test_text_corruption(pmap_paddr_t);
+#endif /* DEVELOPMENT || DEBUG */
+
 #if MACH_ASSERT
 extern int pmap_stats_assert;
 #define PMAP_STATS_ASSERTF(args)                \

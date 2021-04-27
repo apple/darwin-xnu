@@ -1009,7 +1009,7 @@ convert_port_to_eventlink_locked(
 
 	if (ip_active(port) &&
 	    ip_kotype(port) == IKOT_EVENTLINK) {
-		ipc_eventlink = (struct ipc_eventlink *)port->ip_kobject;
+		ipc_eventlink = (struct ipc_eventlink *)ipc_kobject_get(port);
 
 		if (ipc_eventlink) {
 			ipc_eventlink_reference(ipc_eventlink);

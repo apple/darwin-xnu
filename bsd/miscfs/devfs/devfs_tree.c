@@ -145,11 +145,9 @@ static devdirent_t *devfs_make_node_internal(dev_t, devfstype_t type, uid_t, gid
     int (*clone)(dev_t dev, int action), const char *fmt, va_list ap);
 
 
-lck_grp_t       * devfs_lck_grp;
-lck_grp_attr_t  * devfs_lck_grp_attr;
-lck_attr_t      * devfs_lck_attr;
-lck_mtx_t         devfs_mutex;
-lck_mtx_t         devfs_attr_mutex;
+static LCK_GRP_DECLARE(devfs_lck_grp, "devfs_lock");
+LCK_MTX_DECLARE(devfs_mutex, &devfs_lck_grp);
+LCK_MTX_DECLARE(devfs_attr_mutex, &devfs_lck_grp);
 
 os_refgrp_decl(static, devfs_refgrp, "devfs", NULL);
 
@@ -182,14 +180,6 @@ int
 devfs_sinit(void)
 {
 	int error;
-
-	devfs_lck_grp_attr = lck_grp_attr_alloc_init();
-	devfs_lck_grp = lck_grp_alloc_init("devfs_lock", devfs_lck_grp_attr);
-
-	devfs_lck_attr = lck_attr_alloc_init();
-
-	lck_mtx_init(&devfs_mutex, devfs_lck_grp, devfs_lck_attr);
-	lck_mtx_init(&devfs_attr_mutex, devfs_lck_grp, devfs_lck_attr);
 
 	DEVFS_LOCK();
 	error = dev_add_entry("root", NULL, DEV_DIR, NULL, NULL, NULL, &dev_root);

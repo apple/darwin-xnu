@@ -173,7 +173,6 @@ InitIOKit(void *dtTop)
 	IOLibInit();
 	OSlibkernInit();
 	IOMachPortInitialize();
-	devsw_init();
 
 	gIOProgressBackbufferKey  = OSSymbol::withCStringNoCopy(kIOProgressBackbufferKey);
 	gIORemoveOnReadProperties = OSSet::withObjects((const OSObject **) &gIOProgressBackbufferKey, 1);

@@ -77,8 +77,10 @@
 
 
 
+#define TASK_ADDITIONS_UEXC uint64_t uexc[4];
 
 #define MACHINE_TASK \
 	void* task_debug; \
 	TASK_ADDITIONS_PAC \
-
+\
+	TASK_ADDITIONS_UEXC

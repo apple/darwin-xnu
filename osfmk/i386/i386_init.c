@@ -129,6 +129,8 @@ int                     debug_task;
 
 int                     early_boot = 1;
 
+bool                    serial_console_enabled = false;
+
 static boot_args        *kernelBootArgs;
 
 extern int              disableConsoleOutput;
@@ -932,6 +934,7 @@ i386_init(void)
 		}
 	}
 	if (serialmode & SERIALMODE_OUTPUT) {
+		serial_console_enabled = true;
 		(void)switch_to_serial_console();
 		disableConsoleOutput = FALSE; /* Allow printfs to happen */
 	}

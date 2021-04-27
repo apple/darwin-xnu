@@ -158,6 +158,10 @@ _Static_assert((_COMM_PAGE64_BASE_ADDRESS >= _COMM_PAGE64_NESTING_START) &&
     "region probably needs to be updated.");
 
 #else /* KERNEL_PRIVATE */
+/*
+ * <sys/commpage.h> defines a couple of conveniency macros
+ * to help read data from the commpage.
+ */
 #define _COMM_PAGE_AREA_LENGTH                  (4096)
 
 #define _COMM_PAGE_BASE_ADDRESS                 _COMM_PAGE64_BASE_ADDRESS

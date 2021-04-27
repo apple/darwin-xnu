@@ -3207,6 +3207,7 @@ check_and_swap_attrhdr(attr_header_t *ah, attr_info_t *ainfop)
 	 */
 	end = ah->data_start + ah->data_length;
 	if (ah->total_size > ainfop->finderinfo->offset + ainfop->finderinfo->length ||
+	    ah->data_start < sizeof(attr_header_t) ||
 	    end < ah->data_start ||
 	    end > ah->total_size) {
 		return EINVAL;

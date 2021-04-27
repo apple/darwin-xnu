@@ -68,7 +68,9 @@ KLD_FILES = $(OBJS)
 
 $(COMPONENT).filelist: $(OBJS)
 	$(_v)for kld_file in ${KLD_FILES}; do      \
-		$(SEG_HACK) -n __KLD -o $${kld_file}__ $${kld_file} || exit 1; \
+		$(SEG_HACK) -s __TEXT -n __KLD -o $${kld_file}__ $${kld_file} || exit 1; \
+		mv $${kld_file}__ $${kld_file} || exit 1; \
+		$(SEG_HACK) -i __KLD -n __KLDDATA -o $${kld_file}__ $${kld_file} || exit 1; \
 		mv $${kld_file}__ $${kld_file} || exit 1; \
 	done
 	@$(LOG_LDFILELIST) "$(COMPONENT)"

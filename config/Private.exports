@@ -3,7 +3,6 @@ __ZN15IORegistryEntry18setIndexedPropertyEjP8OSObject
 __ZNK15IORegistryEntry18getIndexedPropertyEj
 __ZN16IOPlatformExpert*
 __ZNK16IOPlatformExpert*
-__ZN18IOMemoryDescriptor16setPreparationIDEv
 __ZTV16IOPlatformExpert
 __ZN18IODTPlatformExpert*
 __ZNK18IODTPlatformExpert*
@@ -149,6 +148,8 @@ _bufattr_markisochronous
 _bufattr_markmeta
 _bufattr_markquickcomplete
 _bufattr_meta
+_bufattr_markexpeditedmeta
+_bufattr_expeditedmeta
 _bufattr_nocache
 _bufattr_passive
 _bufattr_quickcomplete
@@ -466,6 +467,10 @@ _kern_packet_append
 _kern_packet_get_next
 _kern_packet_set_chain_counts
 _kern_packet_get_chain_counts
+_kern_packet_trace_start
+_kern_packet_trace_end
+_kern_packet_is_traced
+_kern_packet_trace_event
 _kern_pbufpool_alloc
 _kern_pbufpool_alloc_batch
 _kern_pbufpool_alloc_batch_callback
@@ -491,6 +496,7 @@ _kern_config_is_development
 _kern_stack_snapshot_with_reason
 _kernel_debug_string
 _kext_receipt
+_kext_receipt_set_queried
 _kmem_alloc_kobject:_kmem_alloc_kobject_external
 _kmem_alloc_pageable:_kmem_alloc_pageable_external
 _kx_qsort
@@ -598,6 +604,8 @@ _pmap_load_image4_trust_cache
 _pmap_lockdown_image4_slab
 _pmap_lookup_in_static_trust_cache
 _pmap_lookup_in_loaded_trust_caches
+_pmap_set_compilation_service_cdhash
+_pmap_match_compilation_service_cdhash
 _port_name_to_task
 _port_name_to_thread
 _post_sys_powersource
@@ -621,6 +629,7 @@ _proc_set_syscall_filter_callbacks
 _proc_set_syscall_filter_index
 _proc_set_syscall_filter_mask
 _proc_selfcsflags
+_proc_skip_mtime_update
 _proc_starttime
 _proc_task
 _proc_uniqueid
@@ -717,6 +726,7 @@ _throttle_lowpri_io_will_be_throttled
 _throttle_lowpri_window
 _throttle_set_thread_io_policy
 _throttle_get_thread_effective_io_policy
+_throttle_thread_io_tier_above_metadata
 _timeout
 _timeout_with_leeway
 _tk_nin
@@ -751,10 +761,12 @@ _utun_ctl_register_dtls
 _utun_pkt_dtls_input
 _vfs_context_bind
 _vfs_context_can_resolve_triggers
+_vfs_context_dataless_materialization_is_prevented
 _vfs_context_get_special_port
 _vfs_context_set_special_port
 _vfs_context_is_dataless_manipulator
 _vfs_devvp
+_vfs_get_thread_fs_private
 _vfs_getattr
 _vfs_getbyid
 _vfs_is_basesystem
@@ -762,6 +774,7 @@ _vfs_mntlabel
 _vfs_mount_id
 _vfs_nativexattrs
 _vfs_set_root_unmounted_cleanly
+_vfs_set_thread_fs_private
 _vfs_setcompoundopen
 _vfs_throttle_mask
 _vfs_vnodecovered

@@ -85,7 +85,10 @@ audit_mac_new(proc_t p, struct kaudit_record *ar)
 	}
 	mac.m_buflen = MAC_AUDIT_LABEL_LEN;
 	mac.m_string = ar->k_ar.ar_cred_mac_labels;
-	mac_cred_label_externalize_audit(p, &mac);
+	if (mac_cred_label_externalize_audit(p, &mac)) {
+		zfree(audit_mac_label_zone, ar->k_ar.ar_cred_mac_labels);
+		return 1;
+	}
 
 	/*
 	 * grab space for the reconds.

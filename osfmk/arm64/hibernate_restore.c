@@ -97,6 +97,9 @@ void
 pal_hib_patchup(pal_hib_ctx_t *ctx)
 {
 
+	/* Reinit the ppl hib lock as it was saved to the hibernation image held. */
+	ppl_hib_lock_reinit();
+
 	// DRAM pages are captured from a PPL context, so here we restore all cpu_data structures to a non-PPL context
 	for (int i = 0; i < MAX_CPUS; i++) {
 		pmap_cpu_data_array[i].cpu_data.ppl_state = PPL_STATE_KERNEL;

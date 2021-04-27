@@ -154,6 +154,10 @@ __BEGIN_DECLS
 /* Kernel-supplied flag: Work interval has been ignored by the kernel */
 #define WORK_INTERVAL_FLAG_IGNORED                      (0x20)
 
+/* Specifies that the work interval requests the system to provide just enough performance
+ * to be able to finish at the provided deadline and no sooner. */
+#define WORK_INTERVAL_FLAG_FINISH_AT_DEADLINE           (0x40)
+
 /* Flags to describe the interval flavor to the performance controller */
 #define WORK_INTERVAL_TYPE_MASK                 (0xF0000000)
 #define WORK_INTERVAL_TYPE_DEFAULT              (0x0 << 28)
@@ -163,6 +167,7 @@ __BEGIN_DECLS
 #define WORK_INTERVAL_TYPE_CA_CLIENT            (0x3 << 28)
 #define WORK_INTERVAL_TYPE_HID_DELIVERY         (0x4 << 28)
 #define WORK_INTERVAL_TYPE_COREMEDIA            (0x5 << 28)
+#define WORK_INTERVAL_TYPE_ARKIT                (0x6 << 28)
 #define WORK_INTERVAL_TYPE_LAST                 (0xF << 28)
 
 #ifndef KERNEL

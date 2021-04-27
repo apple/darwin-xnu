@@ -36,21 +36,21 @@
 
 uint32_t phantom_cache_eval_period_in_msecs = 250;
 uint32_t phantom_cache_thrashing_threshold_ssd = 1000;
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 uint32_t phantom_cache_thrashing_threshold = 500;
-#else
+#else /* !XNU_TARGET_OS_OSX */
 uint32_t phantom_cache_thrashing_threshold = 50;
-#endif
+#endif /* !XNU_TARGET_OS_OSX */
 
 /*
  * Number of consecutive thrashing periods required before
  * vm_phantom_cache_check_pressure() returns true.
  */
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 unsigned phantom_cache_contiguous_periods = 4;
-#else
+#else /* !XNU_TARGET_OS_OSX */
 unsigned phantom_cache_contiguous_periods = 2;
-#endif
+#endif /* !XNU_TARGET_OS_OSX */
 
 clock_sec_t     pc_start_of_eval_period_sec = 0;
 clock_nsec_t    pc_start_of_eval_period_nsec = 0;
@@ -113,11 +113,11 @@ vm_phantom_cache_init()
 	if (!VM_CONFIG_COMPRESSOR_IS_ACTIVE) {
 		return;
 	}
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 	num_entries = (uint32_t)(((max_mem / PAGE_SIZE) / 10) / VM_GHOST_PAGES_PER_ENTRY);
-#else
+#else /* !XNU_TARGET_OS_OSX */
 	num_entries = (uint32_t)(((max_mem / PAGE_SIZE) / 4) / VM_GHOST_PAGES_PER_ENTRY);
-#endif
+#endif /* !XNU_TARGET_OS_OSX */
 	vm_phantom_cache_num_entries = 1;
 
 	while (vm_phantom_cache_num_entries < num_entries) {

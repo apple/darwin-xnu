@@ -12,7 +12,7 @@
 #include <sys/mman.h>
 #include <sys/sysctl.h>
 
-#include "vm/perf_helpers.h"
+#include "benchmark/helpers.h"
 
 typedef enum test_variant {
 	VARIANT_MADVISE_FREE

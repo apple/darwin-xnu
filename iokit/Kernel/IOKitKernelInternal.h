@@ -198,6 +198,9 @@ extern bool gCPUsRunning;
 
 extern OSSet * gIORemoveOnReadProperties;
 
+extern uint32_t gHaltTimeMaxLog;
+extern uint32_t gHaltTimeMaxPanic;
+
 extern "C" void IOKitInitializeTime( void );
 extern void IOMachPortInitialize(void);
 
@@ -214,8 +217,6 @@ extern "C" void IOKitKernelLogBuffer(const char * title, const void * buffer, si
 extern const OSSymbol * gIOCreateEFIDevicePathSymbol;
 extern "C" void IOSetKeyStoreData(LIBKERN_CONSUMED IOMemoryDescriptor * data);
 extern "C" void IOSetAPFSKeyStoreData(LIBKERN_CONSUMED IOMemoryDescriptor* data);
-extern "C" void IOSetARVRootHashData(LIBKERN_CONSUMED IOMemoryDescriptor* arvData);
-extern "C" void IOSetARVManifestData(LIBKERN_CONSUMED IOMemoryDescriptor* arvData);
 #endif
 extern const  OSSymbol * gAKSGetKey;
 

@@ -158,6 +158,9 @@ extern void proc_inherit_task_role(task_t new_task, task_t old_task);
 
 #if CONFIG_IOSCHED
 #define IOSCHED_METADATA_TIER                   THROTTLE_LEVEL_TIER1
+#define IOSCHED_METADATA_EXPEDITED_TIER         THROTTLE_LEVEL_TIER0
+_Static_assert(IOSCHED_METADATA_EXPEDITED_TIER < IOSCHED_METADATA_TIER,
+    "expedited metadata tier must be less than metadata tier");
 #endif /* CONFIG_IOSCHED */
 
 extern int proc_get_darwinbgstate(task_t task, uint32_t *flagsp);

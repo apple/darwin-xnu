@@ -154,7 +154,7 @@ skip_cred_check:
 }
 
 extern void OSKextResetAfterUserspaceReboot(void);
-extern void zone_gc(boolean_t);
+extern void zone_gc_drain(void);
 
 int
 usrctl(struct proc *p, __unused struct usrctl_args *uap, __unused int32_t *retval)
@@ -184,7 +184,7 @@ usrctl(struct proc *p, __unused struct usrctl_args *uap, __unused int32_t *retva
 	int shm_error = pshm_cache_purge_all(p);
 	int sem_error = psem_cache_purge_all(p);
 
-	zone_gc(FALSE);
+	zone_gc_drain();
 
 	return shm_error != 0 ? shm_error : sem_error;
 }

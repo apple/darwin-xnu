@@ -14,6 +14,8 @@
 #include <uuid/uuid.h>
 #endif
 
+#include "drop_priv.h"
+
 #if TARGET_OS_OSX
 #define INVOKER_UID "SUDO_UID"
 #define INVOKER_GID "SUDO_GID"
@@ -40,8 +42,6 @@ _get_sudo_invoker(const char *var)
 }
 #endif /* TARGET_OS_OSX */
 
-void
-drop_priv(void);
 void
 drop_priv(void)
 {

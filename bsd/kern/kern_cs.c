@@ -134,8 +134,6 @@ SECURITY_READ_ONLY_LATE(int) cs_library_val_enable = DEFAULT_CS_LIBRARY_VA_ENABL
 #endif /* !SECURE_KERNEL */
 int cs_all_vnodes = 0;
 
-static lck_grp_t *cs_lockgrp;
-
 SYSCTL_INT(_vm, OID_AUTO, cs_force_kill, CTLFLAG_RW | CTLFLAG_LOCKED, &cs_force_kill, 0, "");
 SYSCTL_INT(_vm, OID_AUTO, cs_force_hard, CTLFLAG_RW | CTLFLAG_LOCKED, &cs_force_hard, 0, "");
 SYSCTL_INT(_vm, OID_AUTO, cs_debug, CTLFLAG_RW | CTLFLAG_LOCKED, &cs_debug, 0, "");
@@ -195,10 +193,6 @@ cs_init(void)
 	    sizeof(cs_library_val_enable));
 #endif
 #endif /* !SECURE_KERNEL */
-
-	lck_grp_attr_t *attr = lck_grp_attr_alloc_init();
-	cs_lockgrp = lck_grp_alloc_init("KERNCS", attr);
-	lck_grp_attr_free(attr);
 }
 STARTUP(CODESIGNING, STARTUP_RANK_FIRST, cs_init);
 
@@ -474,7 +468,7 @@ csblob_get_size(struct cs_blob *blob)
 vm_address_t
 csblob_get_addr(struct cs_blob *blob)
 {
-	return blob->csb_mem_kaddr;
+	return (vm_address_t)blob->csb_mem_kaddr;
 }
 
 /*
@@ -1553,7 +1547,7 @@ cs_blob_get(proc_t p, void **out_start, size_t *out_length)
 		return 0;
 	}
 
-	*out_start = (void *)csblob->csb_mem_kaddr;
+	*out_start = csblob->csb_mem_kaddr;
 	*out_length = csblob->csb_mem_size;
 
 	return 0;

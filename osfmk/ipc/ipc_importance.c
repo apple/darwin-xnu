@@ -1997,6 +1997,16 @@ task_importance_update_owner_info(task_t task)
 }
 #endif
 
+static int
+task_importance_task_get_pid(ipc_importance_task_t iit)
+{
+#if DEVELOPMENT || DEBUG
+	return (int)iit->iit_bsd_pid;
+#else
+	return task_pid(iit->iit_task);
+#endif
+}
+
 /*
  *	Routine:	ipc_importance_reset_locked
  *	Purpose:
@@ -2033,13 +2043,6 @@ ipc_importance_reset_locked(ipc_importance_task_t task_imp, boolean_t donor)
 	task_imp->iit_legacy_externcnt = 0;
 	task_imp->iit_legacy_externdrop = 0;
 	after_donor = ipc_importance_task_is_donor(task_imp);
-
-#if DEVELOPMENT || DEBUG
-	if (task_imp->iit_assertcnt > 0 && task_imp->iit_live_donor) {
-		printf("Live donor task %s[%d] still has %d importance assertions after reset\n",
-		    task_imp->iit_procname, task_imp->iit_bsd_pid, task_imp->iit_assertcnt);
-	}
-#endif
 
 	/* propagate a downstream drop if there was a change in donor status */
 	if (after_donor != before_donor) {
@@ -3260,7 +3263,8 @@ ipc_importance_receive(
 		 * will trigger the probe in ipc_importance_task_externalize_assertion()
 		 * above and have impresult==1 here.
 		 */
-		DTRACE_BOOST5(receive_boost, task_t, task_self, int, task_pid(task_self), int, sender_pid, int, 1, int, task_self->task_imp_base->iit_assertcnt);
+		DTRACE_BOOST5(receive_boost, task_t, task_self, int, task_pid(task_self),
+		    int, sender_pid, int, 1, int, task_self->task_imp_base->iit_assertcnt);
 	}
 #endif /* IMPORTANCE_TRACE */
 }
@@ -3587,59 +3591,61 @@ ipc_importance_extract_content(
 	mach_voucher_attr_content_t                     out_content,
 	mach_voucher_attr_content_size_t                *in_out_content_size)
 {
-	mach_voucher_attr_content_size_t size = 0;
 	ipc_importance_elem_t elem;
 	unsigned int i;
+
+	char *buf = (char *)out_content;
+	mach_voucher_attr_content_size_t size = *in_out_content_size;
+	mach_voucher_attr_content_size_t pos = 0;
+	__unused int pid;
 
 	IMPORTANCE_ASSERT_MANAGER(manager);
 	IMPORTANCE_ASSERT_KEY(key);
 
 	/* the first non-default value provides the data */
-	for (i = 0; i < value_count && *in_out_content_size > 0; i++) {
+	for (i = 0; i < value_count; i++) {
 		elem = (ipc_importance_elem_t)values[i];
 		if (IIE_NULL == elem) {
 			continue;
 		}
 
-		snprintf((char *)out_content, *in_out_content_size, "Importance for pid ");
-		size = (mach_voucher_attr_content_size_t)strlen((char *)out_content);
+		pos += scnprintf(buf + pos, size - pos, "Importance for ");
 
 		for (;;) {
 			ipc_importance_inherit_t inherit = III_NULL;
 			ipc_importance_task_t task_imp;
-			task_t task;
-			int t_pid;
 
 			if (IIE_TYPE_TASK == IIE_TYPE(elem)) {
 				task_imp = (ipc_importance_task_t)elem;
-				task = task_imp->iit_task;
-				t_pid = (TASK_NULL != task) ?
-				    task_pid(task) : -1;
-				snprintf((char *)out_content + size, *in_out_content_size - size, "%d", t_pid);
 			} else {
 				inherit = (ipc_importance_inherit_t)elem;
 				task_imp = inherit->iii_to_task;
-				task = task_imp->iit_task;
-				t_pid = (TASK_NULL != task) ?
-				    task_pid(task) : -1;
-				snprintf((char *)out_content + size, *in_out_content_size - size,
-				    "%d (%d of %d boosts) %s from pid ", t_pid,
-				    III_EXTERN(inherit), inherit->iii_externcnt,
-				    (inherit->iii_donating) ? "donated" : "linked");
 			}
-
-			size = (mach_voucher_attr_content_size_t)strlen((char *)out_content);
+#if DEVELOPMENT || DEBUG
+			pos += scnprintf(buf + pos, size - pos, "%s[%d]",
+			    task_imp->iit_procname, task_imp->iit_bsd_pid);
+#else
+			ipc_importance_lock();
+			pid = task_importance_task_get_pid(task_imp);
+			ipc_importance_unlock();
+			pos += scnprintf(buf + pos, size - pos, "pid %d", pid);
+#endif /* DEVELOPMENT || DEBUG */
 
 			if (III_NULL == inherit) {
 				break;
 			}
-
+			pos += scnprintf(buf + pos, size - pos,
+			    " (%d of %d boosts) %s from ",
+			    III_EXTERN(inherit), inherit->iii_externcnt,
+			    (inherit->iii_donating) ? "donated" : "linked");
 			elem = inherit->iii_from_elem;
 		}
-		size++; /* account for NULL */
+
+		pos++; /* account for terminating \0 */
+		break;
 	}
 	*out_command = MACH_VOUCHER_ATTR_NOOP; /* cannot be used to regenerate value */
-	*in_out_content_size = size;
+	*in_out_content_size = pos;
 	return KERN_SUCCESS;
 }
 
@@ -3863,14 +3869,7 @@ task_importance_list_pids(task_t task, int flags, char *pid_list, unsigned int m
 		target_pid = -1;
 
 		if (temp_inherit->iii_donating) {
-#if DEVELOPMENT || DEBUG
-			target_pid = temp_inherit->iii_to_task->iit_bsd_pid;
-#else
-			temp_task = temp_inherit->iii_to_task->iit_task;
-			if (temp_task != TASK_NULL) {
-				target_pid = task_pid(temp_task);
-			}
-#endif
+			target_pid = task_importance_task_get_pid(temp_inherit->iii_to_task);
 		}
 
 		if (target_pid != -1 && previous_pid != target_pid) {
@@ -3898,19 +3897,12 @@ task_importance_list_pids(task_t task, int flags, char *pid_list, unsigned int m
 			continue;
 		}
 
-		if (IIE_TYPE_TASK == IIE_TYPE(elem) &&
-		    (((ipc_importance_task_t)elem)->iit_task != TASK_NULL)) {
-			target_pid = task_pid(((ipc_importance_task_t)elem)->iit_task);
+		if (IIE_TYPE_TASK == IIE_TYPE(elem)) {
+			ipc_importance_task_t temp_iit = (ipc_importance_task_t)elem;
+			target_pid = task_importance_task_get_pid(temp_iit);
 		} else {
 			temp_inherit = (ipc_importance_inherit_t)elem;
-#if DEVELOPMENT || DEBUG
-			target_pid = temp_inherit->iii_to_task->iit_bsd_pid;
-#else
-			temp_task = temp_inherit->iii_to_task->iit_task;
-			if (temp_task != TASK_NULL) {
-				target_pid = task_pid(temp_task);
-			}
-#endif
+			target_pid = task_importance_task_get_pid(temp_inherit->iii_to_task);
 		}
 
 		if (target_pid != -1 && previous_pid != target_pid) {

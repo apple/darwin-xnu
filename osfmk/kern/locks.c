@@ -497,7 +497,7 @@ lck_attr_free(
  *
  *	Initialize a hardware lock.
  */
-void
+MARK_AS_HIBERNATE_TEXT void
 hw_lock_init(hw_lock_t lock)
 {
 	ordered_store_hw(lock, 0);
@@ -672,23 +672,13 @@ void
 	hw_lock_lock_internal(lock, thread LCK_GRP_ARG(grp));
 }
 
-/*
- *	Routine: hw_lock_to
- *
- *	Acquire lock, spinning until it becomes available or timeout.
- *	Timeout is in mach_absolute_time ticks, return with
- *	preemption disabled.
- */
-unsigned
-int
-(hw_lock_to)(hw_lock_t lock, uint64_t timeout LCK_GRP_ARG(lck_grp_t *grp))
+static inline unsigned int
+hw_lock_to_internal(hw_lock_t lock, uint64_t timeout, thread_t thread
+    LCK_GRP_ARG(lck_grp_t *grp))
 {
-	thread_t        thread;
-	uintptr_t       state;
+	uintptr_t state;
 	unsigned int success = 0;
 
-	thread = current_thread();
-	disable_preemption_for_thread(thread);
 	state = LCK_MTX_THREAD_TO_STATE(thread) | PLATFORM_LCK_ILOCK;
 #if     LOCK_PRETEST
 	if (ordered_load_hw(lock)) {
@@ -708,6 +698,40 @@ end:
 		lck_grp_spin_update_held(lock LCK_GRP_ARG(grp));
 	}
 	return success;
+}
+
+/*
+ *	Routine: hw_lock_to
+ *
+ *	Acquire lock, spinning until it becomes available or timeout.
+ *	Timeout is in mach_absolute_time ticks, return with
+ *	preemption disabled.
+ */
+unsigned
+int
+(hw_lock_to)(hw_lock_t lock, uint64_t timeout LCK_GRP_ARG(lck_grp_t *grp))
+{
+	thread_t thread = current_thread();
+	disable_preemption_for_thread(thread);
+	return hw_lock_to_internal(lock, timeout, thread LCK_GRP_ARG(grp));
+}
+
+/*
+ *	Routine: hw_lock_to_nopreempt
+ *
+ *	Acquire lock, spinning until it becomes available or timeout.
+ *	Timeout is in mach_absolute_time ticks, called and return with
+ *	preemption disabled.
+ */
+unsigned
+int
+(hw_lock_to_nopreempt)(hw_lock_t lock, uint64_t timeout LCK_GRP_ARG(lck_grp_t *grp))
+{
+	thread_t thread = current_thread();
+	if (__improbable(!preemption_disabled_for_thread(thread))) {
+		panic("Attempt to test no-preempt spinlock %p in preemptible context", lock);
+	}
+	return hw_lock_to_internal(lock, timeout, thread LCK_GRP_ARG(grp));
 }
 
 /*

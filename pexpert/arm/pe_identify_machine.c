@@ -407,7 +407,7 @@ pe_run_debug_command(command_buffer_element_t *command_buffer)
 				nanoseconds_to_absolutetime(command_buffer->delay_us * NSEC_PER_USEC, &deadline);
 				deadline += ml_get_timebase();
 				while (ml_get_timebase() < deadline) {
-					;
+					os_compiler_barrier();
 				}
 			}
 		}

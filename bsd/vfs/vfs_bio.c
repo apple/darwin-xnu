@@ -167,12 +167,11 @@ static TAILQ_HEAD(bqueues, buf) bufqueues[BQUEUES];
 static int needbuffer;
 static int need_iobuffer;
 
-static lck_grp_t        *buf_mtx_grp;
-static lck_attr_t       *buf_mtx_attr;
-static lck_grp_attr_t   *buf_mtx_grp_attr;
-static lck_mtx_t        *iobuffer_mtxp;
-static lck_mtx_t        *buf_mtxp;
-static lck_mtx_t        *buf_gc_callout;
+static LCK_GRP_DECLARE(buf_mtx_grp, "buffer cache");
+static LCK_ATTR_DECLARE(buf_mtx_attr, 0, 0);
+static LCK_MTX_DECLARE_ATTR(iobuffer_mtxp, &buf_mtx_grp, &buf_mtx_attr);
+static LCK_MTX_DECLARE_ATTR(buf_mtx, &buf_mtx_grp, &buf_mtx_attr);
+static LCK_MTX_DECLARE_ATTR(buf_gc_callout, &buf_mtx_grp, &buf_mtx_attr);
 
 static uint32_t buf_busycount;
 
@@ -286,7 +285,7 @@ bremhash(buf_t  bp)
 }
 
 /*
- * buf_mtxp held.
+ * buf_mtx held.
  */
 static __inline__ void
 bmovelaundry(buf_t bp)
@@ -609,6 +608,21 @@ bufattr_ioscheduled(bufattr_t bap)
 	return 0;
 }
 
+void
+bufattr_markexpeditedmeta(bufattr_t bap)
+{
+	SET(bap->ba_flags, BA_EXPEDITED_META_IO);
+}
+
+int
+bufattr_expeditedmeta(bufattr_t bap)
+{
+	if ((bap->ba_flags & BA_EXPEDITED_META_IO)) {
+		return 1;
+	}
+	return 0;
+}
+
 errno_t
 buf_error(buf_t bp)
 {
@@ -896,7 +910,7 @@ buf_create_shadow_internal(buf_t bp, boolean_t force_copy, uintptr_t external_st
 		}
 		*(buf_t *)(&io_bp->b_orig) = bp;
 
-		lck_mtx_lock_spin(buf_mtxp);
+		lck_mtx_lock_spin(&buf_mtx);
 
 		io_bp->b_lflags |= BL_SHADOW;
 		io_bp->b_shadow = bp->b_shadow;
@@ -910,7 +924,7 @@ buf_create_shadow_internal(buf_t bp, boolean_t force_copy, uintptr_t external_st
 			bp->b_data_ref++;
 		}
 #endif
-		lck_mtx_unlock(buf_mtxp);
+		lck_mtx_unlock(&buf_mtx);
 	} else {
 		if (external_storage) {
 #ifdef BUF_MAKE_PRIVATE
@@ -956,7 +970,7 @@ buf_make_private(buf_t bp)
 
 	bcopy((caddr_t)bp->b_datap, (caddr_t)my_buf.b_datap, bp->b_bcount);
 
-	lck_mtx_lock_spin(buf_mtxp);
+	lck_mtx_lock_spin(&buf_mtx);
 
 	for (t_bp = bp->b_shadow; t_bp; t_bp = t_bp->b_shadow) {
 		if (!ISSET(bp->b_lflags, BL_EXTERNAL)) {
@@ -974,7 +988,7 @@ buf_make_private(buf_t bp)
 	}
 
 	if (ds_bp == NULL) {
-		lck_mtx_unlock(buf_mtxp);
+		lck_mtx_unlock(&buf_mtx);
 
 		buf_free_meta_store(&my_buf);
 
@@ -991,7 +1005,7 @@ buf_make_private(buf_t bp)
 	bp->b_data_ref = 0;
 	bp->b_datap = my_buf.b_datap;
 
-	lck_mtx_unlock(buf_mtxp);
+	lck_mtx_unlock(&buf_mtx);
 
 	KERNEL_DEBUG(0xbbbbc004 | DBG_FUNC_END, bp, bp->b_shadow_ref, 0, 0, 0);
 	return 0;
@@ -1529,10 +1543,10 @@ buf_iterate(vnode_t vp, int (*callout)(buf_t, void *), int flags, void *arg)
 	}
 
 	for (i = 0; i < num_lists; i++) {
-		lck_mtx_lock(buf_mtxp);
+		lck_mtx_lock(&buf_mtx);
 
 		if (buf_iterprepare(vp, &local_iterblkhd, list[i].flag)) {
-			lck_mtx_unlock(buf_mtxp);
+			lck_mtx_unlock(&buf_mtx);
 			continue;
 		}
 		while (!LIST_EMPTY(&local_iterblkhd)) {
@@ -1548,7 +1562,7 @@ buf_iterate(vnode_t vp, int (*callout)(buf_t, void *), int flags, void *arg)
 				}
 			}
 
-			lck_mtx_unlock(buf_mtxp);
+			lck_mtx_unlock(&buf_mtx);
 
 			retval = callout(bp, arg);
 
@@ -1564,17 +1578,17 @@ buf_iterate(vnode_t vp, int (*callout)(buf_t, void *), int flags, void *arg)
 				if (bp) {
 					buf_brelse(bp);
 				}
-				lck_mtx_lock(buf_mtxp);
+				lck_mtx_lock(&buf_mtx);
 				goto out;
 			case BUF_CLAIMED_DONE:
-				lck_mtx_lock(buf_mtxp);
+				lck_mtx_lock(&buf_mtx);
 				goto out;
 			}
-			lck_mtx_lock(buf_mtxp);
+			lck_mtx_lock(&buf_mtx);
 		} /* while list has more nodes */
 out:
 		buf_itercomplete(vp, &local_iterblkhd, list[i].flag);
-		lck_mtx_unlock(buf_mtxp);
+		lck_mtx_unlock(&buf_mtx);
 	} /* for each list */
 } /* buf_iterate */
 
@@ -1596,7 +1610,7 @@ buf_invalidateblks(vnode_t vp, int flags, int slpflag, int slptimeo)
 		return 0;
 	}
 
-	lck_mtx_lock(buf_mtxp);
+	lck_mtx_lock(&buf_mtx);
 
 	for (;;) {
 		if (must_rescan == 0) {
@@ -1604,8 +1618,8 @@ buf_invalidateblks(vnode_t vp, int flags, int slpflag, int slptimeo)
 			 * the lists may not be empty, but all that's left at this
 			 * point are metadata or B_LOCKED buffers which are being
 			 * skipped... we know this because we made it through both
-			 * the clean and dirty lists without dropping buf_mtxp...
-			 * each time we drop buf_mtxp we bump "must_rescan"
+			 * the clean and dirty lists without dropping buf_mtx...
+			 * each time we drop buf_mtx we bump "must_rescan"
 			 */
 			break;
 		}
@@ -1642,7 +1656,7 @@ buf_invalidateblks(vnode_t vp, int flags, int slpflag, int slptimeo)
 				if (error == EDEADLK) {
 					/*
 					 * this buffer was marked B_LOCKED...
-					 * we didn't drop buf_mtxp, so we
+					 * we didn't drop buf_mtx, so we
 					 * we don't need to rescan
 					 */
 					continue;
@@ -1650,7 +1664,7 @@ buf_invalidateblks(vnode_t vp, int flags, int slpflag, int slptimeo)
 				if (error == EAGAIN) {
 					/*
 					 * found a busy buffer... we blocked and
-					 * dropped buf_mtxp, so we're going to
+					 * dropped buf_mtx, so we're going to
 					 * need to rescan after this pass is completed
 					 */
 					must_rescan++;
@@ -1662,10 +1676,10 @@ buf_invalidateblks(vnode_t vp, int flags, int slpflag, int slptimeo)
 				 */
 				buf_itercomplete(vp, &local_iterblkhd, VBI_CLEAN);
 
-				lck_mtx_unlock(buf_mtxp);
+				lck_mtx_unlock(&buf_mtx);
 				return error;
 			}
-			lck_mtx_unlock(buf_mtxp);
+			lck_mtx_unlock(&buf_mtx);
 
 			if (bp->b_flags & B_LOCKED) {
 				KERNEL_DEBUG(0xbbbbc038, bp, 0, 0, 0, 0);
@@ -1675,10 +1689,10 @@ buf_invalidateblks(vnode_t vp, int flags, int slpflag, int slptimeo)
 			SET(bp->b_flags, B_INVAL);
 			buf_brelse(bp);
 
-			lck_mtx_lock(buf_mtxp);
+			lck_mtx_lock(&buf_mtx);
 
 			/*
-			 * by dropping buf_mtxp, we allow new
+			 * by dropping buf_mtx, we allow new
 			 * buffers to be added to the vnode list(s)
 			 * we'll have to rescan at least once more
 			 * if the queues aren't empty
@@ -1717,7 +1731,7 @@ try_dirty_list:
 				if (error == EDEADLK) {
 					/*
 					 * this buffer was marked B_LOCKED...
-					 * we didn't drop buf_mtxp, so we
+					 * we didn't drop buf_mtx, so we
 					 * we don't need to rescan
 					 */
 					continue;
@@ -1725,7 +1739,7 @@ try_dirty_list:
 				if (error == EAGAIN) {
 					/*
 					 * found a busy buffer... we blocked and
-					 * dropped buf_mtxp, so we're going to
+					 * dropped buf_mtx, so we're going to
 					 * need to rescan after this pass is completed
 					 */
 					must_rescan++;
@@ -1737,10 +1751,10 @@ try_dirty_list:
 				 */
 				buf_itercomplete(vp, &local_iterblkhd, VBI_DIRTY);
 
-				lck_mtx_unlock(buf_mtxp);
+				lck_mtx_unlock(&buf_mtx);
 				return error;
 			}
-			lck_mtx_unlock(buf_mtxp);
+			lck_mtx_unlock(&buf_mtx);
 
 			if (bp->b_flags & B_LOCKED) {
 				KERNEL_DEBUG(0xbbbbc038, bp, 0, 0, 1, 0);
@@ -1755,9 +1769,9 @@ try_dirty_list:
 				buf_brelse(bp);
 			}
 
-			lck_mtx_lock(buf_mtxp);
+			lck_mtx_lock(&buf_mtx);
 			/*
-			 * by dropping buf_mtxp, we allow new
+			 * by dropping buf_mtx, we allow new
 			 * buffers to be added to the vnode list(s)
 			 * we'll have to rescan at least once more
 			 * if the queues aren't empty
@@ -1766,7 +1780,7 @@ try_dirty_list:
 		}
 		buf_itercomplete(vp, &local_iterblkhd, VBI_DIRTY);
 	}
-	lck_mtx_unlock(buf_mtxp);
+	lck_mtx_unlock(&buf_mtx);
 
 	return 0;
 }
@@ -1796,7 +1810,7 @@ buf_flushdirtyblks_skipinfo(vnode_t vp, int wait, int flags, const char *msg)
 		lock_flags |= BAC_SKIP_NONLOCKED;
 	}
 loop:
-	lck_mtx_lock(buf_mtxp);
+	lck_mtx_lock(&buf_mtx);
 
 	if (buf_iterprepare(vp, &local_iterblkhd, VBI_DIRTY) == 0) {
 		while (!LIST_EMPTY(&local_iterblkhd)) {
@@ -1823,7 +1837,7 @@ loop:
 				}
 				continue;
 			}
-			lck_mtx_unlock(buf_mtxp);
+			lck_mtx_unlock(&buf_mtx);
 
 			bp->b_flags &= ~B_LOCKED;
 
@@ -1838,11 +1852,11 @@ loop:
 			}
 			writes_issued++;
 
-			lck_mtx_lock(buf_mtxp);
+			lck_mtx_lock(&buf_mtx);
 		}
 		buf_itercomplete(vp, &local_iterblkhd, VBI_DIRTY);
 	}
-	lck_mtx_unlock(buf_mtxp);
+	lck_mtx_unlock(&buf_mtx);
 
 	if (wait) {
 		(void)vnode_waitforwrites(vp, 0, 0, 0, msg);
@@ -1875,7 +1889,7 @@ loop:
 
 
 /*
- * called with buf_mtxp held...
+ * called with buf_mtx held...
  * this lock protects the queue manipulation
  */
 static int
@@ -1891,7 +1905,7 @@ buf_iterprepare(vnode_t vp, struct buflists *iterheadp, int flags)
 
 	while (vp->v_iterblkflags & VBI_ITER) {
 		vp->v_iterblkflags |= VBI_ITERWANT;
-		msleep(&vp->v_iterblkflags, buf_mtxp, 0, "buf_iterprepare", NULL);
+		msleep(&vp->v_iterblkflags, &buf_mtx, 0, "buf_iterprepare", NULL);
 	}
 	if (LIST_EMPTY(listheadp)) {
 		LIST_INIT(iterheadp);
@@ -1907,7 +1921,7 @@ buf_iterprepare(vnode_t vp, struct buflists *iterheadp, int flags)
 }
 
 /*
- * called with buf_mtxp held...
+ * called with buf_mtx held...
  * this lock protects the queue manipulation
  */
 static void
@@ -1982,7 +1996,7 @@ bremfree_locked(buf_t bp)
 
 /*
  * Associate a buffer with a vnode.
- * buf_mtxp must be locked on entry
+ * buf_mtx must be locked on entry
  */
 static void
 bgetvp_locked(vnode_t vp, buf_t bp)
@@ -2004,7 +2018,7 @@ bgetvp_locked(vnode_t vp, buf_t bp)
 
 /*
  * Disassociate a buffer from a vnode.
- * buf_mtxp must be locked on entry
+ * buf_mtx must be locked on entry
  */
 static void
 brelvp_locked(buf_t bp)
@@ -2033,7 +2047,7 @@ buf_reassign(buf_t bp, vnode_t newvp)
 		printf("buf_reassign: NULL");
 		return;
 	}
-	lck_mtx_lock_spin(buf_mtxp);
+	lck_mtx_lock_spin(&buf_mtx);
 
 	/*
 	 * Delete from old vnode list, if on one.
@@ -2052,7 +2066,7 @@ buf_reassign(buf_t bp, vnode_t newvp)
 	}
 	bufinsvn(bp, listheadp);
 
-	lck_mtx_unlock(buf_mtxp);
+	lck_mtx_unlock(&buf_mtx);
 }
 
 static __inline__ void
@@ -2110,36 +2124,6 @@ bufinit(void)
 		bufhdrinit(bp);
 		bp->b_whichq = -1;
 		binsheadfree(bp, &iobufqueue, -1);
-	}
-
-	/*
-	 * allocate lock group attribute and group
-	 */
-	buf_mtx_grp_attr = lck_grp_attr_alloc_init();
-	buf_mtx_grp = lck_grp_alloc_init("buffer cache", buf_mtx_grp_attr);
-
-	/*
-	 * allocate the lock attribute
-	 */
-	buf_mtx_attr = lck_attr_alloc_init();
-
-	/*
-	 * allocate and initialize mutex's for the buffer and iobuffer pools
-	 */
-	buf_mtxp        = lck_mtx_alloc_init(buf_mtx_grp, buf_mtx_attr);
-	iobuffer_mtxp   = lck_mtx_alloc_init(buf_mtx_grp, buf_mtx_attr);
-	buf_gc_callout  = lck_mtx_alloc_init(buf_mtx_grp, buf_mtx_attr);
-
-	if (iobuffer_mtxp == NULL) {
-		panic("couldn't create iobuffer mutex");
-	}
-
-	if (buf_mtxp == NULL) {
-		panic("couldn't create buf mutex");
-	}
-
-	if (buf_gc_callout == NULL) {
-		panic("couldn't create buf_gc_callout mutex");
 	}
 
 	/*
@@ -2540,7 +2524,7 @@ buf_brelse_shadow(buf_t bp)
 #endif
 	int need_wakeup = 0;
 
-	lck_mtx_lock_spin(buf_mtxp);
+	lck_mtx_lock_spin(&buf_mtx);
 
 	__IGNORE_WCASTALIGN(bp_head = (buf_t)bp->b_orig);
 
@@ -2619,7 +2603,7 @@ buf_brelse_shadow(buf_t bp)
 			need_wakeup = 1;
 		}
 	}
-	lck_mtx_unlock(buf_mtxp);
+	lck_mtx_unlock(&buf_mtx);
 
 	if (need_wakeup) {
 		wakeup(bp_head);
@@ -2809,21 +2793,21 @@ buf_brelse(buf_t bp)
 		 */
 		buf_release_credentials(bp);
 
-		lck_mtx_lock_spin(buf_mtxp);
+		lck_mtx_lock_spin(&buf_mtx);
 
 		if (bp->b_shadow_ref) {
 			SET(bp->b_lflags, BL_WAITSHADOW);
 
-			lck_mtx_unlock(buf_mtxp);
+			lck_mtx_unlock(&buf_mtx);
 
 			return;
 		}
 		if (delayed_buf_free_meta_store == TRUE) {
-			lck_mtx_unlock(buf_mtxp);
+			lck_mtx_unlock(&buf_mtx);
 finish_shadow_master:
 			buf_free_meta_store(bp);
 
-			lck_mtx_lock_spin(buf_mtxp);
+			lck_mtx_lock_spin(&buf_mtx);
 		}
 		CLR(bp->b_flags, (B_META | B_ZALLOC | B_DELWRI | B_LOCKED | B_AGE | B_ASYNC | B_NOCACHE | B_FUA));
 
@@ -2855,12 +2839,12 @@ finish_shadow_master:
 
 		bp->b_timestamp = buf_timestamp();
 
-		lck_mtx_lock_spin(buf_mtxp);
+		lck_mtx_lock_spin(&buf_mtx);
 
 		/*
 		 * the buf_brelse_shadow routine doesn't take 'ownership'
 		 * of the parent buf_t... it updates state that is protected by
-		 * the buf_mtxp, and checks for BL_BUSY to determine whether to
+		 * the buf_mtx, and checks for BL_BUSY to determine whether to
 		 * put the buf_t back on a free list.  b_shadow_ref is protected
 		 * by the lock, and since we have not yet cleared B_BUSY, we need
 		 * to check it while holding the lock to insure that one of us
@@ -2883,9 +2867,9 @@ finish_shadow_master:
 	if (needbuffer) {
 		/*
 		 * needbuffer is a global
-		 * we're currently using buf_mtxp to protect it
+		 * we're currently using buf_mtx to protect it
 		 * delay doing the actual wakeup until after
-		 * we drop buf_mtxp
+		 * we drop buf_mtx
 		 */
 		needbuffer = 0;
 		need_wakeup = 1;
@@ -2893,7 +2877,7 @@ finish_shadow_master:
 	if (ISSET(bp->b_lflags, BL_WANTED)) {
 		/*
 		 * delay the actual wakeup until after we
-		 * clear BL_BUSY and we've dropped buf_mtxp
+		 * clear BL_BUSY and we've dropped buf_mtx
 		 */
 		need_bp_wakeup = 1;
 	}
@@ -2903,7 +2887,7 @@ finish_shadow_master:
 	CLR(bp->b_lflags, (BL_BUSY | BL_WANTED));
 	buf_busycount--;
 
-	lck_mtx_unlock(buf_mtxp);
+	lck_mtx_unlock(&buf_mtx);
 
 	if (need_wakeup) {
 		/*
@@ -2936,14 +2920,14 @@ incore(vnode_t vp, daddr64_t blkno)
 
 	dp = BUFHASH(vp, blkno);
 
-	lck_mtx_lock_spin(buf_mtxp);
+	lck_mtx_lock_spin(&buf_mtx);
 
 	if (incore_locked(vp, blkno, dp)) {
 		retval = TRUE;
 	} else {
 		retval = FALSE;
 	}
-	lck_mtx_unlock(buf_mtxp);
+	lck_mtx_unlock(&buf_mtx);
 
 	return retval;
 }
@@ -2973,7 +2957,7 @@ buf_wait_for_shadow_io(vnode_t vp, daddr64_t blkno)
 
 	dp = BUFHASH(vp, blkno);
 
-	lck_mtx_lock_spin(buf_mtxp);
+	lck_mtx_lock_spin(&buf_mtx);
 
 	for (;;) {
 		if ((bp = incore_locked(vp, blkno, dp)) == NULL) {
@@ -2986,9 +2970,9 @@ buf_wait_for_shadow_io(vnode_t vp, daddr64_t blkno)
 
 		SET(bp->b_lflags, BL_WANTED_REF);
 
-		(void) msleep(bp, buf_mtxp, PSPIN | (PRIBIO + 1), "buf_wait_for_shadow", NULL);
+		(void) msleep(bp, &buf_mtx, PSPIN | (PRIBIO + 1), "buf_wait_for_shadow", NULL);
 	}
-	lck_mtx_unlock(buf_mtxp);
+	lck_mtx_unlock(&buf_mtx);
 }
 
 /* XXX FIXME -- Update the comment to reflect the UBC changes (please) -- */
@@ -3020,7 +3004,7 @@ buf_getblk(vnode_t vp, daddr64_t blkno, int size, int slpflag, int slptimeo, int
 	operation &= ~BLK_ONLYVALID;
 	dp = BUFHASH(vp, blkno);
 start:
-	lck_mtx_lock_spin(buf_mtxp);
+	lck_mtx_lock_spin(&buf_mtx);
 
 	if ((bp = incore_locked(vp, blkno, dp))) {
 		/*
@@ -3047,7 +3031,7 @@ start:
 				KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 396)) | DBG_FUNC_NONE,
 				    (uintptr_t)blkno, size, operation, 0, 0);
 
-				err = msleep(bp, buf_mtxp, slpflag | PDROP | (PRIBIO + 1), "buf_getblk", &ts);
+				err = msleep(bp, &buf_mtx, slpflag | PDROP | (PRIBIO + 1), "buf_getblk", &ts);
 
 				/*
 				 * Callers who call with PCATCH or timeout are
@@ -3080,7 +3064,7 @@ start:
 			bremfree_locked(bp);
 			bufstats.bufs_incore++;
 
-			lck_mtx_unlock(buf_mtxp);
+			lck_mtx_unlock(&buf_mtx);
 #ifdef JOE_DEBUG
 			bp->b_owner = current_thread();
 			bp->b_tag   = 1;
@@ -3191,7 +3175,7 @@ start:
 		int queue = BQ_EMPTY; /* Start with no preference */
 
 		if (ret_only_valid) {
-			lck_mtx_unlock(buf_mtxp);
+			lck_mtx_unlock(&buf_mtx);
 			return NULL;
 		}
 		if ((vnode_isreg(vp) == 0) || (UBCINFOEXISTS(vp) == 0) /*|| (vnode_issystem(vp) == 1)*/) {
@@ -3213,7 +3197,7 @@ start:
 			SET(bp->b_flags, B_INVAL);
 			binshash(bp, &invalhash);
 
-			lck_mtx_unlock(buf_mtxp);
+			lck_mtx_unlock(&buf_mtx);
 
 			buf_brelse(bp);
 			goto start;
@@ -3241,7 +3225,7 @@ start:
 
 		bgetvp_locked(vp, bp);
 
-		lck_mtx_unlock(buf_mtxp);
+		lck_mtx_unlock(&buf_mtx);
 
 		allocbuf(bp, size);
 
@@ -3251,11 +3235,11 @@ start:
 			/*
 			 * buffer data is invalid...
 			 *
-			 * I don't want to have to retake buf_mtxp,
+			 * I don't want to have to retake buf_mtx,
 			 * so the miss and vmhits counters are done
 			 * with Atomic updates... all other counters
 			 * in bufstats are protected with either
-			 * buf_mtxp or iobuffer_mtxp
+			 * buf_mtx or iobuffer_mtxp
 			 */
 			OSAddAtomicLong(1, &bufstats.bufs_miss);
 			break;
@@ -3391,7 +3375,7 @@ buf_geteblk(int size)
 	int queue = BQ_EMPTY;
 
 	do {
-		lck_mtx_lock_spin(buf_mtxp);
+		lck_mtx_lock_spin(&buf_mtx);
 
 		bp = getnewbuf(0, 0, &queue);
 	} while (bp == NULL);
@@ -3406,7 +3390,7 @@ buf_geteblk(int size)
 	binshash(bp, &invalhash);
 	bufstats.bufs_eblk++;
 
-	lck_mtx_unlock(buf_mtxp);
+	lck_mtx_unlock(&buf_mtx);
 
 	allocbuf(bp, size);
 
@@ -3439,7 +3423,7 @@ recycle_buf_from_pool(int nsize)
 	buf_t   bp;
 	void    *ptr = NULL;
 
-	lck_mtx_lock_spin(buf_mtxp);
+	lck_mtx_lock_spin(&buf_mtx);
 
 	TAILQ_FOREACH(bp, &bufqueues[BQ_META], b_freelist) {
 		if (ISSET(bp->b_flags, B_DELWRI) || bp->b_bufsize != (uint32_t)nsize) {
@@ -3451,7 +3435,7 @@ recycle_buf_from_pool(int nsize)
 		bcleanbuf(bp, TRUE);
 		break;
 	}
-	lck_mtx_unlock(buf_mtxp);
+	lck_mtx_unlock(&buf_mtx);
 
 	return ptr;
 }
@@ -3607,9 +3591,9 @@ allocbuf(buf_t bp, int size)
  *	Remove the buffer from the hash. Return the buffer and the queue
  *	on which it was found.
  *
- *	buf_mtxp is held upon entry
- *	returns with buf_mtxp locked if new buf available
- *	returns with buf_mtxp UNlocked if new buf NOT available
+ *	buf_mtx is held upon entry
+ *	returns with buf_mtx locked if new buf available
+ *	returns with buf_mtx UNlocked if new buf NOT available
  */
 
 static buf_t
@@ -3677,7 +3661,7 @@ start:
 		 */
 
 add_newbufs:
-		lck_mtx_unlock(buf_mtxp);
+		lck_mtx_unlock(&buf_mtx);
 
 		/* Create a new temporary buffer header */
 		bp = (struct buf *)zalloc(buf_hdr_zone);
@@ -3690,7 +3674,7 @@ add_newbufs:
 			SET(bp->b_flags, B_HDRALLOC);
 			*queue = BQ_EMPTY;
 		}
-		lck_mtx_lock_spin(buf_mtxp);
+		lck_mtx_lock_spin(&buf_mtx);
 
 		if (bp) {
 			binshash(bp, &invalhash);
@@ -3710,7 +3694,7 @@ add_newbufs:
 		/* the hz value is 100; which leads to 10ms */
 		ts.tv_nsec = (slptimeo % 1000) * NSEC_PER_USEC * 1000 * 10;
 
-		msleep(&needbuffer, buf_mtxp, slpflag | PDROP | (PRIBIO + 1), "getnewbuf", &ts);
+		msleep(&needbuffer, &buf_mtx, slpflag | PDROP | (PRIBIO + 1), "getnewbuf", &ts);
 		return NULL;
 	}
 
@@ -3793,8 +3777,8 @@ found:
  * Returns 1 if issued a buf_bawrite() to indicate
  * that the buffer is not ready.
  *
- * buf_mtxp is held upon entry
- * returns with buf_mtxp locked
+ * buf_mtx is held upon entry
+ * returns with buf_mtx locked
  */
 int
 bcleanbuf(buf_t bp, boolean_t discard)
@@ -3817,7 +3801,7 @@ bcleanbuf(buf_t bp, boolean_t discard)
 
 		bmovelaundry(bp);
 
-		lck_mtx_unlock(buf_mtxp);
+		lck_mtx_unlock(&buf_mtx);
 
 		wakeup(&bufqueues[BQ_LAUNDRY]);
 		/*
@@ -3825,7 +3809,7 @@ bcleanbuf(buf_t bp, boolean_t discard)
 		 */
 		(void)thread_block(THREAD_CONTINUE_NULL);
 
-		lck_mtx_lock_spin(buf_mtxp);
+		lck_mtx_lock_spin(&buf_mtx);
 
 		return 1;
 	}
@@ -3848,7 +3832,7 @@ bcleanbuf(buf_t bp, boolean_t discard)
 		brelvp_locked(bp);
 	}
 
-	lck_mtx_unlock(buf_mtxp);
+	lck_mtx_unlock(&buf_mtx);
 
 	BLISTNONE(bp);
 
@@ -3862,7 +3846,7 @@ bcleanbuf(buf_t bp, boolean_t discard)
 
 	/* If discarding, just move to the empty queue */
 	if (discard) {
-		lck_mtx_lock_spin(buf_mtxp);
+		lck_mtx_lock_spin(&buf_mtx);
 		CLR(bp->b_flags, (B_META | B_ZALLOC | B_DELWRI | B_LOCKED | B_AGE | B_ASYNC | B_NOCACHE | B_FUA));
 		bp->b_whichq = BQ_EMPTY;
 		binshash(bp, &invalhash);
@@ -3898,7 +3882,7 @@ bcleanbuf(buf_t bp, boolean_t discard)
 		bp->b_validoff = bp->b_validend = 0;
 		bzero(&bp->b_attr, sizeof(struct bufattr));
 
-		lck_mtx_lock_spin(buf_mtxp);
+		lck_mtx_lock_spin(&buf_mtx);
 	}
 	return 0;
 }
@@ -3915,20 +3899,20 @@ buf_invalblkno(vnode_t vp, daddr64_t lblkno, int flags)
 	dp = BUFHASH(vp, lblkno);
 
 relook:
-	lck_mtx_lock_spin(buf_mtxp);
+	lck_mtx_lock_spin(&buf_mtx);
 
 	if ((bp = incore_locked(vp, lblkno, dp)) == (struct buf *)0) {
-		lck_mtx_unlock(buf_mtxp);
+		lck_mtx_unlock(&buf_mtx);
 		return 0;
 	}
 	if (ISSET(bp->b_lflags, BL_BUSY)) {
 		if (!ISSET(flags, BUF_WAIT)) {
-			lck_mtx_unlock(buf_mtxp);
+			lck_mtx_unlock(&buf_mtx);
 			return EBUSY;
 		}
 		SET(bp->b_lflags, BL_WANTED);
 
-		error = msleep((caddr_t)bp, buf_mtxp, PDROP | (PRIBIO + 1), "buf_invalblkno", NULL);
+		error = msleep((caddr_t)bp, &buf_mtx, PDROP | (PRIBIO + 1), "buf_invalblkno", NULL);
 
 		if (error) {
 			return error;
@@ -3943,7 +3927,7 @@ relook:
 	bp->b_owner = current_thread();
 	bp->b_tag   = 4;
 #endif
-	lck_mtx_unlock(buf_mtxp);
+	lck_mtx_unlock(&buf_mtx);
 	buf_brelse(bp);
 
 	return 0;
@@ -3955,12 +3939,12 @@ buf_drop(buf_t bp)
 {
 	int need_wakeup = 0;
 
-	lck_mtx_lock_spin(buf_mtxp);
+	lck_mtx_lock_spin(&buf_mtx);
 
 	if (ISSET(bp->b_lflags, BL_WANTED)) {
 		/*
 		 * delay the actual wakeup until after we
-		 * clear BL_BUSY and we've dropped buf_mtxp
+		 * clear BL_BUSY and we've dropped buf_mtx
 		 */
 		need_wakeup = 1;
 	}
@@ -3974,7 +3958,7 @@ buf_drop(buf_t bp)
 	CLR(bp->b_lflags, (BL_BUSY | BL_WANTED));
 	buf_busycount--;
 
-	lck_mtx_unlock(buf_mtxp);
+	lck_mtx_unlock(&buf_mtx);
 
 	if (need_wakeup) {
 		/*
@@ -3990,11 +3974,11 @@ buf_acquire(buf_t bp, int flags, int slpflag, int slptimeo)
 {
 	errno_t error;
 
-	lck_mtx_lock_spin(buf_mtxp);
+	lck_mtx_lock_spin(&buf_mtx);
 
 	error = buf_acquire_locked(bp, flags, slpflag, slptimeo);
 
-	lck_mtx_unlock(buf_mtxp);
+	lck_mtx_unlock(&buf_mtx);
 
 	return error;
 }
@@ -4029,7 +4013,7 @@ buf_acquire_locked(buf_t bp, int flags, int slpflag, int slptimeo)
 		/* the hz value is 100; which leads to 10ms */
 		ts.tv_sec = (slptimeo / 100);
 		ts.tv_nsec = (slptimeo % 100) * 10  * NSEC_PER_USEC * 1000;
-		error = msleep((caddr_t)bp, buf_mtxp, slpflag | (PRIBIO + 1), "buf_acquire", &ts);
+		error = msleep((caddr_t)bp, &buf_mtx, slpflag | (PRIBIO + 1), "buf_acquire", &ts);
 
 		if (error) {
 			return error;
@@ -4058,14 +4042,14 @@ errno_t
 buf_biowait(buf_t bp)
 {
 	while (!ISSET(bp->b_flags, B_DONE)) {
-		lck_mtx_lock_spin(buf_mtxp);
+		lck_mtx_lock_spin(&buf_mtx);
 
 		if (!ISSET(bp->b_flags, B_DONE)) {
 			DTRACE_IO1(wait__start, buf_t, bp);
-			(void) msleep(bp, buf_mtxp, PDROP | (PRIBIO + 1), "buf_biowait", NULL);
+			(void) msleep(bp, &buf_mtx, PDROP | (PRIBIO + 1), "buf_biowait", NULL);
 			DTRACE_IO1(wait__done, buf_t, bp);
 		} else {
-			lck_mtx_unlock(buf_mtxp);
+			lck_mtx_unlock(&buf_mtx);
 		}
 	}
 	/* check for interruption of I/O (e.g. via NFS), then errors. */
@@ -4259,12 +4243,12 @@ buf_biodone(buf_t bp)
 		 * they do get to run, their going to re-set
 		 * BL_WANTED and go back to sleep
 		 */
-		lck_mtx_lock_spin(buf_mtxp);
+		lck_mtx_lock_spin(&buf_mtx);
 
 		CLR(bp->b_lflags, BL_WANTED);
 		SET(bp->b_flags, B_DONE);               /* note that it's done */
 
-		lck_mtx_unlock(buf_mtxp);
+		lck_mtx_unlock(&buf_mtx);
 
 		wakeup(bp);
 	}
@@ -4295,13 +4279,13 @@ count_lock_queue(void)
 	buf_t   bp;
 	int     n = 0;
 
-	lck_mtx_lock_spin(buf_mtxp);
+	lck_mtx_lock_spin(&buf_mtx);
 
 	for (bp = bufqueues[BQ_LOCKED].tqh_first; bp;
 	    bp = bp->b_freelist.tqe_next) {
 		n++;
 	}
-	lck_mtx_unlock(buf_mtxp);
+	lck_mtx_unlock(&buf_mtx);
 
 	return n;
 }
@@ -4338,13 +4322,13 @@ vfs_bufstats()
 			counts[j] = 0;
 		}
 
-		lck_mtx_lock(buf_mtxp);
+		lck_mtx_lock(&buf_mtx);
 
 		for (bp = dp->tqh_first; bp; bp = bp->b_freelist.tqe_next) {
 			counts[bp->b_bufsize / CLBYTES]++;
 			count++;
 		}
-		lck_mtx_unlock(buf_mtxp);
+		lck_mtx_unlock(&buf_mtx);
 
 		printf("%s: total-%d", bname[i], count);
 		for (j = 0; j <= MAXBSIZE / CLBYTES; j++) {
@@ -4369,7 +4353,7 @@ alloc_io_buf(vnode_t vp, int priv)
 	mount_t mp = NULL;
 	int alloc_for_virtualdev = FALSE;
 
-	lck_mtx_lock_spin(iobuffer_mtxp);
+	lck_mtx_lock_spin(&iobuffer_mtxp);
 
 	/*
 	 * We subject iobuf requests for diskimages to additional restrictions.
@@ -4388,7 +4372,7 @@ alloc_io_buf(vnode_t vp, int priv)
 			bufstats.bufs_iobufsleeps++;
 
 			need_iobuffer = 1;
-			(void)msleep(&need_iobuffer, iobuffer_mtxp,
+			(void)msleep(&need_iobuffer, &iobuffer_mtxp,
 			    PSPIN | (PRIBIO + 1), (const char *)"alloc_io_buf (1)",
 			    NULL);
 		}
@@ -4399,7 +4383,7 @@ alloc_io_buf(vnode_t vp, int priv)
 		bufstats.bufs_iobufsleeps++;
 
 		need_iobuffer = 1;
-		(void)msleep(&need_iobuffer, iobuffer_mtxp, PSPIN | (PRIBIO + 1),
+		(void)msleep(&need_iobuffer, &iobuffer_mtxp, PSPIN | (PRIBIO + 1),
 		    (const char *)"alloc_io_buf (2)", NULL);
 	}
 	TAILQ_REMOVE(&iobufqueue, bp, b_freelist);
@@ -4414,7 +4398,7 @@ alloc_io_buf(vnode_t vp, int priv)
 		bufstats.bufs_iobufinuse_vdev++;
 	}
 
-	lck_mtx_unlock(iobuffer_mtxp);
+	lck_mtx_unlock(&iobuffer_mtxp);
 
 	/*
 	 * initialize various fields
@@ -4481,7 +4465,7 @@ free_io_buf(buf_t bp)
 	/* Zero out the bufattr and its flags before relinquishing this iobuf */
 	bzero(&bp->b_attr, sizeof(struct bufattr));
 
-	lck_mtx_lock_spin(iobuffer_mtxp);
+	lck_mtx_lock_spin(&iobuffer_mtxp);
 
 	binsheadfree(bp, &iobufqueue, -1);
 
@@ -4511,7 +4495,7 @@ free_io_buf(buf_t bp)
 		}
 	}
 
-	lck_mtx_unlock(iobuffer_mtxp);
+	lck_mtx_unlock(&iobuffer_mtxp);
 
 	if (need_wakeup) {
 		wakeup(&need_iobuffer);
@@ -4522,13 +4506,13 @@ free_io_buf(buf_t bp)
 void
 buf_list_lock(void)
 {
-	lck_mtx_lock_spin(buf_mtxp);
+	lck_mtx_lock_spin(&buf_mtx);
 }
 
 void
 buf_list_unlock(void)
 {
-	lck_mtx_unlock(buf_mtxp);
+	lck_mtx_unlock(&buf_mtx);
 }
 
 /*
@@ -4559,10 +4543,10 @@ bcleanbuf_thread(void)
 	int loopcnt = 0;
 
 	for (;;) {
-		lck_mtx_lock_spin(buf_mtxp);
+		lck_mtx_lock_spin(&buf_mtx);
 
 		while ((bp = TAILQ_FIRST(&bufqueues[BQ_LAUNDRY])) == NULL) {
-			(void)msleep0(&bufqueues[BQ_LAUNDRY], buf_mtxp, PRIBIO | PDROP, "blaundry", 0, (bcleanbufcontinuation)bcleanbuf_thread);
+			(void)msleep0(&bufqueues[BQ_LAUNDRY], &buf_mtx, PRIBIO | PDROP, "blaundry", 0, (bcleanbufcontinuation)bcleanbuf_thread);
 		}
 
 		/*
@@ -4581,7 +4565,7 @@ bcleanbuf_thread(void)
 		bp->b_tag   = 10;
 #endif
 
-		lck_mtx_unlock(buf_mtxp);
+		lck_mtx_unlock(&buf_mtx);
 		/*
 		 * do the IO
 		 */
@@ -4591,7 +4575,7 @@ bcleanbuf_thread(void)
 			bp->b_whichq = BQ_LAUNDRY;
 			bp->b_timestamp = buf_timestamp();
 
-			lck_mtx_lock_spin(buf_mtxp);
+			lck_mtx_lock_spin(&buf_mtx);
 
 			binstailfree(bp, &bufqueues[BQ_LAUNDRY], BQ_LAUNDRY);
 			blaundrycnt++;
@@ -4604,7 +4588,7 @@ bcleanbuf_thread(void)
 			bp->b_tag   = 11;
 #endif
 
-			lck_mtx_unlock(buf_mtxp);
+			lck_mtx_unlock(&buf_mtx);
 
 			if (loopcnt > MAXLAUNDRY) {
 				/*
@@ -4686,24 +4670,24 @@ dump_buffer:
 int
 fs_buffer_cache_gc_register(void (* callout)(int, void *), void *context)
 {
-	lck_mtx_lock(buf_gc_callout);
+	lck_mtx_lock(&buf_gc_callout);
 	for (int i = 0; i < FS_BUFFER_CACHE_GC_CALLOUTS_MAX_SIZE; i++) {
 		if (fs_callouts[i].callout == NULL) {
 			fs_callouts[i].callout = callout;
 			fs_callouts[i].context = context;
-			lck_mtx_unlock(buf_gc_callout);
+			lck_mtx_unlock(&buf_gc_callout);
 			return 0;
 		}
 	}
 
-	lck_mtx_unlock(buf_gc_callout);
+	lck_mtx_unlock(&buf_gc_callout);
 	return ENOMEM;
 }
 
 int
 fs_buffer_cache_gc_unregister(void (* callout)(int, void *), void *context)
 {
-	lck_mtx_lock(buf_gc_callout);
+	lck_mtx_lock(&buf_gc_callout);
 	for (int i = 0; i < FS_BUFFER_CACHE_GC_CALLOUTS_MAX_SIZE; i++) {
 		if (fs_callouts[i].callout == callout &&
 		    fs_callouts[i].context == context) {
@@ -4711,20 +4695,20 @@ fs_buffer_cache_gc_unregister(void (* callout)(int, void *), void *context)
 			fs_callouts[i].context = NULL;
 		}
 	}
-	lck_mtx_unlock(buf_gc_callout);
+	lck_mtx_unlock(&buf_gc_callout);
 	return 0;
 }
 
 static void
 fs_buffer_cache_gc_dispatch_callouts(int all)
 {
-	lck_mtx_lock(buf_gc_callout);
+	lck_mtx_lock(&buf_gc_callout);
 	for (int i = 0; i < FS_BUFFER_CACHE_GC_CALLOUTS_MAX_SIZE; i++) {
 		if (fs_callouts[i].callout != NULL) {
 			fs_callouts[i].callout(all, fs_callouts[i].context);
 		}
 	}
-	lck_mtx_unlock(buf_gc_callout);
+	lck_mtx_unlock(&buf_gc_callout);
 }
 
 static boolean_t
@@ -4747,10 +4731,10 @@ buffer_cache_gc(int all)
 	 * for deep sleep), we only evict up to BUF_MAX_GC_BATCH_SIZE buffers
 	 * that have not been accessed in the last BUF_STALE_THRESHOLD seconds.
 	 * BUF_MAX_GC_BATCH_SIZE controls both the hold time of the global lock
-	 * "buf_mtxp" and the length of time we spend compute bound in the GC
+	 * "buf_mtx" and the length of time we spend compute bound in the GC
 	 * thread which calls this function
 	 */
-	lck_mtx_lock(buf_mtxp);
+	lck_mtx_lock(&buf_mtx);
 
 	do {
 		found = 0;
@@ -4803,7 +4787,7 @@ buffer_cache_gc(int all)
 		}
 
 		/* Drop lock for batch processing */
-		lck_mtx_unlock(buf_mtxp);
+		lck_mtx_unlock(&buf_mtx);
 
 		/* Wakeup and yield for laundry if need be */
 		if (need_wakeup) {
@@ -4832,7 +4816,7 @@ buffer_cache_gc(int all)
 			bp->b_whichq = BQ_EMPTY;
 			BLISTNONE(bp);
 		}
-		lck_mtx_lock(buf_mtxp);
+		lck_mtx_lock(&buf_mtx);
 
 		/* Back under lock, move them all to invalid hash and clear busy */
 		TAILQ_FOREACH(bp, &privq, b_freelist) {
@@ -4853,7 +4837,7 @@ buffer_cache_gc(int all)
 		TAILQ_CONCAT(&bufqueues[BQ_EMPTY], &privq, b_freelist);
 	} while (all && (found == BUF_MAX_GC_BATCH_SIZE));
 
-	lck_mtx_unlock(buf_mtxp);
+	lck_mtx_unlock(&buf_mtx);
 
 	fs_buffer_cache_gc_dispatch_callouts(all);
 
@@ -4898,7 +4882,7 @@ bflushq(int whichq, mount_t mp)
 	}
 
 restart:
-	lck_mtx_lock(buf_mtxp);
+	lck_mtx_lock(&buf_mtx);
 
 	bp = TAILQ_FIRST(&bufqueues[whichq]);
 
@@ -4923,7 +4907,7 @@ restart:
 			total_writes++;
 
 			if (buf_count >= NFLUSH) {
-				lck_mtx_unlock(buf_mtxp);
+				lck_mtx_unlock(&buf_mtx);
 
 				qsort(flush_table, buf_count, sizeof(struct buf *), bp_cmp);
 
@@ -4934,7 +4918,7 @@ restart:
 			}
 		}
 	}
-	lck_mtx_unlock(buf_mtxp);
+	lck_mtx_unlock(&buf_mtx);
 
 	if (buf_count > 0) {
 		qsort(flush_table, buf_count, sizeof(struct buf *), bp_cmp);

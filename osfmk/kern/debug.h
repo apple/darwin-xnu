@@ -286,6 +286,7 @@ __options_decl(microstackshot_flags_t, uint32_t, {
 #define KF_INTERRUPT_MASKED_DEBUG_OVRD (0x40)
 #define KF_TRAPTRACE_OVRD (0x80)
 #define KF_IOTRACE_OVRD (0x100)
+#define KF_INTERRUPT_MASKED_DEBUG_STACKSHOT_OVRD (0x200)
 
 boolean_t kern_feature_override(uint32_t fmask);
 

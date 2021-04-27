@@ -253,13 +253,13 @@ uint64_t memorystatus_jetsam_snapshot_timeout = 0;
 #if DEVELOPMENT || DEBUG
 /*
  * On development and debug kernels, we allow one pid to take ownership
- * of the memorystatus snapshot (via memorystatus_control).
- * If there's an owner, then only they may consume the snapshot.
- * This is used when testing the snapshot interface to avoid racing with other
- * processes on the system that consume snapshots.
+ * of some memorystatus data structures for testing purposes (via memorystatus_control).
+ * If there's an owner, then only they may consume the jetsam snapshot & set freezer probabilities.
+ * This is used when testing these interface to avoid racing with other
+ * processes on the system that typically use them (namely OSAnalytics & dasd).
  */
-static pid_t memorystatus_snapshot_owner = 0;
-SYSCTL_INT(_kern, OID_AUTO, memorystatus_snapshot_owner, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, &memorystatus_snapshot_owner, 0, "");
+static pid_t memorystatus_testing_pid = 0;
+SYSCTL_INT(_kern, OID_AUTO, memorystatus_testing_pid, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, &memorystatus_testing_pid, 0, "");
 #endif /* DEVELOPMENT || DEBUG */
 static void memorystatus_init_jetsam_snapshot_header(memorystatus_jetsam_snapshot_t *snapshot);
 
@@ -276,9 +276,10 @@ SYSCTL_INT(_kern, OID_AUTO, entitled_max_task_pmem, CTLTYPE_INT | CTLFLAG_RW | C
 #endif /* DEVELOPMENT || DEBUG */
 #endif /* __arm64__ */
 
-static lck_grp_attr_t *memorystatus_jetsam_fg_band_lock_grp_attr;
-static lck_grp_t *memorystatus_jetsam_fg_band_lock_grp;
-lck_mtx_t memorystatus_jetsam_fg_band_lock;
+static LCK_GRP_DECLARE(memorystatus_jetsam_fg_band_lock_grp,
+    "memorystatus_jetsam_fg_band");
+LCK_MTX_DECLARE(memorystatus_jetsam_fg_band_lock,
+    &memorystatus_jetsam_fg_band_lock_grp);
 
 /* Idle guard handling */
 
@@ -598,7 +599,7 @@ memorystatus_raise_memlimit(proc_t p, int new_memlimit_active, int new_memlimit_
 	int memlimit_mb_active = 0, memlimit_mb_inactive = 0;
 	boolean_t memlimit_active_is_fatal = FALSE, memlimit_inactive_is_fatal = FALSE, use_active_limit = FALSE;
 
-	LCK_MTX_ASSERT(proc_list_mlock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&proc_list_mlock, LCK_MTX_ASSERT_OWNED);
 
 	if (p->p_memstat_memlimit_active > 0) {
 		memlimit_mb_active = p->p_memstat_memlimit_active;
@@ -918,9 +919,8 @@ int32_t max_kill_priority = JETSAM_PRIORITY_IDLE;
 
 #if DEVELOPMENT || DEBUG
 
-lck_grp_attr_t *disconnect_page_mappings_lck_grp_attr;
-lck_grp_t *disconnect_page_mappings_lck_grp;
-static lck_mtx_t disconnect_page_mappings_mutex;
+static LCK_GRP_DECLARE(disconnect_page_mappings_lck_grp, "disconnect_page_mappings");
+static LCK_MTX_DECLARE(disconnect_page_mappings_mutex, &disconnect_page_mappings_lck_grp);
 
 extern bool kill_on_no_paging_space;
 #endif /* DEVELOPMENT || DEBUG */
@@ -1174,7 +1174,7 @@ SYSCTL_PROC(_kern, OID_AUTO, memorystatus_disconnect_page_mappings, CTLTYPE_INT 
 static void
 memorystatus_sort_bucket_locked(unsigned int bucket_index, int sort_order)
 {
-	LCK_MTX_ASSERT(proc_list_mlock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&proc_list_mlock, LCK_MTX_ASSERT_OWNED);
 	if (memstat_bucket[bucket_index].count == 0) {
 		return;
 	}
@@ -1406,20 +1406,10 @@ memorystatus_init(void)
 #endif
 
 #if DEVELOPMENT || DEBUG
-	disconnect_page_mappings_lck_grp_attr = lck_grp_attr_alloc_init();
-	disconnect_page_mappings_lck_grp = lck_grp_alloc_init("disconnect_page_mappings", disconnect_page_mappings_lck_grp_attr);
-
-	lck_mtx_init(&disconnect_page_mappings_mutex, disconnect_page_mappings_lck_grp, NULL);
-
 	if (kill_on_no_paging_space) {
 		max_kill_priority = JETSAM_PRIORITY_MAX;
 	}
 #endif
-
-	memorystatus_jetsam_fg_band_lock_grp_attr = lck_grp_attr_alloc_init();
-	memorystatus_jetsam_fg_band_lock_grp =
-	    lck_grp_alloc_init("memorystatus_jetsam_fg_band", memorystatus_jetsam_fg_band_lock_grp_attr);
-	lck_mtx_init(&memorystatus_jetsam_fg_band_lock, memorystatus_jetsam_fg_band_lock_grp, NULL);
 
 	/* Init buckets */
 	for (i = 0; i < MEMSTAT_BUCKET_COUNT; i++) {
@@ -1625,6 +1615,8 @@ memorystatus_init(void)
 /* Centralised for the purposes of allowing panic-on-jetsam */
 extern void
 vm_run_compactor(void);
+extern void
+vm_wake_compactor_swapper(void);
 
 /*
  * The jetsam no frills kill call
@@ -1694,7 +1686,17 @@ memorystatus_do_kill(proc_t p, uint32_t cause, os_reason_t jetsam_reason, uint64
 	KERNEL_DEBUG_CONSTANT((BSDDBG_CODE(DBG_BSD_MEMSTAT, BSD_MEMSTAT_COMPACTOR_RUN)) | DBG_FUNC_START,
 	    victim_pid, cause, vm_page_free_count, *footprint_of_killed_proc, 0);
 
-	vm_run_compactor();
+	if (jetsam_reason->osr_code == JETSAM_REASON_VNODE) {
+		/*
+		 * vnode jetsams are syncronous and not caused by memory pressure.
+		 * Running the compactor on this thread adds significant latency to the filesystem operation
+		 * that triggered this jetsam.
+		 * Kick of compactor thread asyncronously instead.
+		 */
+		vm_wake_compactor_swapper();
+	} else {
+		vm_run_compactor();
+	}
 
 	KERNEL_DEBUG_CONSTANT((BSDDBG_CODE(DBG_BSD_MEMSTAT, BSD_MEMSTAT_COMPACTOR_RUN)) | DBG_FUNC_END,
 	    victim_pid, cause, vm_page_free_count, 0, 0);
@@ -2713,8 +2715,8 @@ memorystatus_remove(proc_t p)
 #endif
 
 #if DEVELOPMENT || DEBUG
-	if (p->p_pid == memorystatus_snapshot_owner) {
-		memorystatus_snapshot_owner = 0;
+	if (p->p_pid == memorystatus_testing_pid) {
+		memorystatus_testing_pid = 0;
 	}
 #endif /* DEVELOPMENT || DEBUG */
 
@@ -3434,6 +3436,10 @@ memorystatus_on_resume(proc_t p)
 			p->p_memstat_state |= P_MEMSTAT_REFREEZE_ELIGIBLE;
 			memorystatus_refreeze_eligible_count++;
 		}
+		if (p->p_memstat_thaw_count == 0 || p->p_memstat_last_thaw_interval < memorystatus_freeze_current_interval) {
+			os_atomic_inc(&(memorystatus_freezer_stats.mfs_processes_thawed), relaxed);
+		}
+		p->p_memstat_last_thaw_interval = memorystatus_freeze_current_interval;
 		p->p_memstat_thaw_count++;
 
 		memorystatus_thaw_count++;
@@ -4812,7 +4818,7 @@ memorystatus_get_task_phys_footprint_page_counts(task_t task,
 static bool
 memorystatus_jetsam_snapshot_copy_entry_locked(memorystatus_jetsam_snapshot_t *dst_snapshot, unsigned int dst_snapshot_size, const memorystatus_jetsam_snapshot_entry_t *src_entry)
 {
-	LCK_MTX_ASSERT(proc_list_mlock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&proc_list_mlock, LCK_MTX_ASSERT_OWNED);
 	assert(dst_snapshot);
 
 	if (dst_snapshot->entry_count == dst_snapshot_size) {
@@ -4831,7 +4837,7 @@ memorystatus_jetsam_snapshot_copy_entry_locked(memorystatus_jetsam_snapshot_t *d
 static bool
 memorystatus_init_jetsam_snapshot_entry_with_kill_locked(memorystatus_jetsam_snapshot_t *snapshot, proc_t p, uint32_t kill_cause, uint64_t killtime, memorystatus_jetsam_snapshot_entry_t **entry)
 {
-	LCK_MTX_ASSERT(proc_list_mlock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&proc_list_mlock, LCK_MTX_ASSERT_OWNED);
 	memorystatus_jetsam_snapshot_entry_t *snapshot_list = snapshot->entries;
 	size_t i = snapshot->entry_count;
 
@@ -4863,7 +4869,7 @@ memorystatus_update_jetsam_snapshot_entry_locked(proc_t p, uint32_t kill_cause, 
 	bool copied_to_freezer_snapshot = false;
 #endif /* CONFIG_FREEZE */
 
-	LCK_MTX_ASSERT(proc_list_mlock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&proc_list_mlock, LCK_MTX_ASSERT_OWNED);
 
 	if (memorystatus_jetsam_snapshot_count == 0) {
 		/*
@@ -5264,7 +5270,7 @@ memorystatus_init_jetsam_snapshot_locked(memorystatus_jetsam_snapshot_t *od_snap
 	memorystatus_jetsam_snapshot_entry_t *snapshot_list = NULL;
 	unsigned int snapshot_max = 0;
 
-	LCK_MTX_ASSERT(proc_list_mlock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&proc_list_mlock, LCK_MTX_ASSERT_OWNED);
 
 	if (od_snapshot) {
 		/*
@@ -5352,7 +5358,7 @@ memorystatus_cmd_set_panic_bits(user_addr_t buffer, size_t buffer_size)
 static int
 memorystatus_verify_sort_order(unsigned int bucket_index, pid_t *expected_order, size_t num_pids)
 {
-	LCK_MTX_ASSERT(proc_list_mlock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&proc_list_mlock, LCK_MTX_ASSERT_OWNED);
 
 	int error = 0;
 	proc_t p = NULL;
@@ -6995,7 +7001,7 @@ memorystatus_cmd_get_jetsam_snapshot(int32_t flags, user_addr_t buffer, size_t b
 				 */
 				proc_list_lock();
 #if DEVELOPMENT || DEBUG
-				if (memorystatus_snapshot_owner != 0 && memorystatus_snapshot_owner != current_proc()->p_pid) {
+				if (memorystatus_testing_pid != 0 && memorystatus_testing_pid != current_proc()->p_pid) {
 					/* Snapshot is currently owned by someone else. Don't consume it. */
 					proc_list_unlock();
 					goto out;
@@ -7037,27 +7043,27 @@ out:
 
 #if DEVELOPMENT || DEBUG
 static int
-memorystatus_cmd_set_jetsam_snapshot_ownership(int32_t flags)
+memorystatus_cmd_set_testing_pid(int32_t flags)
 {
 	int error = EINVAL;
 	proc_t caller = current_proc();
 	assert(caller != kernproc);
 	proc_list_lock();
-	if (flags & MEMORYSTATUS_FLAGS_SNAPSHOT_TAKE_OWNERSHIP) {
-		if (memorystatus_snapshot_owner == 0) {
-			memorystatus_snapshot_owner = caller->p_pid;
+	if (flags & MEMORYSTATUS_FLAGS_SET_TESTING_PID) {
+		if (memorystatus_testing_pid == 0) {
+			memorystatus_testing_pid = caller->p_pid;
 			error = 0;
-		} else if (memorystatus_snapshot_owner == caller->p_pid) {
+		} else if (memorystatus_testing_pid == caller->p_pid) {
 			error = 0;
 		} else {
 			/* We don't allow ownership to be taken from another proc. */
 			error = EBUSY;
 		}
-	} else if (flags & MEMORYSTATUS_FLAGS_SNAPSHOT_DROP_OWNERSHIP) {
-		if (memorystatus_snapshot_owner == caller->p_pid) {
-			memorystatus_snapshot_owner = 0;
+	} else if (flags & MEMORYSTATUS_FLAGS_UNSET_TESTING_PID) {
+		if (memorystatus_testing_pid == caller->p_pid) {
+			memorystatus_testing_pid = 0;
 			error = 0;
-		} else if (memorystatus_snapshot_owner != 0) {
+		} else if (memorystatus_testing_pid != 0) {
 			/* We don't allow ownership to be taken from another proc. */
 			error = EPERM;
 		}
@@ -7281,6 +7287,13 @@ memorystatus_cmd_grp_set_probabilities(user_addr_t buffer, size_t buffer_size)
 	size_t entry_count = 0, i = 0;
 	memorystatus_internal_probabilities_t *tmp_table_new = NULL, *tmp_table_old = NULL;
 	size_t tmp_table_new_size = 0, tmp_table_old_size = 0;
+#if DEVELOPMENT || DEBUG
+	if (memorystatus_testing_pid != 0 && memorystatus_testing_pid != current_proc()->p_pid) {
+		/* probabilites are currently owned by someone else. Don't change them. */
+		error = EPERM;
+		goto out;
+	}
+#endif /* (DEVELOPMENT || DEBUG)*/
 
 	/* Verify inputs */
 	if ((buffer == USER_ADDR_NULL) || (buffer_size == 0)) {
@@ -7679,7 +7692,7 @@ memorystatus_set_memlimit_properties_internal(proc_t p, memorystatus_memlimit_pr
 {
 	int error = 0;
 
-	LCK_MTX_ASSERT(proc_list_mlock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&proc_list_mlock, LCK_MTX_ASSERT_OWNED);
 
 	/*
 	 * Store the active limit variants in the proc.
@@ -7938,8 +7951,8 @@ memorystatus_control(struct proc *p __unused, struct memorystatus_control_args *
 		error = memorystatus_cmd_get_jetsam_snapshot((int32_t)args->flags, args->buffer, args->buffersize, ret);
 		break;
 #if DEVELOPMENT || DEBUG
-	case MEMORYSTATUS_CMD_SET_JETSAM_SNAPSHOT_OWNERSHIP:
-		error = memorystatus_cmd_set_jetsam_snapshot_ownership((int32_t) args->flags);
+	case MEMORYSTATUS_CMD_SET_TESTING_PID:
+		error = memorystatus_cmd_set_testing_pid((int32_t) args->flags);
 		break;
 #endif
 	case MEMORYSTATUS_CMD_GET_PRESSURE_STATUS:

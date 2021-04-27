@@ -153,8 +153,8 @@ __enum_decl(startup_rank_t, uint32_t, {
 #elif defined(__x86_64__)
 /* Intel doesn't have a __BOOTDATA but doesn't protect __KLD */
 #define STARTUP_CODE_SEGSECT "__TEXT,__text"
-#define STARTUP_DATA_SEGSECT "__KLD,__init"
-#define STARTUP_HOOK_SEGMENT "__KLD"
+#define STARTUP_DATA_SEGSECT "__KLDDATA,__init"
+#define STARTUP_HOOK_SEGMENT "__KLDDATA"
 #define STARTUP_HOOK_SECTION "__init_entry_set"
 #else
 /* arm protects __KLD early, so use __BOOTDATA for data */
@@ -175,7 +175,7 @@ __enum_decl(startup_rank_t, uint32_t, {
  */
 #define __startup_func \
 	__PLACE_IN_SECTION(STARTUP_CODE_SEGSECT) \
-	__attribute__((noinline, visibility("hidden")))
+	__attribute__((cold, visibility("hidden")))
 
 /*!
  * @macro __startup_data
@@ -260,12 +260,20 @@ __enum_decl(startup_rank_t, uint32_t, {
 	static __startup_data struct startup_tunable_spec \
 	__startup_TUNABLES_spec_ ## var = { \
 	    .name = __startup_TUNABLES_name_ ## var, \
-	    .var_addr = &var, \
+	    .var_addr = (void *)&var, \
 	    .var_len = sizeof(type_t), \
 	    .var_is_bool = __builtin_types_compatible_p(bool, type_t), \
 	}; \
 	__STARTUP_ARG(var, __LINE__, TUNABLES, STARTUP_RANK_FIRST, \
 	    kernel_startup_tunable_init, &__startup_TUNABLES_spec_ ## var)
+
+#ifdef __cplusplus
+#define __STARTUP_FUNC_CAST(func, a) \
+	    (void(*)(const void *))func
+#else
+#define __STARTUP_FUNC_CAST(func, a) \
+	    (typeof(func(a))(*)(const void *))func
+#endif
 
 
 #define __STARTUP1(name, line, subsystem, rank, func, a, b) \
@@ -273,7 +281,7 @@ __enum_decl(startup_rank_t, uint32_t, {
 	static const struct startup_entry \
 	__startup_ ## subsystem ## _entry_ ## name ## _ ## line = { \
 	    STARTUP_SUB_ ## subsystem, \
-	    rank, (typeof(func(a))(*)(const void *))func, b, \
+	    rank, __STARTUP_FUNC_CAST(func, a), b, \
 	}
 
 #define __STARTUP(name, line, subsystem, rank, func) \
@@ -325,7 +333,6 @@ extern void device_service_create(void);
 
 /* BSD subsystem initialization */
 extern void bsd_init(void);
-extern void bsd_early_init(void);
 
 #endif  /* MACH_BSD */
 

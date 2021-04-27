@@ -40,7 +40,6 @@ extern int
 kern_asl_msg(int level, const char *facility, size_t num_pairs, ...);
 
 extern int escape_str(char *str, size_t len, size_t buflen);
-extern void fpxlog_init(void);
 extern void fpxlog(int, uint32_t, uint32_t, uint32_t);
 
 #endif /* !_SYS_KASL_H_ */

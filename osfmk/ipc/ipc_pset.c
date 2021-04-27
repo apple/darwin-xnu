@@ -176,12 +176,10 @@ ipc_pset_alloc_special(
 	assert(space->is_table == IE_NULL);
 	assert(!is_active(space));
 
-	pset = ips_object_to_pset(io_alloc(IOT_PORT_SET));
+	pset = ips_object_to_pset(io_alloc(IOT_PORT_SET, Z_WAITOK | Z_ZERO));
 	if (pset == IPS_NULL) {
 		return IPS_NULL;
 	}
-
-	bzero((char *)pset, sizeof(*pset));
 
 	io_lock_init(ips_to_object(pset));
 	pset->ips_references = 1;
@@ -991,7 +989,7 @@ filt_machportevent(struct knote *kn, long hint __assert_only)
 	int result = 0;
 
 	/* mqueue locked by caller */
-	assert(imq_held(mqueue));
+	imq_held(mqueue);
 	assert(hint != NOTE_REVOKE);
 	if (imq_is_valid(mqueue)) {
 		assert(!imq_is_set(mqueue));

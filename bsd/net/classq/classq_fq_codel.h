@@ -57,9 +57,10 @@ typedef struct flowq {
 #define FQF_NEW_FLOW    0x04    /* Currently on new flows queue */
 #define FQF_OLD_FLOW    0x08    /* Currently on old flows queue */
 #define FQF_FLOWCTL_ON  0x10    /* Currently flow controlled */
+#define FQF_DESTROYED   0x80    /* flowq destroyed */
 	uint8_t        fq_flags;       /* flags */
 	uint8_t        fq_sc_index; /* service_class index */
-	int16_t         fq_deficit;     /* Deficit for scheduling */
+	int32_t        fq_deficit;     /* Deficit for scheduling */
 	uint32_t       fq_bytes;       /* Number of bytes in the queue */
 	uint64_t       fq_min_qdelay; /* min queue delay for Codel */
 	uint64_t       fq_updatetime; /* next update interval */
@@ -68,6 +69,11 @@ typedef struct flowq {
 	STAILQ_ENTRY(flowq) fq_actlink; /* for new/old flow queues */
 	uint32_t       fq_flowhash;    /* Flow hash */
 	classq_pkt_type_t       fq_ptype; /* Packet type */
+	/* temporary packet queue for dequeued packets */
+	classq_pkt_t   fq_dq_head;
+	classq_pkt_t   fq_dq_tail;
+	STAILQ_ENTRY(flowq) fq_dqlink; /* entry on dequeue flow list */
+	bool           fq_in_dqlist;
 } fq_t;
 
 #define fq_mbufq        __fq_pktq_u.__mbufq

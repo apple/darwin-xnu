@@ -82,7 +82,7 @@ def print_alloc_free_entry(addr, orig_ptr):
             leftrz = 16
         else:
             alloc_type = "zone"
-            leftrz = unsigned(zone.kasan_redzone)
+            leftrz = unsigned(zone.z_kasan_redzone)
     else:
         alloc_type = "kalloc"
         if asz - usz >= 2*pgsz:

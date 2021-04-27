@@ -6,5 +6,13 @@
         <true/>
         <key>task_for_pid-allow</key>
         <true/>
+
+        <key>com.apple.system-task-ports.control</key>
+        <!-- Supercedes the two above in AzulE+, cross-platfrom -->
+	<true/>
+
+        <key>com.apple.security.get-movable-control-port</key>
+        <!-- Allows for task_get_special_port(..TASK_KERNEL_PORT..) -->
+	<true/>
 </dict>
 </plist>

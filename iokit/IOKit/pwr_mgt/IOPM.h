@@ -672,6 +672,7 @@ enum {
 	kIOPSFamilyCodeExternal4     = iokit_family_err(sub_iokit_pmu, 4),
 	kIOPSFamilyCodeExternal5     = iokit_family_err(sub_iokit_pmu, 5),
 	kIOPSFamilyCodeExternal6     = iokit_family_err(sub_iokit_pmu, 6),
+	kIOPSFamilyCodeExternal7     = iokit_family_err(sub_iokit_pmu, 7),
 };
 
 // values for kIOPMPSAdapterDetailsErrorFlagsKey

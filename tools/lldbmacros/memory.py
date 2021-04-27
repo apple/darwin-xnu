@@ -31,7 +31,22 @@ def vm_unpack_pointer(packed, params, type_str = 'void *'):
         addr >>= 64 - bits - shift
     return kern.GetValueFromAddress(addr, type_str)
 
-def IterateZPerCPU(root, element_type):
+def GetZPerCPU(root, cpu, element_type = None):
+    """ Iterates over a percpu variable
+        params:
+            root         - value : Value object for per-cpu variable
+            cpu          - int   : the CPU number
+            element_type - str   : Type of element
+        returns:
+            one slot
+    """
+    pagesize = kern.globals.page_size
+    mangle   = 1 << (8 * kern.ptrsize - 1)
+    if element_type is None:
+        element_type = root.GetSBValue().GetType()
+    return kern.GetValueFromAddress((int(root) | mangle) + cpu * pagesize, element_type)
+
+def IterateZPerCPU(root, element_type = None):
     """ Iterates over a percpu variable
         params:
             root         - value : Value object for per-cpu variable
@@ -39,10 +54,8 @@ def IterateZPerCPU(root, element_type):
         returns:
             one slot
     """
-    pagesize = kern.globals.page_size
-    mangle   = 1 << (8 * kern.ptrsize - 1)
     for i in range(0, kern.globals.zpercpu_early_count):
-        yield kern.GetValueFromAddress((int(root) | mangle) + i * pagesize, element_type)
+        yield GetZPerCPU(root, i, element_type)
 
 @lldb_command('showzpcpu', "S")
 def ShowZPerCPU(cmd_args=None, cmd_options={}):
@@ -226,25 +239,24 @@ class ZoneMeta(object):
     Helper class that helpers walking metadata
     """
 
-    @classmethod
-    def _looksForeign(cls, addr):
-        if addr & (kern.globals.page_size - 1):
-            return False
-        try:
-            meta = kern.GetValueFromAddress(addr, "struct zone_page_metadata *")
-            return meta.zm_foreign_cookie[0] == 0x123456789abcdef
-        except:
-            return False
-
     def __init__(self, addr, isPageIndex = False):
         global kern
         pagesize  = kern.globals.page_size
         zone_info = kern.GetGlobalVariable('zone_info')
 
-        self.zone_map_min   = unsigned(zone_info.zi_map_range.min_address)
-        self.zone_map_max   = unsigned(zone_info.zi_map_range.max_address)
-        self.zone_meta_min  = unsigned(zone_info.zi_meta_range.min_address)
-        self.zone_meta_max  = unsigned(zone_info.zi_meta_range.max_address)
+        def load_range(var):
+            return (unsigned(var.min_address), unsigned(var.max_address))
+
+        def in_range(x, r):
+            return x >= r[0] and x <= r[1]
+
+        FOREIGN = GetEnumValue('zone_addr_kind_t', 'ZONE_ADDR_FOREIGN')
+        NATIVE  = GetEnumValue('zone_addr_kind_t', 'ZONE_ADDR_NATIVE')
+
+        self.meta_range = load_range(zone_info.zi_meta_range)
+        self.native_range = load_range(zone_info.zi_map_range[NATIVE])
+        self.foreign_range = load_range(zone_info.zi_map_range[FOREIGN])
+        self.addr_base = min(self.foreign_range[0], self.native_range[0])
 
         addr = unsigned(addr)
         if isPageIndex:
@@ -255,86 +267,146 @@ class ZoneMeta(object):
 
         self.address = addr
 
-        if self.zone_meta_min <= addr and addr < self.zone_meta_max:
+        if in_range(addr, self.meta_range):
             self.kind = 'Metadata'
-            addr -= (addr - self.zone_meta_min) % sizeof('struct zone_page_metadata')
+            addr -= addr % sizeof('struct zone_page_metadata')
             self.meta_addr = addr
             self.meta = kern.GetValueFromAddress(addr, "struct zone_page_metadata *")
 
-            self.page_addr = self.zone_map_min + ((addr - self.zone_meta_min) / sizeof('struct zone_page_metadata') * pagesize)
-            self.first_offset = 0
-        elif self.zone_map_min <= addr and addr < self.zone_map_max:
+            self.page_addr = self.addr_base + ((addr - self.meta_range[0]) / sizeof('struct zone_page_metadata') * pagesize)
+        elif in_range(addr, self.native_range) or in_range(addr, self.foreign_range):
             addr &= ~(pagesize - 1)
-            page_idx = (addr - self.zone_map_min) / pagesize
+            page_idx = (addr - self.addr_base) / pagesize
 
             self.kind = 'Element'
             self.page_addr = addr
-            self.meta_addr = self.zone_meta_min + page_idx * sizeof('struct zone_page_metadata')
+            self.meta_addr = self.meta_range[0] + page_idx * sizeof('struct zone_page_metadata')
             self.meta = kern.GetValueFromAddress(self.meta_addr, "struct zone_page_metadata *")
-            self.first_offset = 0
-        elif ZoneMeta._looksForeign(addr):
-            self.kind = 'Element (F)'
-            addr &= ~(pagesize - 1)
-            self.page_addr = addr
-            self.meta_addr = addr
-            self.meta = kern.GetValueFromAddress(addr, "struct zone_page_metadata *")
-            self.first_offset = 32 # ZONE_FOREIGN_PAGE_FIRST_OFFSET in zalloc.c
         else:
             self.kind = 'Unknown'
             self.meta = None
             self.page_addr = 0
             self.meta_addr = 0
-            self.first_offset = 0
+
+        if self.meta:
+            self.zone = addressof(kern.globals.zone_array[self.meta.zm_index])
+        else:
+            self.zone = None
 
     def isSecondaryPage(self):
-        return self.meta and self.meta.zm_secondary_page
+        return self.meta and self.meta.zm_chunk_len >= 0xe
 
     def getPageCount(self):
-        return self.meta and self.meta.zm_page_count or 0
+        n = self.meta and self.meta.zm_chunk_len or 0
+        if self.zone and self.zone.z_percpu:
+            n *= kern.globals.zpercpu_early_count
+        return n
+
+    def getAllocAvail(self):
+        if not self.meta: return 0
+        chunk_len = unsigned(self.meta.zm_chunk_len)
+        page_size = unsigned(kern.globals.page_size)
+        return chunk_len * page_size / self.zone.z_elem_size
 
     def getAllocCount(self):
-        return self.meta and self.meta.zm_alloc_count or 0
+        if not self.meta: return 0
+        return self.meta.zm_alloc_size / self.zone.z_elem_size
 
     def getReal(self):
         if self.isSecondaryPage():
-            return ZoneMeta(self.meta - self.meta.zm_page_count)
+            return ZoneMeta(unsigned(self.meta) - sizeof('struct zone_page_metadata') * unsigned(self.meta.zm_page_index))
 
         return self
 
-    def getFreeList(self):
-        if self.meta and self.meta.zm_freelist_offs != unsigned(0xffff):
-            return kern.GetValueFromAddress(self.page_addr + self.meta.zm_freelist_offs, 'vm_offset_t *')
-        return 0
+    def getElementAddress(self, addr):
+        meta  = self.getReal()
+        esize = meta.zone.z_elem_size
+        start = meta.page_addr
 
-    def iterateFreeList(self):
-        cur = self.getFreeList()
-        while cur:
-            yield cur
+        if esize == 0:
+            return None
 
-            cur = dereference(cast(cur, 'vm_offset_t *'))
-            cur = unsigned(cur) ^ unsigned(kern.globals.zp_nopoison_cookie)
-            cur = kern.GetValueFromAddress(cur, 'vm_offset_t *')
+        estart = addr - start
+        return unsigned(start + estart - (estart % esize))
+
+    def getInlineBitmapChunkLength(self):
+        if self.zone.z_percpu:
+            return unsigned(self.zone.z_chunk_pages)
+        return unsigned(self.meta.zm_chunk_len)
+
+    def getBitmapSize(self):
+        if not self.meta or self.zone.z_permanent or not self.meta.zm_chunk_len:
+            return 0
+        if self.meta.zm_inline_bitmap:
+            return -4 * self.getInlineBitmapChunkLength()
+        return 8 << (unsigned(self.meta.zm_bitmap) & 0x7);
+
+    def getBitmap(self):
+        if not self.meta or self.zone.z_permanent or not self.meta.zm_chunk_len:
+            return 0
+        if self.meta.zm_inline_bitmap:
+            return unsigned(addressof(self.meta.zm_bitmap))
+        bbase = unsigned(kern.globals.zone_info.zi_bits_range.min_address)
+        index = unsigned(self.meta.zm_bitmap) & ~0x7
+        return bbase + index;
+
+    def getFreeCountSlow(self):
+        if not self.meta or self.zone.z_permanent or not self.meta.zm_chunk_len:
+            return self.getAllocAvail() - self.getAllocCount()
+
+        n = 0
+        if self.meta.zm_inline_bitmap:
+            for i in xrange(0, self.getInlineBitmapChunkLength()):
+                m = kern.GetValueFromAddress(self.meta_addr + i * 16,
+                    'struct zone_page_metadata *');
+                bits = unsigned(m.zm_bitmap)
+                while bits:
+                    n += 1
+                    bits &= bits - 1
+        else:
+            bitmap = kern.GetValueFromAddress(self.getBitmap(), 'uint64_t *')
+            for i in xrange(0, 1 << (unsigned(self.meta.zm_bitmap) & 0x7)):
+                bits = unsigned(bitmap[i])
+                while bits:
+                    n += 1
+                    bits &= bits - 1
+        return n
+
+    def isElementFree(self, addr):
+        meta = self.meta
+
+        if not meta or self.zone.z_permanent or not meta.zm_chunk_len:
+            return True
+
+        start = self.page_addr
+        esize = self.zone.z_elem_size
+        eidx  = (addr - start) / esize
+
+        if meta.zm_inline_bitmap:
+            i = eidx / 32
+            m = unsigned(meta) + sizeof('struct zone_page_metadata') * i
+            bits = kern.GetValueFromAddress(m, meta).zm_bitmap
+            return (bits & (1 << (eidx % 32))) != 0
+
+        else:
+            bitmap = kern.GetValueFromAddress(self.getBitmap(), 'uint64_t *')
+            bits = unsigned(bitmap[eidx / 64])
+            return (bits & (1 << (eidx % 64))) != 0
 
     def iterateElements(self):
         if self.meta is None:
             return
-        esize = self.getZone().z_elem_size
-        offs  = self.first_offset
-        end   = kern.globals.page_size
-        if not self.meta.zm_percpu:
-            end *= self.meta.zm_page_count
+        esize = self.zone.z_elem_size
+        start = 0
+        end   = unsigned(kern.globals.page_size) * self.meta.zm_chunk_len
+        end  -= end % esize
 
-        while offs + esize <= end:
-            yield kern.GetValueFromAddress(self.page_addr + offs, 'void *')
-            offs += esize
-
-    def getZone(self):
-        if self.meta:
-            return kern.globals.zone_array[self.meta.zm_index]
-        return None
+        for offs in xrange(start, end, esize):
+            yield unsigned(self.page_addr + offs)
 
 @lldb_type_summary(['zone_page_metadata'])
-@header("{:<18s} {:<18s} {:>8s} {:>8s} {:<18s} {:<20s}".format('ZONE_METADATA', 'FREELIST', 'PG_CNT', 'ALLOC_CNT', 'ZONE', 'NAME'))
+@header("{:<20s} {:<10s} {:<10s} {:<24s} {:<20s} {:<20s}".format(
+    'METADATA', 'PG_CNT', 'ALLOC_CNT', 'BITMAP', 'ZONE', 'NAME'))
 def GetZoneMetadataSummary(meta):
     """ Summarize a zone metadata object
         params: meta - obj representing zone metadata in the kernel
@@ -346,66 +418,73 @@ def GetZoneMetadataSummary(meta):
 
     out_str = 'Metadata Description:\n' + GetZoneMetadataSummary.header + '\n'
     if meta.isSecondaryPage():
-        out_str += "{:#018x} {:#018x} {:8d} {:8d} {:#018x} {:s}\n".format(
-                meta.meta_addr, 0, 0, 0, 0, '(fake multipage meta)')
+        out_str += "{:<#20x} {:<10d} {:<10d} {:<#18x} @{:<4d} {:<#20x} {:s}\n".format(
+                meta.meta_addr, 0, 0, 0, 0, 0, '(fake multipage meta)')
         meta = meta.getReal()
-    zinfo = meta.getZone()
-    out_str += "{:#018x} {:#018x} {:8d} {:8d} {:#018x} {:s}".format(
-            meta.meta_addr, meta.getFreeList(), meta.getPageCount(), meta.getAllocCount(),
-            addressof(zinfo), ZoneName(zinfo))
+    out_str += "{:<#20x} {:<10d} {:<10d} {:<#18x} @{:<4d} {:<#20x} {:s}".format(
+            meta.meta_addr, meta.getPageCount(), meta.getAllocCount(),
+            meta.getBitmap(), meta.getBitmapSize(), meta.zone, ZoneName(meta.zone))
     return out_str
 
-@header("{:<18s} {:>10s}  {:>18s}  {:>18s} {:<10s}".format(
-    'ADDRESS', 'TYPE', 'METADATA', 'PAGE_ADDR', 'OFFSET'))
+@header("{:<20s} {:<10s} {:<10s} {:<20s} {:<10s}".format(
+    'ADDRESS', 'TYPE', 'STATUS', 'PAGE_ADDR', 'OFFSET'))
 def WhatIs(addr):
     """ Information about kernel pointer
     """
     global kern
 
     meta = ZoneMeta(addr)
+    estart = None
 
     if meta.meta is None:
         out_str = "Address {:#018x} is outside of any zone map ({:#018x}-{:#018x})\n".format(
-                addr, meta.zone_map_min, meta.zone_map_max)
+                addr, meta.native_range[0], meta.native_range[-1] + 1)
     else:
         if meta.kind[0] == 'E': # element
             page_offset_str = "{:d}/{:d}K".format(
                     addr - meta.page_addr, kern.globals.page_size / 1024)
+            estart = meta.getElementAddress(addr)
+            if estart is None:
+                status = "Unattributed"
+            elif meta.isElementFree(estart):
+                status = "Free"
+            else:
+                status = "Allocated"
         else:
             page_offset_str = "-"
+            status = "-"
         out_str = WhatIs.header + '\n'
-        out_str += "{meta.address:#018x} {meta.kind:>10s}  {meta.meta_addr:#018x}  {meta.page_addr:#018x} {:<10s}\n\n".format(
-                page_offset_str, meta=meta)
+        out_str += "{meta.address:<#20x} {meta.kind:<10s} {status:<10s} {meta.page_addr:<#20x} {:<10s}\n\n".format(
+                page_offset_str, meta=meta, status=status)
         out_str += GetZoneMetadataSummary(meta) + '\n\n'
 
     print out_str
 
-    if meta.kind[0] == 'E':
+    if estart is not None:
         print "Hexdump:\n"
 
-        meta  = meta.getReal()
-        esize = meta.getZone().z_elem_size
-        start = meta.page_addr
-
-        estart = addr - (start - meta.first_offset)
-        estart = start + estart - (estart % esize)
+        meta   = meta.getReal()
+        esize  = meta.zone.z_elem_size
+        start  = meta.page_addr
+        marks  = {unsigned(addr): ">"}
 
         try:
             if estart > start:
                 data_array = kern.GetValueFromAddress(estart - 16, "uint8_t *")
                 print_hex_data(data_array[0:16], estart - 16, "")
-                print "------------------------------------------------------------------"
         except:
             pass
 
+        print "------------------------------------------------------------------"
         try:
             data_array = kern.GetValueFromAddress(estart, "uint8_t *")
-            print_hex_data(data_array[0:esize], estart, "")
+            print_hex_data(data_array[0:esize], estart, "", marks)
         except:
+            print "*** unable to read memory ***"
             pass
+        print "------------------------------------------------------------------"
 
         try:
-            print "------------------------------------------------------------------"
             data_array = kern.GetValueFromAddress(estart + esize, "uint8_t *")
             print_hex_data(data_array[0:16], estart + esize, "")
         except:
@@ -423,97 +502,80 @@ def WhatIsHelper(cmd_args=None):
 # Macro: showzcache
 
 @lldb_type_summary(['zone','zone_t'])
-@header("{:<18s}  {:>5s}   {:>10s}  {:>12s} {:>12s} {:>9s} {:>9s} {:>9s} {:>9s} {:>9s}  {:<20s}".format(
-'ZONE', 'ELTS', 'D FULL/EMPTY', 'ALLOCS', 'FREES', 'D_SWAP', 'D_FILL', 'D_DRAIN', 'D_GC', 'D_FAIL', 'NAME'))
-
-def GetZoneCacheSummary(zone, O):
-    """ Summarize a zone's cache with important information.
-        params:
-          zone: value - obj representing a zone in kernel
-        returns:
-          str - summary of the zone's cache contents
-    """
-    format_string = '{:#018x}  {:>5d}    {:>4d} / {:>4d}  {:>12,d} {:>12,d} {:>9,d} {:>9,d} {:>9,d} {:>9,d} {:>9,d}  {:<20s}'
-    mag_capacity = kern.GetGlobalVariable('magazine_element_count')
-    depot_capacity = kern.GetGlobalVariable('depot_element_count')
-
-    cache_elem_count = 0
-    allocs = 0
-    frees  = 0
-
-    if zone.__getattr__('cpu_cache_enabled') :
-        for cache in IterateZPerCPU(zone.zcache.zcc_pcpu, 'struct zcc_per_cpu_cache *'):
-            cache_elem_count += cache.current.zcc_magazine_index
-            cache_elem_count += cache.previous.zcc_magazine_index
-            allocs += cache.zcc_allocs
-            frees  += cache.zcc_frees
-
-        depot = zone.zcache.zcc_depot
-        cache_elem_count += depot.zcc_depot_index * mag_capacity
-        print O.format(format_string, zone, cache_elem_count,
-                depot.zcc_depot_index, depot_capacity - depot.zcc_depot_index,
-                allocs, frees, depot.zcc_swap, depot.zcc_fill, depot.zcc_drain,
-                depot.zcc_gc, depot.zcc_fail, ZoneName(zone))
-
-@lldb_command('showzcache', fancy=True)
-def ZcachePrint(cmd_args=None, cmd_options={}, O=None):
-    """ Routine to print a summary listing of all the kernel zones cache contents
-    All columns are printed in decimal
-    """
-    global kern
-    with O.table(GetZoneCacheSummary.header):
-        for zval in kern.zones:
-            if zval.__getattr__('cpu_cache_enabled') :
-                GetZoneCacheSummary(zval, O)
-
-# EndMacro: showzcache
-
-# Macro: showzcachecpu
-
-@lldb_type_summary(['zone','zone_t'])
-@header("{:18s}  {:32s}  {:<10s}  {:<10s}".format(
-'ZONE', 'NAME', 'CACHE_ELTS', 'CPU_INFO'))
-
-def GetZoneCacheCPUSummary(zone, O):
+@header("{:18s}  {:32s}  {:>6s}  {:>6s}  {:>6s}  {:>6s}  {:>6s}  {:>6s}  {:<s}".format(
+    'ZONE', 'NAME', 'WSS', 'CONT', 'USED', 'FREE', 'CACHED', 'RECIRC', 'CPU_CACHES'))
+def GetZoneCacheCPUSummary(zone, verbose, O):
     """ Summarize a zone's cache broken up per cpu
         params:
           zone: value - obj representing a zone in kernel
         returns:
           str - summary of the zone's per CPU cache contents
     """
-    format_string = '{:#018x}  {:32s}  {:10d}  {cpuinfo:s}'
+    format_string  = '{zone:#018x}  {:32s}  '
+    format_string += '{zone.z_elems_free_wss:6d}  {cont:6.2f}  '
+    format_string += '{used:6d}  {zone.z_elems_free:6d}  '
+    format_string += '{cached:6d}  {recirc:6d}  {cpuinfo:s}'
     cache_elem_count = 0
     cpu_info = ""
-    per_cpu_count = 0
-    mag_capacity = kern.GetGlobalVariable('magazine_element_count')
+    mag_capacity = unsigned(kern.GetGlobalVariable('zc_magazine_size'))
     depot_capacity = kern.GetGlobalVariable('depot_element_count')
 
-    if zone.__getattr__('cpu_cache_enabled') :
-        i = 0
-        for cache in IterateZPerCPU(zone.zcache.zcc_pcpu, 'struct zcc_per_cpu_cache *'):
-            if i is not 0:
-                cpu_info += ", "
-            per_cpu_count = cache.current.zcc_magazine_index
-            per_cpu_count += cache.previous.zcc_magazine_index
-            cache_elem_count += per_cpu_count
-            cpu_info += "CPU {:d}: {:5}".format(i,per_cpu_count)
-            i += 1
-        cache_elem_count += zone.zcache.zcc_depot.zcc_depot_index * mag_capacity
+    if zone.z_pcpu_cache:
+        if verbose:
+            cpu_info = None
+            for cache in IterateZPerCPU(zone.z_pcpu_cache):
+                if cpu_info is None:
+                    cpu_info = "{ "
+                else:
+                    cpu_info += ", "
+                per_cpu_count = unsigned(cache.zc_alloc_cur)
+                per_cpu_count += unsigned(cache.zc_free_cur)
+                per_cpu_count += unsigned(cache.zc_depot_cur) * mag_capacity
+                cache_elem_count += per_cpu_count
+                cpu_info += "{:3d} /{cache.zc_depot_max:3d}".format(per_cpu_count, cache=cache)
+            cpu_info += " }"
+        else:
+            depot_cur = 0
+            depot_max = 0
+            for cache in IterateZPerCPU(zone.z_pcpu_cache):
+                depot_cur += unsigned(cache.zc_alloc_cur)
+                depot_cur += unsigned(cache.zc_free_cur)
+                cache_elem_count += unsigned(cache.zc_depot_cur) * mag_capacity
+                depot_max += unsigned(cache.zc_depot_max)
+            cache_elem_count += depot_cur
 
-    print O.format(format_string, zone, ZoneName(zone), cache_elem_count,cpuinfo = cpu_info)
+            cpus = unsigned(kern.globals.zpercpu_early_count)
+            cpu_info = "total: {:3d} / {:3d}, avg: {:5.1f} / {:5.1f}".format(
+                    depot_cur, depot_max, float(depot_cur) / cpus, float(depot_max) / cpus)
 
-@lldb_command('showzcachecpu', fancy=True)
+
+    print O.format(format_string, ZoneName(zone), cached=cache_elem_count,
+            used=zone.z_elems_avail - cache_elem_count - zone.z_elems_free,
+            cont=float(zone.z_contention_wma) / 256.,
+            recirc=zone.z_recirc_cur * mag_capacity,
+            zone=zone, cpuinfo = cpu_info)
+
+@lldb_command('showzcache', fancy=True)
 def ZcacheCPUPrint(cmd_args=None, cmd_options={}, O=None):
-    """ Routine to print a summary listing of all the kernel zones cache contents
-    All columns are printed in decimal
+    """
+    Routine to print a summary listing of all the kernel zones cache contents
+
+    Usage: showzcache [-V]
+
+    Use -V       to see more detailed output
     """
     global kern
+    verbose = "-V" in cmd_options
     with O.table(GetZoneCacheCPUSummary.header):
-        for zval in kern.zones:
-            if zval.__getattr__('cpu_cache_enabled'):
-                GetZoneCacheCPUSummary(zval, O)
+        if len(cmd_args) == 1:
+            zone = kern.GetValueFromAddress(cmd_args[0], 'struct zone *')
+            GetZoneCacheCPUSummary(zone, verbose, O);
+        else:
+            for zval in kern.zones:
+                if zval.z_self:
+                    GetZoneCacheCPUSummary(zval, verbose, O)
 
-# EndMacro: showzcachecpu
+# EndMacro: showzcache
 
 # Macro: zprint
 
@@ -524,26 +586,41 @@ def GetZone(zone_val, marks):
         returns:
           zone - python dictionary with zone stats
     """
+    pcpu_scale = 1
+    if zone_val.z_percpu:
+        pcpu_scale = unsigned(kern.globals.zpercpu_early_count)
     pagesize = kern.globals.page_size
     zone = {}
-    zone["free_size"] = zone_val.countfree * zone_val.pcpu_elem_size
-    mag_capacity = kern.GetGlobalVariable('magazine_element_count')
-    zone["page_count"] = unsigned(zone_val.page_count)
-    zone["allfree_page_count"] = unsigned(zone_val.allfree_page_count)
+    mag_capacity = unsigned(kern.GetGlobalVariable('zc_magazine_size'))
+    zone["page_count"] = unsigned(zone_val.z_wired_cur) * pcpu_scale
+    zone["allfree_page_count"] = unsigned(zone_val.z_wired_empty)
 
-    zone["size"] = zone_val.page_count * pagesize
-    zone["used_size"] = zone["size"] - zone["free_size"]
-    zone["element_count"] = zone_val.countavail - zone_val.countfree
+    cache_elem_count = 0
+    if zone_val.z_pcpu_cache:
+        for cache in IterateZPerCPU(zone_val.z_pcpu_cache):
+            cache_elem_count += unsigned(cache.zc_alloc_cur)
+            cache_elem_count += unsigned(cache.zc_free_cur)
+            cache_elem_count += unsigned(cache.zc_depot_cur) * mag_capacity
 
-    if zone_val.percpu:
+    zone["size"] = zone["page_count"] * pagesize
+
+    zone["free_size"] = zone_val.z_elems_free * zone_val.z_elem_size * pcpu_scale
+    zone["cached_size"] = cache_elem_count * zone_val.z_elem_size * pcpu_scale
+    zone["used_size"] = zone["size"] - zone["free_size"] - zone["cached_size"]
+
+    zone["element_count"] = zone_val.z_elems_avail - zone_val.z_elems_free - cache_elem_count
+    zone["cache_element_count"] = cache_elem_count
+    zone["free_element_count"] = zone_val.z_elems_free
+
+    if zone_val.z_percpu:
         zone["allocation_size"] = unsigned(pagesize)
-        zone["allocation_ncpu"] = unsigned(zone_val.alloc_pages)
+        zone["allocation_ncpu"] = unsigned(zone_val.z_chunk_pages)
     else:
-        zone["allocation_size"] = unsigned(zone_val.alloc_pages * pagesize)
+        zone["allocation_size"] = unsigned(zone_val.z_chunk_pages * pagesize)
         zone["allocation_ncpu"] = 1
     zone["allocation_count"] = zone["allocation_size"] / zone_val.z_elem_size
     zone["allocation_waste"] = (zone["allocation_size"] % zone_val.z_elem_size) * zone["allocation_ncpu"]
-    
+
     if not zone_val.__getattr__("z_self") :
         zone["destroyed"] = True
     else:
@@ -555,30 +632,24 @@ def GetZone(zone_val, marks):
         else:
             zone[mark[0]] = False
 
-    cache_elem_count = 0
-    if zone_val.__getattr__('cpu_cache_enabled') :
-        for cache in IterateZPerCPU(zone_val.zcache.zcc_pcpu, 'struct zcc_per_cpu_cache *'):
-            cache_elem_count += cache.current.zcc_magazine_index
-            cache_elem_count += cache.previous.zcc_magazine_index
-        cache_elem_count += zone_val.zcache.zcc_depot.zcc_depot_index * mag_capacity
-    zone["cache_element_count"] = cache_elem_count
     zone["name"] = ZoneName(zone_val)
     if zone_val.exhaustible:
         zone["exhaustible"] = True
     else:
         zone["exhaustible"] = False
 
-    zone["sequester_page_count"] = unsigned(zone_val.sequester_page_count)
-    zone["page_count_max"] = unsigned(zone_val.page_count_max)
+    zone["sequester_page_count"] = (unsigned(zone_val.z_va_cur) -
+            unsigned(zone_val.z_wired_cur)) * pcpu_scale
+    zone["page_count_max"] = unsigned(zone_val.z_wired_max) * pcpu_scale
 
     return zone
 
 
 @lldb_type_summary(['zone','zone_t'])
-@header(("{:<18s}  {:_^35s}  {:_^24s}  {:_^13s}  {:_^28s}\n"+
-"{:<18s}  {:>11s} {:>11s} {:>11s}  {:>8s} {:>7s} {:>7s}  {:>6s} {:>6s}  {:>8s} {:>6s} {:>5s} {:>7s}   {:<18s} {:<20s}").format(
+@header(("{:<18s}  {:_^47s}  {:_^24s}  {:_^13s}  {:_^28s}\n"+
+"{:<18s}  {:>11s} {:>11s} {:>11s} {:>11s}  {:>8s} {:>7s} {:>7s}  {:>6s} {:>6s}  {:>8s} {:>6s} {:>5s} {:>7s}   {:<18s} {:<20s}").format(
 '', 'SIZE (bytes)', 'ELEMENTS (#)', 'PAGES', 'ALLOC CHUNK CONFIG',
-'ZONE', 'TOTAL', 'ALLOC', 'FREE', 'ALLOC', 'FREE', 'CACHE', 'COUNT', 'FREE', 'SIZE (P)', 'ELTS', 'WASTE', 'ELT_SZ', 'FLAGS', 'NAME'))
+'ZONE', 'TOTAL', 'ALLOC', 'CACHE', 'FREE', 'ALLOC', 'CACHE', 'FREE', 'COUNT', 'FREE', 'SIZE (P)', 'ELTS', 'WASTE', 'ELT_SZ', 'FLAGS', 'NAME'))
 def GetZoneSummary(zone_val, marks, stats):
     """ Summarize a zone with important information. See help zprint for description of each field
         params:
@@ -590,16 +661,21 @@ def GetZoneSummary(zone_val, marks, stats):
     out_string = ""
     zone = GetZone(zone_val, marks)
 
-    format_string  = '{zone:#018x}  {cur_size:11,d} {used_size:11,d} {free_size:11,d}  '
-    format_string += '{count_elts:8,d} {zone.countfree:7,d} {cache_elem_count:7,d}  '
-    format_string += '{zone.page_count:6,d} {zone.allfree_page_count:6,d}  '
-    format_string += '{alloc_size_kb:3,d}K ({zone.alloc_pages:d}) {alloc_count:6,d} {alloc_waste:5,d} {zone.pcpu_elem_size:7,d}   '
+    pcpu_scale = 1
+    if zone_val.z_percpu:
+        pcpu_scale = unsigned(kern.globals.zpercpu_early_count)
+
+    format_string  = '{zone:#018x}  {zd[size]:11,d} {zd[used_size]:11,d} {zd[cached_size]:11,d} {zd[free_size]:11,d}  '
+    format_string += '{zd[element_count]:8,d} {zd[cache_element_count]:7,d} {zone.z_elems_free:7,d}  '
+    format_string += '{z_wired_cur:6,d} {z_wired_empty:6,d}  '
+    format_string += '{alloc_size_kb:3,d}K ({zone.z_chunk_pages:d}) '
+    format_string += '{zd[allocation_count]:6,d} {zd[allocation_waste]:5,d} {z_elem_size:7,d}   '
     format_string += '{markings:<18s} {zone_name:<20s}'
 
     markings=""
     if zone["destroyed"]:
         markings+="I"
-        
+
     for mark in marks:
         if zone[mark[0]]:
             markings += mark[1]
@@ -607,10 +683,11 @@ def GetZoneSummary(zone_val, marks, stats):
             markings+=" "
 
     alloc_size_kb = zone["allocation_size"] / 1024
-    out_string += format_string.format(zone=zone_val, free_size=zone["free_size"], used_size=zone["used_size"],
-            cur_size=zone["size"], count_elts=zone["element_count"], cache_elem_count=zone["cache_element_count"],
-            alloc_count=zone["allocation_count"], alloc_size_kb=alloc_size_kb, alloc_waste=zone["allocation_waste"],
-            markings=markings, zone_name=zone["name"])
+    out_string += format_string.format(zone=zone_val, zd=zone,
+            z_wired_cur=unsigned(zone_val.z_wired_cur) * pcpu_scale,
+            z_wired_empty=unsigned(zone_val.z_wired_empty) * pcpu_scale,
+            z_elem_size=unsigned(zone_val.z_elem_size) * pcpu_scale,
+            alloc_size_kb=alloc_size_kb, markings=markings, zone_name=zone["name"])
 
     if zone["exhaustible"] :
             out_string += " (max: {:d})".format(zone["page_count_max"] * pagesize)
@@ -620,6 +697,7 @@ def GetZoneSummary(zone_val, marks, stats):
 
     stats["cur_size"] += zone["size"]
     stats["used_size"] += zone["used_size"]
+    stats["cached_size"] += zone["cached_size"]
     stats["free_size"] += zone["free_size"]
     stats["cur_pages"] += zone["page_count"]
     stats["free_pages"] += zone["allfree_page_count"]
@@ -634,46 +712,50 @@ def Zprint(cmd_args=None, cmd_options={}, O=None):
                 Output json
     All columns are printed in decimal
     Legend:
+        ! - zone uses VA sequestering
+        $ - not encrypted during hibernation
+        A - currently trying to allocate more backing memory from kernel_memory_allocate without VM priv
         C - collectable
         D - destructible
-        X - expandable
-        $ - not encrypted during hibernation
-        H - exhaustible
+        E - Per-cpu caching is enabled for this zone
         F - allows foreign memory (memory not allocated from any zone map)
+        G - currently running GC
+        H - exhaustible
+        I - zone was destroyed and is no longer valid
+        L - zone is being monitored by zleaks
         M - gzalloc will avoid monitoring this zone
-        R - will be refilled when below low water mark
-        O - does not allow refill callout to fill zone on noblock allocation
         N - zone requires alignment (avoids padding this zone for debugging)
-        A - currently trying to allocate more backing memory from kernel_memory_allocate without VM priv
+        O - does not allow refill callout to fill zone on noblock allocation
+        R - will be refilled when below low water mark
         S - currently trying to allocate more backing memory from kernel_memory_allocate with VM priv
         W - another thread is waiting for more memory
-        E - Per-cpu caching is enabled for this zone
-        L - zone is being monitored by zleaks
-        G - currently running GC
-        I - zone was destroyed and is no longer valid
+        X - expandable
+        Z - elements are zeroed on free
     """
     global kern
 
     marks = [
             ["collectable",          "C"],
-            ["destructible",         "D"],
+            ["z_destructible",       "D"],
             ["expandable",           "X"],
-            ["noencrypt",            "$"],
+            ["z_noencrypt",          "$"],
             ["exhaustible",          "H"],
-            ["allows_foreign",       "F"],
-            ["prio_refill_count",    "R"],
+            ["z_allows_foreign",     "F"],
+            ["z_elems_rsv",          "R"],
             ["no_callout",           "O"],
             ["zleak_on",             "L"],
-            ["expanding_no_vm_priv", "A"],
-            ["expanding_vm_priv",    "S"],
-            ["waiting",              "W"],
-            ["cpu_cache_enabled",    "E"],
+            ["z_expander",           "A"],
+            ["z_expander_vm_priv",   "S"],
+            ["z_replenish_wait",     "W"],
+            ["z_pcpu_cache",         "E"],
             ["gzalloc_exempt",       "M"],
             ["alignment_required",   "N"],
-            ["va_sequester",         "!"]
+            ["z_va_sequester",       "!"],
+            ["z_free_zeroes",        "Z"]
             ]
+
     stats = {
-        "cur_size": 0, "used_size": 0, "free_size": 0,
+        "cur_size": 0, "used_size": 0, "cached_size": 0, "free_size": 0,
         "cur_pages": 0, "free_pages": 0, "seq_pages": 0
     }
 
@@ -694,7 +776,7 @@ def Zprint(cmd_args=None, cmd_options={}, O=None):
                 if zval.z_self:
                     print GetZoneSummary(zval, marks, stats)
 
-            format_string  = '{VT.Bold}{name:19s} {stats[cur_size]:11,d} {stats[used_size]:11,d} {stats[free_size]:11,d} '
+            format_string  = '{VT.Bold}{name:19s} {stats[cur_size]:11,d} {stats[used_size]:11,d} {stats[cached_size]:11,d} {stats[free_size]:11,d} '
             format_string += '                           '
             format_string += '{stats[cur_pages]:6,d} {stats[free_pages]:6,d}{VT.EndBold}  '
             format_string += '(sequester: {VT.Bold}{stats[seq_pages]:,d}{VT.EndBold})'
@@ -721,61 +803,7 @@ def TestZprint(kernel_target, config, lldb_obj, isConnected ):
 
 
 # EndMacro: zprint
-
-# Macro: showzfreelist
-
-def ShowZfreeListHeader(zone):
-    """ Helper routine to print a header for zone freelist.
-        (Since the freelist does not have a custom type, this is not defined as a Type Summary).
-        params:
-            zone:zone_t - Zone object to print header info
-        returns:
-            None
-    """
-
-    scaled_factor = (unsigned(kern.globals.zp_factor) +
-            (unsigned(zone.z_elem_size) >> unsigned(kern.globals.zp_scale)))
-
-    out_str = ""
-    out_str += "{0: <9s} {1: <12s} {2: <18s} {3: <18s} {4: <6s}\n".format('ELEM_SIZE', 'COUNT', 'NCOOKIE', 'PCOOKIE', 'FACTOR')
-    out_str += "{0: <9d} {1: <12d} 0x{2:0>16x} 0x{3:0>16x} {4: <2d}/{5: <2d}\n\n".format(
-                zone.z_elem_size, zone.countavail - zone.countfree, kern.globals.zp_nopoison_cookie, kern.globals.zp_poisoned_cookie, zone.zp_count, scaled_factor)
-    out_str += "{0: <7s} {1: <18s} {2: <18s} {3: <18s} {4: <18s} {5: <18s} {6: <14s}\n".format(
-                'NUM', 'ELEM', 'NEXT', 'BACKUP', '^ NCOOKIE', '^ PCOOKIE', 'POISON (PREV)')
-    print out_str
-
-def ShowZfreeListChain(zone, zfirst, zlimit):
-    """ Helper routine to print a zone free list chain
-        params:
-            zone: zone_t - Zone object
-            zfirst: void * - A pointer to the first element of the free list chain
-            zlimit: int - Limit for the number of elements to be printed by showzfreelist
-        returns:
-            None
-    """
-    current = Cast(zfirst, 'void *')
-    while ShowZfreeList.elts_found < zlimit:
-        ShowZfreeList.elts_found += 1
-        znext = dereference(Cast(current, 'vm_offset_t *'))
-        znext = (unsigned(znext) ^ unsigned(kern.globals.zp_nopoison_cookie))
-        znext = kern.GetValueFromAddress(znext, 'vm_offset_t *')
-        backup_ptr = kern.GetValueFromAddress((unsigned(Cast(current, 'vm_offset_t')) + unsigned(zone.z_elem_size) - sizeof('vm_offset_t')), 'vm_offset_t *')
-        backup_val = dereference(backup_ptr)
-        n_unobfuscated = (unsigned(backup_val) ^ unsigned(kern.globals.zp_nopoison_cookie))
-        p_unobfuscated = (unsigned(backup_val) ^ unsigned(kern.globals.zp_poisoned_cookie))
-        poison_str = ''
-        if p_unobfuscated == unsigned(znext):
-            poison_str = "P ({0: <d})".format(ShowZfreeList.elts_found - ShowZfreeList.last_poisoned)
-            ShowZfreeList.last_poisoned = ShowZfreeList.elts_found
-        else:
-            if n_unobfuscated != unsigned(znext):
-                poison_str = "INVALID"
-        print "{0: <7d} 0x{1:0>16x} 0x{2:0>16x} 0x{3:0>16x} 0x{4:0>16x} 0x{5:0>16x} {6: <14s}\n".format(
-              ShowZfreeList.elts_found, unsigned(current), unsigned(znext),
-              unsigned(backup_val), n_unobfuscated, p_unobfuscated, poison_str)
-        if unsigned(znext) == 0:
-            break
-        current = Cast(znext, 'void *')
+# Macro: showzchunks
 
 def ZoneIteratePageQueue(page):
     while page.packed_address:
@@ -783,42 +811,108 @@ def ZoneIteratePageQueue(page):
         yield meta
         page = meta.meta.zm_page_next
 
-@static_var('elts_found',0)
-@static_var('last_poisoned',0)
-@lldb_command('showzfreelist')
-def ShowZfreeList(cmd_args=None):
-    """ Walk the freelist for a zone, printing out the primary and backup next pointers, the poisoning cookies, and the poisoning status of each element.
-    Usage: showzfreelist <zone> [iterations]
+@header("{: <20s} {: <20s} {: <20s} {: <25s} {: <10s} {: <8s} {: <4s} {: >9s}".format(
+    "Zone", "Metadata", "Page", "Bitmap", "Kind", "Queue", "Pgs", "Allocs"))
+def GetZoneChunk(meta, queue, O=None):
+    format_string  = "{meta.zone: <#20x} "
+    format_string += "{meta.meta_addr: <#20x} {meta.page_addr: <#20x} "
+    format_string += "{bitmap: <#18x} @{bitmap_size:<5d} "
+    format_string += "{kind:<10s} {queue:<8s} {pgs:<1d}/{chunk:<1d}  "
+    format_string += "{alloc_count: >4d}/{avail_count: >4d}"
 
-        Will walk up to 50 elements by default, pass a limit in 'iterations' to override.
+    pgs = int(meta.zone.z_chunk_pages)
+    chunk = pgs
+    if meta.meta.zm_chunk_len >= 0xe:
+        kind = "secondary"
+        pgs -= int(meta.meta.zm_page_index)
+    else:
+        kind = "primary"
+
+    alloc_count=meta.getAllocCount()
+    avail_count=meta.getAllocAvail()
+    free_count=meta.getFreeCountSlow()
+
+    if alloc_count + free_count != avail_count:
+        format_string += " {VT.Red}bitmap mismatch{VT.Default}"
+
+    return O.format(format_string, meta=meta,
+            alloc_count=alloc_count,
+            avail_count=avail_count,
+            bitmap=meta.getBitmap(),
+            bitmap_size=meta.getBitmapSize(),
+            queue=queue, kind=kind, pgs=pgs, chunk=chunk)
+
+def ShowZChunksImpl(zone, extra_addr=None, cmd_options={}, O=None):
+    verbose = '-V' in cmd_options
+
+    def do_content(meta, O, indent=False):
+        with O.table("{:>5s}  {:<20s} {:<10s}".format("#", "Element", "State"), indent=indent):
+            i = 0
+            for e in meta.iterateElements():
+                status = "Allocated"
+                if meta.isElementFree(e):
+                    status = "Free"
+                print O.format("{:5d}  {:<#20x} {:10s}", i, e, status)
+                i += 1
+
+    if extra_addr is None:
+        with O.table(GetZoneChunk.header):
+            for meta in ZoneIteratePageQueue(zone.z_pageq_full):
+                print GetZoneChunk(meta, "full", O)
+                if verbose: do_content(meta, O, indent=True);
+
+            for meta in ZoneIteratePageQueue(zone.z_pageq_partial):
+                print GetZoneChunk(meta, "partial", O)
+                if verbose: do_content(meta, O, indent=True);
+
+            for meta in ZoneIteratePageQueue(zone.z_pageq_empty):
+                print GetZoneChunk(meta, "empty", O)
+                if verbose: do_content(meta, O, indent=True);
+
+            for meta in ZoneIteratePageQueue(zone.z_pageq_va):
+                print GetZoneChunk(meta, "va", O)
+    else:
+        meta = ZoneMeta(extra_addr, isPageIndex="-I" in cmd_options).getReal()
+        with O.table(GetZoneChunk.header):
+            print GetZoneChunk(meta, "N/A", O)
+        do_content(meta, O)
+
+@lldb_command('showzchunks', "IV", fancy=True)
+def ShowZChunks(cmd_args=None, cmd_options={}, O=None):
     """
+    prints the list of zone chunks, or the content of a given chunk
+
+    Usage: showzchunks <zone> [-I] [-V] [address]
+
+    Use -I       to interpret [address] as a page index
+    Use -V       to show the contents of all the chunks
+
+    [address]    can by any address belonging to the zone, or metadata
+    """
+
     if not cmd_args:
-        print ShowZfreeList.__doc__
-        return
-    ShowZfreeList.elts_found = 0
-    ShowZfreeList.last_poisoned = 0
+        return O.error('missing zone argument')
 
     zone = kern.GetValueFromAddress(cmd_args[0], 'struct zone *')
-    zlimit = 50
-    if len(cmd_args) >= 2:
-        zlimit = ArgumentStringToInt(cmd_args[1])
-    ShowZfreeListHeader(zone)
 
-    for head in [zone.pages_any_free_foreign, zone.pages_intermediate, zone.pages_all_free]:
-        for free_page_meta in ZoneIteratePageQueue(head):
-            if ShowZfreeList.elts_found == zlimit:
-                break
-            zfirst = free_page_meta.getFreeList()
-            if zfirst != 0:
-                ShowZfreeListChain(zone, zfirst, zlimit)
-
-    if ShowZfreeList.elts_found == zlimit:
-        print "Stopped at {0: <d} elements!".format(zlimit)
+    if len(cmd_args) == 1:
+        ShowZChunksImpl(zone, cmd_options=cmd_options, O=O)
     else:
-        print "Found {0: <d} elements!".format(ShowZfreeList.elts_found)
+        addr = unsigned(kern.GetValueFromAddress(cmd_args[1]))
+        ShowZChunksImpl(zone, extra_addr=addr, cmd_options=cmd_options, O=O)
 
-# EndMacro: showzfreelist
+@lldb_command('showallzchunks', fancy=True)
+def ShowAllZChunks(cmd_args=None, cmd_options={}, O=None):
+    """
+    prints the list of all zone chunks
 
+    Usage: showallzchunks
+    """
+
+    for z in kern.zones:
+        ShowZChunksImpl(z, O=O)
+
+# EndMacro: showzchunks
 # Macro: zstack_showzonesbeinglogged
 
 @lldb_command('zstack_showzonesbeinglogged')
@@ -1338,7 +1432,7 @@ def ShowPCPU(cmd_args=None, cmd_options={}, O=None):
     ty  = var.GetSBValue().GetTypeName()
 
     r = range(0, ncpu)
-    if cpu:
+    if cpu is not None:
         r = range(cpu, cpu + 1)
 
     def PCPUSlot(pcpu_var, i):
@@ -3438,6 +3532,7 @@ FixedTags = {
     26: "VM_KERN_MEMORY_SKYWALK",
     27: "VM_KERN_MEMORY_LTABLE",
     28: "VM_KERN_MEMORY_HV",
+    29: "VM_KERN_MEMORY_RETIRED",
     255:"VM_KERN_MEMORY_ANY",
 }
 
@@ -3461,17 +3556,19 @@ def GetVMKernName(tag):
                 return (kern.Symbolicate(site), "")
     return ("", "")
 
-@lldb_command("showvmtags", "ASJ")
+@lldb_command("showvmtags", "ASJO")
 def showvmtags(cmd_args=None, cmd_options={}):
     """Routine to print out info about kernel wired page allocations
         usage: showvmtags
                iterates kernel map and vm objects totaling allocations by tag.
-        usage: showvmtags -S
+        usage: showvmtags -S [-O]
                also iterates kernel object pages individually - slow.
-        usage: showvmtags -A
+        usage: showvmtags -A [-O]
                show all tags, even tags that have no wired count
-        usage: showvmtags -J
+        usage: showvmtags -J [-O]
                 Output json
+
+        -O: list in increasing size order
     """
     slow = False
     print_json = False
@@ -3486,7 +3583,6 @@ def showvmtags(cmd_args=None, cmd_options={}):
     page_size = unsigned(kern.globals.page_size)
     nsites = unsigned(kern.globals.vm_allocation_tag_highest) + 1
     tagcounts = [0] * nsites
-    tagpeaks = [0] * nsites
     tagmapped = [0] * nsites
 
     if kern.globals.vm_tag_active_update:
@@ -3495,7 +3591,6 @@ def showvmtags(cmd_args=None, cmd_options={}):
             if site:
                 tagcounts[tag] = unsigned(site.total)
                 tagmapped[tag] = unsigned(site.mapped)
-                tagpeaks[tag] = unsigned(site.peak)
     else:
         queue_head = kern.globals.vm_objects_wired
         for object in IterateQueue(queue_head, 'struct vm_object *', 'wired_objq'):
@@ -3516,7 +3611,6 @@ def showvmtags(cmd_args=None, cmd_options={}):
             current["name"] = sitestr
             current["size"] = tagcounts[tag]
             current["mapped"] = tagmapped[tag]
-            current["peak"] = tagpeaks[tag]
             current["tag"] = tag
             current["tagstr"] = tagstr
             current["subtotals"] = []
@@ -3537,24 +3631,27 @@ def showvmtags(cmd_args=None, cmd_options={}):
                     })
             tags.append(current)
 
+    if "-O" in cmd_options:
+        tags.sort(key = lambda tag: tag['size'])
+
     if print_json:
         print json.dumps(tags)
     else:
         print " vm_allocation_tag_highest: {:<7d}  ".format(nsites - 1)
-        print " {:<7s}  {:>7s}   {:>7s}   {:>7s}  {:<50s}".format("tag.kmod", "peak", "size", "mapped", "name")
+        print " {:<7s}  {:>7s}   {:>7s}  {:<50s}".format("tag.kmod", "size", "mapped", "name")
         for tag in tags:
             if not tagstr:
                 tagstr = ""
-            print " {:>3d}{:<4s}  {:>7d}K  {:>7d}K  {:>7d}K  {:<50s}".format(tag["tag"], tag["tagstr"], tag["peak"] / 1024, tag["size"] / 1024, tag["mapped"] / 1024, tag["name"])
+            print " {:>3d}{:<4s}  {:>7d}K  {:>7d}K  {:<50s}".format(tag["tag"], tag["tagstr"], tag["size"] / 1024, tag["mapped"] / 1024, tag["name"])
             for sub in tag["subtotals"]:
                 if ((sub["flags"] & 0x007f) == 0):
                     kind_str = "named"
                 else:
                     kind_str = "from"
 
-                print " {:>7s}  {:>7s}   {:>7s}   {:>7d}K      {:s} {:>3d}{:<4s} {:<50s}".format(" ", " ", " ", sub["amount"] / 1024, kind_str, sub["tag"], sub["tagstr"], sub["sitestr"])
+                print " {:>7s}  {:>7d}K      {:s}  {:>3d}{:<4s} {:<50s}".format(" ", sub["amount"] / 1024, kind_str, sub["tag"], sub["tagstr"], sub["sitestr"])
 
-        print "Total:              {:>7d}K  {:>7d}K".format(total / 1024, totalmapped / 1024)
+        print "Total:    {:>7d}K  {:>7d}K".format(total / 1024, totalmapped / 1024)
     return None
 
 
@@ -3759,22 +3856,14 @@ def ShowAllocatedElementsInZone(cmd_args=None, cmd_options={}):
 def FindAllocatedElementsInZone(zone):
     elements = []
 
-    if not zone.z_self or zone.permanent:
+    if not zone.z_self or zone.z_permanent:
         return elements
 
-    for head in [zone.pages_any_free_foreign, zone.pages_all_used_foreign,
-            zone.pages_intermediate, zone.pages_all_used]:
-
+    for head in [zone.z_pageq_partial, zone.z_pageq_full]:
         for meta in ZoneIteratePageQueue(head):
-            free_elements = set(meta.iterateFreeList())
-
             for elem in meta.iterateElements():
-                if elem in free_elements:
-                    continue
-
-                if elem not in free_elements:
+                if not meta.isElementFree(elem):
                     elements.append(elem)
-                elem += zone.z_elem_size
 
     return elements
 
@@ -4145,7 +4234,7 @@ def ShowAllAppleProtectPagers(cmd_args=None):
     """Routine to print all apple_protect pagers
         usage: show_all_apple_protect_pagers
     """
-    print "{:>3s} {:<3s} {:<18s} {:>5s} {:>5s} {:>6s} {:<18s} {:<18s} {:<18s} {:<18s} {:<18s} {:<18s}\n".format("#", "#", "pager", "refs", "ready", "mapped", "mo_control", "object", "offset", "crypto_offset", "crypto_start", "crypto_end")
+    print "{:>3s} {:<3s} {:<18s} {:>5s} {:>5s} {:>6s} {:>6s} {:<18s} {:<18s} {:<18s} {:<18s} {:<18s}\n".format("#", "#", "pager", "refs", "ready", "mapped", "cached", "object", "offset", "crypto_offset", "crypto_start", "crypto_end")
     qhead = kern.globals.apple_protect_pager_queue
     qtype = GetType('apple_protect_pager *')
     qcnt = kern.globals.apple_protect_pager_count
@@ -4173,7 +4262,56 @@ def show_apple_protect_pager(pager, qcnt, idx):
         shadow = object.shadow
     vnode_pager = Cast(object.pager,'vnode_pager *')
     filename = GetVnodePath(vnode_pager.vnode_handle)
-    print "{:>3}/{:<3d} {: <#018x} {:>5d} {:>5d} {:>6d} {: <#018x} {: <#018x} {:#018x} {:#018x} {:#018x} {:#018x}\n\tcrypt_info:{: <#018x} <decrypt:{: <#018x} end:{:#018x} ops:{: <#018x} refs:{:<d}>\n\tvnode:{: <#018x} {:s}\n".format(idx, qcnt, pager, pager.ref_count, pager.is_ready, pager.is_mapped, pager.pager_control, pager.backing_object, pager.backing_offset, pager.crypto_backing_offset, pager.crypto_start, pager.crypto_end, pager.crypt_info, pager.crypt_info.page_decrypt, pager.crypt_info.crypt_end, pager.crypt_info.crypt_ops, pager.crypt_info.crypt_refcnt, vnode_pager.vnode_handle, filename)
+    if hasattr(pager, "ap_pgr_hdr_ref"):
+        refcnt = pager.ap_pgr_hdr_ref
+    else:
+        refcnt = pager.ap_pgr_hdr.mo_ref
+    print "{:>3}/{:<3d} {: <#018x} {:>5d} {:>5d} {:>6d} {:>6d} {: <#018x} {:#018x} {:#018x} {:#018x} {:#018x}\n\tcrypt_info:{: <#018x} <decrypt:{: <#018x} end:{:#018x} ops:{: <#018x} refs:{:<d}>\n\tvnode:{: <#018x} {:s}\n".format(idx, qcnt, pager, refcnt, pager.is_ready, pager.is_mapped, pager.is_cached, pager.backing_object, pager.backing_offset, pager.crypto_backing_offset, pager.crypto_start, pager.crypto_end, pager.crypt_info, pager.crypt_info.page_decrypt, pager.crypt_info.crypt_end, pager.crypt_info.crypt_ops, pager.crypt_info.crypt_refcnt, vnode_pager.vnode_handle, filename)
+    showvmobject(pager.backing_object, pager.backing_offset, pager.crypto_end - pager.crypto_start, 1, 1)
+
+@lldb_command("show_all_shared_region_pagers")
+def ShowAllSharedRegionPagers(cmd_args=None):
+    """Routine to print all shared_region pagers
+        usage: show_all_shared_region_pagers
+    """
+    print "{:>3s} {:<3s} {:<18s} {:>5s} {:>5s} {:>6s} {:<18s} {:<18s} {:<18s} {:<18s}\n".format("#", "#", "pager", "refs", "ready", "mapped", "object", "offset", "jop_key", "slide", "slide_info")
+    qhead = kern.globals.shared_region_pager_queue
+    qtype = GetType('shared_region_pager *')
+    qcnt = kern.globals.shared_region_pager_count
+    idx = 0
+    for pager in IterateQueue(qhead, qtype, "srp_queue"):
+        idx = idx + 1
+        show_shared_region_pager(pager, qcnt, idx)
+
+@lldb_command("show_shared_region_pager")
+def ShowSharedRegionPager(cmd_args=None):
+    """Routine to print out info about a shared_region pager
+        usage: show_shared_region_pager <pager>
+    """
+    if cmd_args == None or len(cmd_args) < 1:
+        print "Invalid argument.", ShowSharedRegionPager.__doc__
+        return
+    pager = kern.GetValueFromAddress(cmd_args[0], 'shared_region_pager_t')
+    show_shared_region_pager(pager, 1, 1)
+
+def show_shared_region_pager(pager, qcnt, idx):
+    object = pager.srp_backing_object
+    shadow = object.shadow
+    while shadow != 0:
+        object = shadow
+        shadow = object.shadow
+    vnode_pager = Cast(object.pager,'vnode_pager *')
+    filename = GetVnodePath(vnode_pager.vnode_handle)
+    if hasattr(pager, 'srp_ref_count'):
+        ref_count = pager.srp_ref_count
+    else:
+        ref_count = pager.srp_header.mo_ref
+    if hasattr(pager, 'srp_jop_key'):
+        jop_key = pager.srp_jop_key
+    else:
+        jop_key = -1
+    print "{:>3}/{:<3d} {: <#018x} {:>5d} {:>5d} {:>6d} {: <#018x} {:#018x} {:#018x} {:#018x}\n\tvnode:{: <#018x} {:s}\n".format(idx, qcnt, pager, ref_count, pager.srp_is_ready, pager.srp_is_mapped, pager.srp_backing_object, pager.srp_backing_offset, jop_key, pager.srp_slide_info.si_slide, pager.srp_slide_info, vnode_pager.vnode_handle, filename)
+    showvmobject(pager.srp_backing_object, pager.srp_backing_offset, pager.srp_slide_info.si_end - pager.srp_slide_info.si_start, 1, 1)
 
 @lldb_command("show_console_ring")
 def ShowConsoleRingData(cmd_args=None):
@@ -4544,36 +4682,6 @@ def vm_page_lookup_in_compressor(slot_ptr):
         print lldb_run_command(cmd)
     else:
         print "<no compressed data>"
-
-def print_hex_data(data, begin_offset=0, desc=""):
-    """ print on stdout "hexdump -C < data" like output
-        params:
-            data - bytearray or array of int where each int < 255
-            begin_offset - int offset that should be printed in left column
-            desc - str optional description to print on the first line to describe data
-    """
-    if desc:
-        print "{}:".format(desc)
-    index = 0
-    total_len = len(data)
-    hex_buf = ""
-    char_buf = ""
-    while index < total_len:
-        hex_buf += " {:02x}".format(data[index])
-        if data[index] < 0x20 or data[index] > 0x7e:
-            char_buf += "."
-        else:
-            char_buf += "{:c}".format(data[index])
-        index += 1
-        if index and index % 8 == 0:
-            hex_buf += " "
-        if index > 1 and (index % 16) == 0:
-            print "{:08x} {: <50s} |{: <16s}|".format(begin_offset + index - 16, hex_buf, char_buf)
-            hex_buf = ""
-            char_buf = ""
-    if index % 16 != 0:
-        print "{:08x} {: <50s} |{: <16s}|".format(begin_offset + index - 16, hex_buf, char_buf)
-    return
 
 @lldb_command('vm_scan_all_pages')
 def VMScanAllPages(cmd_args=None):

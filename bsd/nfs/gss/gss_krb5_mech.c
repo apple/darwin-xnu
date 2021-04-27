@@ -71,7 +71,7 @@
 #include <libkern/OSAtomic.h>
 #include "gss_krb5_mech.h"
 
-lck_grp_t *gss_krb5_mech_grp;
+LCK_GRP_DECLARE(gss_krb5_mech_grp, "gss_krb5_mech");
 
 typedef struct crypt_walker_ctx {
 	size_t length;
@@ -198,7 +198,6 @@ gss_krb5_mech_init(void)
 		}
 		return;
 	}
-	gss_krb5_mech_grp = lck_grp_alloc_init("gss_krb5_mech", LCK_GRP_ATTR_NULL);
 	gss_krb5_mech_initted = GSS_KRB5_INITIALIZED;
 }
 
@@ -578,12 +577,12 @@ krb5_mic(crypto_ctx_t ctx, gss_buffer_t header, gss_buffer_t bp, gss_buffer_t tr
 
 	if (ikey) {
 		if (!(ctx->flags & CRYPTO_KS_ALLOCED)) {
-			lck_mtx_lock(ctx->lock);
+			lck_mtx_lock(&ctx->lock);
 			if (!(ctx->flags & CRYPTO_KS_ALLOCED)) {
 				cc_key_schedule_create(ctx);
 			}
 			ctx->flags |= CRYPTO_KS_ALLOCED;
-			lck_mtx_unlock(ctx->lock);
+			lck_mtx_unlock(&ctx->lock);
 		}
 		key2use = ctx->ks.ikey[kdx];
 	} else {
@@ -625,12 +624,12 @@ krb5_mic_mbuf(crypto_ctx_t ctx, gss_buffer_t header,
 
 	if (ikey) {
 		if (!(ctx->flags & CRYPTO_KS_ALLOCED)) {
-			lck_mtx_lock(ctx->lock);
+			lck_mtx_lock(&ctx->lock);
 			if (!(ctx->flags & CRYPTO_KS_ALLOCED)) {
 				cc_key_schedule_create(ctx);
 			}
 			ctx->flags |= CRYPTO_KS_ALLOCED;
-			lck_mtx_unlock(ctx->lock);
+			lck_mtx_unlock(&ctx->lock);
 		}
 		key2use = ctx->ks.ikey[kdx];
 	} else {
@@ -679,12 +678,12 @@ krb5_crypt_mbuf(crypto_ctx_t ctx, mbuf_t *mbp, size_t len, int encrypt, cccbc_ct
 	int error;
 
 	if (!(ctx->flags & CRYPTO_KS_ALLOCED)) {
-		lck_mtx_lock(ctx->lock);
+		lck_mtx_lock(&ctx->lock);
 		if (!(ctx->flags & CRYPTO_KS_ALLOCED)) {
 			cc_key_schedule_create(ctx);
 		}
 		ctx->flags |= CRYPTO_KS_ALLOCED;
-		lck_mtx_unlock(ctx->lock);
+		lck_mtx_unlock(&ctx->lock);
 	}
 	if (!ks) {
 		ks = encrypt ? ctx->ks.enc : ctx->ks.dec;
@@ -989,6 +988,8 @@ cc_key_schedule_create(crypto_ctx_t ctx)
 void
 gss_crypto_ctx_free(crypto_ctx_t ctx)
 {
+	lck_mtx_destroy(&ctx->lock, &gss_krb5_mech_grp);
+
 	ctx->ks.ikey[GSS_SND] = NULL;
 	if (ctx->ks.ikey[GSS_RCV] && ctx->key != ctx->ks.ikey[GSS_RCV]) {
 		cc_clear(ctx->keylen, ctx->ks.ikey[GSS_RCV]);
@@ -1074,7 +1075,7 @@ gss_crypto_ctx_init(struct crypto_ctx *ctx, lucid_context_t lucid)
 		return ENOTSUP;
 	}
 
-	ctx->lock = lck_mtx_alloc_init(gss_krb5_mech_grp, LCK_ATTR_NULL);
+	lck_mtx_init(&ctx->lock, &gss_krb5_mech_grp, LCK_ATTR_NULL);
 
 	return 0;
 }

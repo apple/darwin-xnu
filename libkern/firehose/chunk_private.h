@@ -64,6 +64,7 @@ typedef struct firehose_chunk_range_s {
 	uint16_t fcr_length;
 } *firehose_chunk_range_t;
 
+#if __has_include(<os/atomic_private.h>)
 #if defined(KERNEL) || defined(OS_FIREHOSE_SPI)
 
 OS_ALWAYS_INLINE
@@ -181,6 +182,7 @@ firehose_chunk_tracepoint_end(firehose_chunk_t fc,
 #endif // OS_ATOMIC_HAS_STARVATION_FREE_RMW || !OS_ATOMIC_CONFIG_STARVATION_FREE_ONLY
 
 #endif // defined(KERNEL) || defined(OS_FIREHOSE_SPI)
+#endif // __has_include(<os/atomic_private.h>)
 
 __END_DECLS
 

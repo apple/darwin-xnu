@@ -112,9 +112,6 @@ enum {
 #define kIOPMMessageRequestUserActive \
                 iokit_family_msg(sub_iokit_powermanagement, 0x460)
 
-#define kIOPMMessageRequestSystemShutdown \
-                iokit_family_msg(sub_iokit_powermanagement, 0x470)
-
 /* @enum SystemSleepReasons
  * @abstract The potential causes for system sleep as logged in the system event record.
  */

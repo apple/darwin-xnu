@@ -806,7 +806,9 @@ audit_arg_vnpath(struct kaudit_record *ar, struct vnode *vp, u_int64_t flags)
 		if (*vnode_mac_labelp != NULL) {
 			mac.m_buflen = MAC_AUDIT_LABEL_LEN;
 			mac.m_string = *vnode_mac_labelp;
-			mac_vnode_label_externalize_audit(vp, &mac);
+			if (mac_vnode_label_externalize_audit(vp, &mac)) {
+				return;
+			}
 		}
 	}
 #endif

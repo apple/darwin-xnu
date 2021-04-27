@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2016-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -75,7 +75,14 @@ __nosan_strlcpy(char *dst, const char *src, size_t sz)
 static inline char  *
 __nosan_strncpy(char *dst, const char *src, size_t sz)
 {
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
 	return strncpy(dst, src, sz);
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 }
 static inline size_t
 __nosan_strlcat(char *dst, const char *src, size_t sz)
@@ -85,7 +92,14 @@ __nosan_strlcat(char *dst, const char *src, size_t sz)
 static inline char  *
 __nosan_strncat(char *dst, const char *src, size_t sz)
 {
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
 	return strncat(dst, src, sz);
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 }
 static inline size_t
 __nosan_strnlen(const char *src, size_t sz)

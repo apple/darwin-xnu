@@ -332,6 +332,9 @@ struct uthread {
 	/* Document Tracking struct used to track a "tombstone" for a document */
 	struct doc_tombstone *t_tombstone;
 
+	/* Field to be used by filesystems */
+	uint64_t t_fs_private;
+
 	struct os_reason *uu_exit_reason;
 };
 

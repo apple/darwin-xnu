@@ -189,6 +189,8 @@ Initializes the percpu subsystem.
 Rank 1: allocates the percpu memory, `percpu_foreach_base` and `percpu_foreach`
         become usable.
 
+Rank 2: sets up static percpu counters.
+
 
 `STARTUP_SUB_LOCKS`
 -------------------
@@ -204,7 +206,6 @@ tracing features). Available hooks are:
 ### Rank usage
 
 - Rank 1: `LCK_MTX_DECLARE`.
-
 
 `STARTUP_SUB_CODESIGNING`
 -------------------------
@@ -243,6 +244,21 @@ Initializes the Mach IPC subsystem.
 - Rank last: Final IPC initialization.
 
 
+`STARTUP_SUB_SYSCTL`
+-------------------------
+
+### Description
+
+Initializes the sysctl kernel subsystem
+
+### Rank usage
+
+- Rank 1: automatic `SYSCTL_NODE` registration.
+- Rank 2: automatic `SYSCTL_OID` registration.
+- Middle: other manual early registrations.
+- Last: registrations of dummy nodes in the constant nodes to allow extension.
+
+
 `STARTUP_SUB_EARLY_BOOT`
 ------------------------
 
@@ -271,5 +287,3 @@ When the kernel locks down:
 ### Rank usage
 
 N/A.
-
-

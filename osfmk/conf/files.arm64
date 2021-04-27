@@ -96,3 +96,5 @@ osfmk/arm64/pgtrace.c           standard
 osfmk/arm64/pgtrace_decoder.c   optional config_pgtrace_nonkext
 osfmk/arm64/machine_remote_time.c optional config_mach_bridge_recv_time
 osfmk/arm64/corecrypto/sha256_compress_arm64.s	standard
+
+osfmk/arm/counter.c	standard

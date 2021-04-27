@@ -52,13 +52,6 @@ __BEGIN_DECLS
 bool ml_cpu_can_exit(int cpu_id);
 
 /*!
- * @function      ml_cpu_init_state
- * @brief         Needs to be called from schedulable context prior to using
- *                the ml_cpu_*_state_transition or ml_cpu_*_loop functions.
- */
-void ml_cpu_init_state(void);
-
-/*!
  * @function      ml_cpu_begin_state_transition
  * @brief         Tell the platform code that processor_start() or
  *                processor_exit() is about to begin for |cpu_id|.  This

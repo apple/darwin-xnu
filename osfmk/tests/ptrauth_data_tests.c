@@ -85,7 +85,7 @@ ptrauth_data_tests(void)
 
 	/* task_t */
 	ALLOC_VALIDATE_DATA_PTR(struct task, vm_map_t, map, "task.map");
-	ALLOC_VALIDATE_DATA_PTR(struct task, struct ipc_port *, itk_self[0], "task.itk_self");
+	ALLOC_VALIDATE_DATA_PTR(struct task, struct ipc_port *, itk_task_ports[0], "task.itk_task_ports");
 	ALLOC_VALIDATE_DATA_PTR(struct task, struct ipc_port *, itk_settable_self, "task.itk_settable_self");
 	ALLOC_VALIDATE_DATA_PTR(struct task, struct ipc_port *, itk_host, "task.itk_host");
 	ALLOC_VALIDATE_DATA_PTR(struct task, struct ipc_port *, itk_bootstrap, "task.itk_bootstrap");

@@ -738,6 +738,6 @@ sysctl_iokittest(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused
 }
 
 SYSCTL_PROC(_kern, OID_AUTO, iokittest,
-    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_LOCKED,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_KERN | CTLFLAG_LOCKED,
     NULL, 0, sysctl_iokittest, "I", "");
 #endif // __clang_analyzer__

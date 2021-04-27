@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2017, 2020 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2017, 2020, 2021 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -80,6 +80,8 @@
 #define FLOW_DIVERT_NOTIFY_ON_RECEIVED  0x00000080
 #define FLOW_DIVERT_IMPLICIT_CONNECT    0x00000100
 #define FLOW_DIVERT_DID_SET_LOCAL_ADDR  0x00000200
+#define FLOW_DIVERT_HAS_TOKEN           0x00000400
+#define FLOW_DIVERT_SHOULD_SET_LOCAL_ADDR 0x00000800
 
 #define FDLOG(level, pcb, format, ...) \
 	os_log_with_type(OS_LOG_DEFAULT, flow_divert_syslog_type_to_oslog_type(level), "(%u): " format "\n", (pcb)->hash, __VA_ARGS__)
@@ -1374,6 +1376,13 @@ flow_divert_send_connect_result(struct flow_divert_pcb *fd_cb)
 		goto done;
 	}
 
+	if (fd_cb->local_endpoint.sa.sa_family == AF_INET || fd_cb->local_endpoint.sa.sa_family == AF_INET6) {
+		error = flow_divert_packet_append_tlv(packet, FLOW_DIVERT_TLV_LOCAL_ADDR, fd_cb->local_endpoint.sa.sa_len, &(fd_cb->local_endpoint.sa));
+		if (error) {
+			goto done;
+		}
+	}
+
 	error = flow_divert_send_packet(fd_cb, packet, TRUE);
 	if (error) {
 		goto done;
@@ -1812,12 +1821,12 @@ done:
 }
 
 static void
-flow_divert_set_local_endpoint(struct flow_divert_pcb *fd_cb, struct sockaddr *local_endpoint, bool port_only)
+flow_divert_set_local_endpoint(struct flow_divert_pcb *fd_cb, struct sockaddr *local_endpoint)
 {
 	struct inpcb *inp = sotoinpcb(fd_cb->so);
 
 	if (local_endpoint->sa_family == AF_INET6) {
-		if (IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_laddr) && !port_only) {
+		if (IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_laddr) && (fd_cb->flags & FLOW_DIVERT_SHOULD_SET_LOCAL_ADDR)) {
 			fd_cb->flags |= FLOW_DIVERT_DID_SET_LOCAL_ADDR;
 			inp->in6p_laddr = (satosin6(local_endpoint))->sin6_addr;
 		}
@@ -1825,7 +1834,7 @@ flow_divert_set_local_endpoint(struct flow_divert_pcb *fd_cb, struct sockaddr *l
 			inp->inp_lport = (satosin6(local_endpoint))->sin6_port;
 		}
 	} else if (local_endpoint->sa_family == AF_INET) {
-		if (inp->inp_laddr.s_addr == INADDR_ANY && !port_only) {
+		if (inp->inp_laddr.s_addr == INADDR_ANY && (fd_cb->flags & FLOW_DIVERT_SHOULD_SET_LOCAL_ADDR)) {
 			fd_cb->flags |= FLOW_DIVERT_DID_SET_LOCAL_ADDR;
 			inp->inp_laddr = (satosin(local_endpoint))->sin_addr;
 		}
@@ -2032,8 +2041,10 @@ flow_divert_disable(struct flow_divert_pcb *fd_cb)
 		    NULL,
 		    (last_proc != NULL ? last_proc : current_proc()));
 
-		if (error) {
+		if (error && error != EWOULDBLOCK) {
 			FDLOG(LOG_ERR, fd_cb, "Failed to send queued data using the socket's original protocol: %d", error);
+		} else {
+			error = 0;
 		}
 	} else if (SOCK_TYPE(so) == SOCK_DGRAM) {
 		struct sockbuf *sb = &so->so_snd;
@@ -2135,6 +2146,78 @@ done:
 }
 
 static void
+flow_divert_scope(struct flow_divert_pcb *fd_cb, int out_if_index, bool derive_new_address)
+{
+	struct socket *so = NULL;
+	struct inpcb *inp = NULL;
+	struct ifnet *current_ifp = NULL;
+	struct ifnet *new_ifp = NULL;
+	int error = 0;
+
+	so = fd_cb->so;
+	if (so == NULL) {
+		return;
+	}
+
+	inp = sotoinpcb(so);
+
+	if (out_if_index <= 0) {
+		return;
+	}
+
+	if (inp->inp_vflag & INP_IPV6) {
+		current_ifp = inp->in6p_last_outifp;
+	} else {
+		current_ifp = inp->inp_last_outifp;
+	}
+
+	if (current_ifp != NULL) {
+		if (current_ifp->if_index == out_if_index) {
+			/* No change */
+			return;
+		}
+
+		/* Scope the socket to the given interface */
+		error = inp_bindif(inp, out_if_index, &new_ifp);
+		if (error != 0) {
+			FDLOG(LOG_ERR, fd_cb, "failed to scope to %d because inp_bindif returned %d", out_if_index, error);
+			return;
+		}
+
+		if (derive_new_address && fd_cb->original_remote_endpoint != NULL) {
+			/* Get the appropriate address for the given interface */
+			if (inp->inp_vflag & INP_IPV6) {
+				inp->in6p_laddr = sa6_any.sin6_addr;
+				error = in6_pcbladdr(inp, fd_cb->original_remote_endpoint, &(fd_cb->local_endpoint.sin6.sin6_addr), NULL);
+			} else {
+				inp->inp_laddr.s_addr = INADDR_ANY;
+				error = in_pcbladdr(inp, fd_cb->original_remote_endpoint, &(fd_cb->local_endpoint.sin.sin_addr), IFSCOPE_NONE, NULL, 0);
+			}
+
+			if (error != 0) {
+				FDLOG(LOG_WARNING, fd_cb, "failed to derive a new local address from %d because in_pcbladdr returned %d", out_if_index, error);
+			}
+		}
+	} else {
+		ifnet_head_lock_shared();
+		if (out_if_index <= if_index) {
+			new_ifp = ifindex2ifnet[out_if_index];
+		}
+		ifnet_head_done();
+	}
+
+	/* Update the "last interface" of the socket */
+	if (new_ifp != NULL) {
+		if (inp->inp_vflag & INP_IPV6) {
+			inp->in6p_last_outifp = new_ifp;
+		} else {
+			inp->inp_last_outifp = new_ifp;
+		}
+
+	}
+}
+
+static void
 flow_divert_handle_connect_result(struct flow_divert_pcb *fd_cb, mbuf_t packet, int offset)
 {
 	uint32_t                                        connect_error = 0;
@@ -2213,11 +2296,16 @@ flow_divert_handle_connect_result(struct flow_divert_pcb *fd_cb, mbuf_t packet, 
 	FDLOCK(fd_cb);
 	if (fd_cb->so != NULL) {
 		struct inpcb                            *inp = NULL;
-		struct ifnet                            *ifp = NULL;
 		struct flow_divert_group        *old_group;
 		struct socket *so = fd_cb->so;
+		bool local_address_is_valid = false;
 
 		socket_lock(so, 0);
+
+		if (!(so->so_flags & SOF_FLOW_DIVERT)) {
+			FDLOG0(LOG_NOTICE, fd_cb, "socket is not attached any more, ignoring connect result");
+			goto done;
+		}
 
 		if (SOCK_TYPE(so) == SOCK_STREAM && !(so->so_state & SS_ISCONNECTING)) {
 			FDLOG0(LOG_ERR, fd_cb, "TCP socket is not in the connecting state, ignoring connect result");
@@ -2233,12 +2321,27 @@ flow_divert_handle_connect_result(struct flow_divert_pcb *fd_cb, mbuf_t packet, 
 		if (flow_divert_is_sockaddr_valid(&(local_endpoint.sa))) {
 			if (local_endpoint.sa.sa_family == AF_INET) {
 				local_endpoint.sa.sa_len = sizeof(struct sockaddr_in);
+				if ((inp->inp_vflag & INP_IPV4) && local_endpoint.sin.sin_addr.s_addr != INADDR_ANY) {
+					local_address_is_valid = true;
+					fd_cb->local_endpoint = local_endpoint;
+					inp->inp_laddr.s_addr = INADDR_ANY;
+				} else {
+					fd_cb->local_endpoint.sin.sin_port = local_endpoint.sin.sin_port;
+				}
 			} else if (local_endpoint.sa.sa_family == AF_INET6) {
 				local_endpoint.sa.sa_len = sizeof(struct sockaddr_in6);
+				if ((inp->inp_vflag & INP_IPV6) && !IN6_IS_ADDR_UNSPECIFIED(&local_endpoint.sin6.sin6_addr)) {
+					local_address_is_valid = true;
+					fd_cb->local_endpoint = local_endpoint;
+					inp->in6p_laddr = sa6_any.sin6_addr;
+				} else {
+					fd_cb->local_endpoint.sin6.sin6_port = local_endpoint.sin6.sin6_port;
+				}
 			}
-			fd_cb->local_endpoint = local_endpoint;
-			flow_divert_set_local_endpoint(fd_cb, &(local_endpoint.sa), (SOCK_TYPE(so) == SOCK_DGRAM));
 		}
+
+		flow_divert_scope(fd_cb, out_if_index, !local_address_is_valid);
+		flow_divert_set_local_endpoint(fd_cb, &(fd_cb->local_endpoint.sa));
 
 		if (flow_divert_is_sockaddr_valid(&(remote_endpoint.sa)) && SOCK_TYPE(so) == SOCK_STREAM) {
 			if (remote_endpoint.sa.sa_family == AF_INET) {
@@ -2269,22 +2372,6 @@ flow_divert_handle_connect_result(struct flow_divert_pcb *fd_cb, mbuf_t packet, 
 				FDLOG(LOG_ERR, fd_cb, "Failed to allocate a buffer of size %u to hold the application data from the connect result", app_data_length);
 			}
 		}
-
-		ifnet_head_lock_shared();
-		if (out_if_index > 0 && out_if_index <= if_index) {
-			ifp = ifindex2ifnet[out_if_index];
-		}
-
-		if (ifp != NULL) {
-			if (inp->inp_vflag & INP_IPV4) {
-				inp->inp_last_outifp = ifp;
-			} else if (inp->inp_vflag & INP_IPV6) {
-				inp->in6p_last_outifp = ifp;
-			}
-		} else {
-			error = EINVAL;
-		}
-		ifnet_head_done();
 
 		if (error) {
 			goto set_socket_state;
@@ -2398,6 +2485,11 @@ flow_divert_handle_close(struct flow_divert_pcb *fd_cb, mbuf_t packet, int offse
 	if (fd_cb->so != NULL) {
 		socket_lock(fd_cb->so, 0);
 
+		if (!(fd_cb->so->so_flags & SOF_FLOW_DIVERT)) {
+			FDLOG0(LOG_NOTICE, fd_cb, "socket is not attached any more, ignoring close from provider");
+			goto done;
+		}
+
 		fd_cb->so->so_error = (uint16_t)ntohl(close_error);
 
 		flow_divert_update_closed_state(fd_cb, how, TRUE);
@@ -2410,7 +2502,7 @@ flow_divert_handle_close(struct flow_divert_pcb *fd_cb, mbuf_t packet, int offse
 		} else if (how == SHUT_WR) {
 			socantsendmore(fd_cb->so);
 		}
-
+done:
 		socket_unlock(fd_cb->so, 0);
 	}
 	FDUNLOCK(fd_cb);
@@ -2456,6 +2548,11 @@ flow_divert_handle_data(struct flow_divert_pcb *fd_cb, mbuf_t packet, size_t off
 		boolean_t append_success = FALSE;
 
 		socket_lock(fd_cb->so, 0);
+
+		if (!(fd_cb->so->so_flags & SOF_FLOW_DIVERT)) {
+			FDLOG0(LOG_NOTICE, fd_cb, "socket is not attached any more, ignoring inbound data");
+			goto done;
+		}
 
 		if (sbspace(&fd_cb->so->so_rcv) == 0) {
 			error = ENOBUFS;
@@ -2574,8 +2671,15 @@ flow_divert_handle_read_notification(struct flow_divert_pcb *fd_cb, mbuf_t packe
 	FDLOCK(fd_cb);
 	if (fd_cb->so != NULL) {
 		socket_lock(fd_cb->so, 0);
+
+		if (!(fd_cb->so->so_flags & SOF_FLOW_DIVERT)) {
+			FDLOG0(LOG_NOTICE, fd_cb, "socket is not attached any more, ignoring read notification");
+			goto done;
+		}
+
 		fd_cb->send_window += ntohl(read_count);
 		flow_divert_send_buffered_data(fd_cb, FALSE);
+done:
 		socket_unlock(fd_cb->so, 0);
 	}
 	FDUNLOCK(fd_cb);
@@ -2655,25 +2759,14 @@ flow_divert_handle_properties_update(struct flow_divert_pcb *fd_cb, mbuf_t packe
 	if (fd_cb->so != NULL) {
 		socket_lock(fd_cb->so, 0);
 
+		if (!(fd_cb->so->so_flags & SOF_FLOW_DIVERT)) {
+			FDLOG0(LOG_NOTICE, fd_cb, "socket is not attached any more, ignoring properties update");
+			goto done;
+		}
+
 		if (out_if_index > 0) {
-			struct inpcb *inp = NULL;
-			struct ifnet *ifp = NULL;
-
-			inp = sotoinpcb(fd_cb->so);
-
-			ifnet_head_lock_shared();
-			if (out_if_index <= if_index) {
-				ifp = ifindex2ifnet[out_if_index];
-			}
-
-			if (ifp != NULL) {
-				if (inp->inp_vflag & INP_IPV4) {
-					inp->inp_last_outifp = ifp;
-				} else if (inp->inp_vflag & INP_IPV6) {
-					inp->in6p_last_outifp = ifp;
-				}
-			}
-			ifnet_head_done();
+			flow_divert_scope(fd_cb, out_if_index, true);
+			flow_divert_set_local_endpoint(fd_cb, &(fd_cb->local_endpoint.sa));
 		}
 
 		if (app_data_length > 0) {
@@ -2695,7 +2788,7 @@ flow_divert_handle_properties_update(struct flow_divert_pcb *fd_cb, mbuf_t packe
 				FDLOG(LOG_ERR, fd_cb, "Failed to allocate a buffer of size %u to hold the application data from the properties update", app_data_length);
 			}
 		}
-
+done:
 		socket_unlock(fd_cb->so, 0);
 	}
 	FDUNLOCK(fd_cb);
@@ -3336,6 +3429,13 @@ flow_divert_connect_out_internal(struct socket *so, struct sockaddr *to, proc_t 
 			goto done;
 		}
 
+		if (SOCK_TYPE(so) == SOCK_STREAM || /* TCP or */
+		    !implicit || /* connect() was called or */
+		    ((inp->inp_vflag & INP_IPV6) && !IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_laddr)) || /* local address is not un-specified */
+		    ((inp->inp_vflag & INP_IPV4) && inp->inp_laddr.s_addr != INADDR_ANY)) {
+			fd_cb->flags |= FLOW_DIVERT_SHOULD_SET_LOCAL_ADDR;
+		}
+
 		error = flow_divert_create_connect_packet(fd_cb, to, so, p, &connect_packet);
 		if (error) {
 			goto done;
@@ -3343,7 +3443,7 @@ flow_divert_connect_out_internal(struct socket *so, struct sockaddr *to, proc_t 
 
 		if (!implicit || SOCK_TYPE(so) == SOCK_STREAM) {
 			flow_divert_set_remote_endpoint(fd_cb, to);
-			flow_divert_set_local_endpoint(fd_cb, &(fd_cb->local_endpoint.sa), false);
+			flow_divert_set_local_endpoint(fd_cb, &(fd_cb->local_endpoint.sa));
 		}
 
 		if (implicit) {
@@ -3370,7 +3470,7 @@ flow_divert_connect_out_internal(struct socket *so, struct sockaddr *to, proc_t 
 		fd_cb->flags |= FLOW_DIVERT_CONNECT_STARTED;
 	}
 
-	if (SOCK_TYPE(so) == SOCK_DGRAM) {
+	if (SOCK_TYPE(so) == SOCK_DGRAM && !(fd_cb->flags & FLOW_DIVERT_HAS_TOKEN)) {
 		soisconnected(so);
 	} else {
 		soisconnecting(so);
@@ -3520,11 +3620,6 @@ flow_divert_data_out(struct socket *so, int flags, mbuf_t data, struct sockaddr 
 		error = flow_divert_connect_out_internal(so, to, p, true);
 		if (error) {
 			goto done;
-		}
-
-		if (so->so_flags1 & SOF1_DATA_IDEMPOTENT) {
-			/* Open up the send window so that the data will get sent right away */
-			fd_cb->send_window = (uint32_t)mbuf_pkthdr_len(data);
 		}
 	} else {
 		error = flow_divert_check_no_cellular(fd_cb) ||
@@ -3798,6 +3893,8 @@ flow_divert_token_set(struct socket *so, struct sockopt *sopt)
 
 		fd_cb->connect_token = token;
 		token = NULL;
+
+		fd_cb->flags |= FLOW_DIVERT_HAS_TOKEN;
 	}
 
 	if (hmac_error == 0) {

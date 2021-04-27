@@ -93,9 +93,16 @@ extern void ipc_task_reset(
 extern void ipc_task_terminate(
 	task_t          task);
 
+__options_decl(ipc_thread_init_options_t, uint32_t, {
+	IPC_THREAD_INIT_NONE      = 0x00,
+	IPC_THREAD_INIT_PINNED    = 0x01,
+	IPC_THREAD_INIT_IMMOVABLE = 0x02,
+});
+
 /* Initialize a thread's IPC state */
 extern void ipc_thread_init(
-	thread_t        thread);
+	thread_t        thread,
+	ipc_thread_init_options_t options);
 
 extern void ipc_thread_init_exc_actions(
 	thread_t        thread);
@@ -168,6 +175,10 @@ extern task_read_t convert_port_to_task_read(
 extern task_t convert_port_to_task(
 	ipc_port_t      port);
 
+/* Convert from a port to a pinned task */
+extern task_t convert_port_to_task_pinned(
+	ipc_port_t      port);
+
 extern task_t
 convert_port_to_task_with_exec_token(
 	ipc_port_t              port,
@@ -181,9 +192,6 @@ extern task_read_t port_name_to_task_read(
 	mach_port_name_t name);
 
 extern task_read_t port_name_to_task_read_no_eval(
-	mach_port_name_t name);
-
-extern task_inspect_t port_name_to_task_inspect(
 	mach_port_name_t name);
 
 extern task_t port_name_to_task_name(
@@ -253,5 +261,11 @@ extern void space_read_deallocate(
 
 extern void space_inspect_deallocate(
 	ipc_space_inspect_t     space);
+
+#if MACH_KERNEL_PRIVATE
+extern void ipc_thread_port_unpin(
+	ipc_port_t port,
+	bool check_bit);
+#endif
 
 #endif  /* _KERN_IPC_TT_H_ */

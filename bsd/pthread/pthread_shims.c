@@ -512,6 +512,7 @@ static const struct pthread_callbacks_s pthread_callbacks = {
 	.ipc_port_copyout_send = ipc_port_copyout_send,
 	.task_get_ipcspace = get_task_ipcspace,
 	.vm_map_page_info = vm_map_page_info,
+	.ipc_port_copyout_send_pinned = ipc_port_copyout_send_pinned,
 	.thread_set_wq_state32 = thread_set_wq_state32,
 #if !defined(__arm__)
 	.thread_set_wq_state64 = thread_set_wq_state64,
@@ -535,11 +536,16 @@ static const struct pthread_callbacks_s pthread_callbacks = {
 	.semaphore_signal_internal_trap = semaphore_signal_internal_trap,
 	.current_map = _current_map,
 	.thread_create = thread_create,
+	/* should be removed once rdar://70892168 lands */
+	.thread_create_pinned = thread_create_pinned,
+	.thread_create_immovable = thread_create_immovable,
+	.thread_terminate_pinned = thread_terminate_pinned,
 	.thread_resume = thread_resume,
 
 	.kevent_workq_internal = kevent_workq_internal,
 
 	.convert_thread_to_port = convert_thread_to_port,
+	.convert_thread_to_port_pinned = convert_thread_to_port_pinned,
 
 	.proc_get_stack_addr_hint = proc_get_stack_addr_hint,
 	.proc_set_stack_addr_hint = proc_set_stack_addr_hint,

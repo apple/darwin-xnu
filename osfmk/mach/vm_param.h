@@ -242,7 +242,7 @@ extern uint64_t         max_mem;                /* 64-bit size of memory - limit
  * When we need to allocate a chunk of anonymous memory over that size,
  * we have to allocate more than one chunk.
  */
-#define ANON_MAX_SIZE   0xFFFFF000ULL
+#define ANON_MAX_SIZE   ((1ULL << 32) - PAGE_SIZE)
 /*
  * Work-around for <rdar://problem/6626493>
  * Break large anonymous memory areas into 128MB chunks to alleviate

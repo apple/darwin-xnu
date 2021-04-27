@@ -782,15 +782,19 @@ void kprintf(const char *fmt, ...);
 /*
  * Initialisation.
  */
-extern lck_grp_t *kauth_lck_grp;
 #ifdef XNU_KERNEL_PRIVATE
 __BEGIN_DECLS
+
+extern lck_grp_t kauth_lck_grp;
+
 extern void     kauth_init(void);
 extern void     kauth_cred_init(void);
+/*
+ * If you need accounting for KM_KAUTH consider using
+ * KALLOC_HEAP_DEFINE to define a view.
+ */
+#define KM_KAUTH     KHEAP_DEFAULT
 #if CONFIG_EXT_RESOLVER
-extern void     kauth_identity_init(void);
-extern void     kauth_groups_init(void);
-extern void     kauth_resolver_init(void);
 extern void     kauth_resolver_identity_reset(void);
 #endif
 __END_DECLS

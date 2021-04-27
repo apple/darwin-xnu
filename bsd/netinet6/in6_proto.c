@@ -485,9 +485,11 @@ u_int32_t       rip6_recvspace = RIPV6RCVQ;
 /* ICMPV6 parameters */
 int     icmp6_rediraccept = 1;          /* accept and process redirects */
 int     icmp6_redirtimeout = 10 * 60;   /* 10 minutes */
-int     icmp6errppslim = 500;           /* 500 packets per second */
+uint32_t     icmp6errppslim = 500;           /* 500 packets per second */
+uint32_t     icmp6errppslim_random_incr = 500; /* We further randomize icmp6errppslim
+                                                *  with this during icmpv6 initialization*/
 int     icmp6rappslim = 10;             /* 10 packets per second */
-int     icmp6_nodeinfo = 3;             /* enable/disable NI response */
+int     icmp6_nodeinfo = 0;             /* enable/disable NI response */
 
 /* UDP on IP6 parameters */
 int     udp6_sendspace = 9216;          /* really max datagram size */
@@ -749,6 +751,8 @@ SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_NODEINFO,
     nodeinfo, CTLFLAG_RW | CTLFLAG_LOCKED, &icmp6_nodeinfo, 0, "");
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ERRPPSLIMIT,
     errppslimit, CTLFLAG_RW | CTLFLAG_LOCKED, &icmp6errppslim, 0, "");
+SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ERRPPSLIMIT_RANDOM_INCR,
+    errppslimit_random_incr, CTLFLAG_RW | CTLFLAG_LOCKED, &icmp6errppslim_random_incr, 0, "");
 SYSCTL_INT(_net_inet6_icmp6, OID_AUTO,
     rappslimit, CTLFLAG_RW | CTLFLAG_LOCKED, &icmp6rappslim, 0, "");
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ND6_DEBUG,

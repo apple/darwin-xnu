@@ -37,6 +37,7 @@
 #include <kern/ipc_tt.h>
 #include <kern/kalloc.h>
 #include <vm/vm_protos.h>
+#include <kdp/kdp_dyld.h>
 
 kern_return_t
 mach_port_get_attributes(
@@ -45,6 +46,8 @@ mach_port_get_attributes(
 	int                     flavor,
 	mach_port_info_t        info,
 	mach_msg_type_number_t  *count);
+
+extern lck_mtx_t g_dyldinfo_mtx;
 
 int
 _kernelrpc_mach_vm_allocate_trap(struct _kernelrpc_mach_vm_allocate_trap_args *args)
@@ -281,7 +284,7 @@ _kernelrpc_mach_port_insert_right_trap(struct _kernelrpc_mach_port_insert_right_
 	}
 
 	rv = ipc_object_copyin(task->itk_space, args->poly, args->polyPoly,
-	    (ipc_object_t *)&port, 0, NULL, IPC_KMSG_FLAGS_ALLOW_IMMOVABLE_SEND);
+	    (ipc_object_t *)&port, 0, NULL, IPC_OBJECT_COPYIN_FLAGS_ALLOW_IMMOVABLE_SEND);
 	if (rv != KERN_SUCCESS) {
 		goto done;
 	}
@@ -302,7 +305,7 @@ done:
 int
 _kernelrpc_mach_port_get_attributes_trap(struct _kernelrpc_mach_port_get_attributes_args *args)
 {
-	task_inspect_t task = port_name_to_task_read_no_eval(args->target);
+	task_read_t task = port_name_to_task_read_no_eval(args->target);
 	int rv = MACH_SEND_INVALID_DEST;
 	mach_msg_type_number_t count;
 
@@ -538,10 +541,8 @@ _kernelrpc_mach_port_request_notification_trap(
 		// thread-argument-passing and its value should not be garbage
 		current_thread()->ith_knote = ITH_KNOTE_NULL;
 		rv = ipc_object_copyout(task->itk_space, ip_to_object(previous),
-		    MACH_MSG_TYPE_PORT_SEND_ONCE, NULL, NULL, &previous_name);
+		    MACH_MSG_TYPE_PORT_SEND_ONCE, IPC_OBJECT_COPYOUT_FLAGS_NONE, NULL, NULL, &previous_name);
 		if (rv != KERN_SUCCESS) {
-			ipc_object_destroy(ip_to_object(previous),
-			    MACH_MSG_TYPE_PORT_SEND_ONCE);
 			goto done;
 		}
 	}
@@ -663,5 +664,189 @@ done:
 	}
 
 	ipc_voucher_release(voucher);
+	return kr;
+}
+
+/*
+ * Mach Trap: task_dyld_process_info_notify_get_trap
+ *
+ * Return an array of active dyld notifier port names for current_task(). User
+ * is responsible for allocating the memory for the mach port names array
+ * and deallocating the port names inside the array returned.
+ *
+ * Does not consume any reference.
+ *
+ * Args:
+ *     names_addr: Address for mach port names array.          (In param only)
+ *     names_count_addr: Number of active dyld notifier ports. (In-Out param)
+ *         In:  Number of slots available for copyout in caller
+ *         Out: Actual number of ports copied out
+ *
+ * Returns:
+ *
+ *     KERN_SUCCESS: A valid namesCnt is returned. (Can be zero)
+ *     KERN_INVALID_ARGUMENT: Arguments are invalid.
+ *     KERN_MEMORY_ERROR: Memory copyio operations failed.
+ *     KERN_NO_SPACE: User allocated memory for port names copyout is insufficient.
+ *
+ *     Other error code see task_info().
+ */
+kern_return_t
+task_dyld_process_info_notify_get_trap(struct task_dyld_process_info_notify_get_trap_args *args)
+{
+	struct task_dyld_info dyld_info;
+	mach_msg_type_number_t info_count = TASK_DYLD_INFO_COUNT;
+	mach_port_name_t copyout_names[DYLD_MAX_PROCESS_INFO_NOTIFY_COUNT];
+	ipc_port_t copyout_ports[DYLD_MAX_PROCESS_INFO_NOTIFY_COUNT];
+	ipc_port_t release_ports[DYLD_MAX_PROCESS_INFO_NOTIFY_COUNT];
+	uint32_t copyout_count = 0, release_count = 0, active_count = 0;
+	mach_vm_address_t ports_addr; /* a user space address */
+	mach_port_name_t new_name;
+	natural_t user_names_count = 0;
+	ipc_port_t sright;
+	kern_return_t kr;
+	ipc_port_t *portp;
+	ipc_entry_t entry;
+
+	if ((mach_port_name_array_t)args->names_addr == NULL || (natural_t *)args->names_count_addr == NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	kr = copyin((vm_map_address_t)args->names_count_addr, &user_names_count, sizeof(natural_t));
+	if (kr) {
+		return KERN_MEMORY_FAILURE;
+	}
+
+	if (user_names_count == 0) {
+		return KERN_NO_SPACE;
+	}
+
+	kr = task_info(current_task(), TASK_DYLD_INFO, (task_info_t)&dyld_info, &info_count);
+	if (kr) {
+		return kr;
+	}
+
+	if (dyld_info.all_image_info_format == TASK_DYLD_ALL_IMAGE_INFO_32) {
+		ports_addr = (mach_vm_address_t)(dyld_info.all_image_info_addr +
+		    offsetof(struct user32_dyld_all_image_infos, notifyMachPorts));
+	} else {
+		ports_addr = (mach_vm_address_t)(dyld_info.all_image_info_addr +
+		    offsetof(struct user64_dyld_all_image_infos, notifyMachPorts));
+	}
+
+	lck_mtx_lock(&g_dyldinfo_mtx);
+	itk_lock(current_task());
+
+	if (current_task()->itk_dyld_notify == NULL) {
+		itk_unlock(current_task());
+		(void)copyoutmap_atomic32(current_task()->map, MACH_PORT_NULL, (vm_map_address_t)ports_addr); /* reset magic */
+		lck_mtx_unlock(&g_dyldinfo_mtx);
+
+		kr = copyout(&copyout_count, (vm_map_address_t)args->names_count_addr, sizeof(natural_t));
+		return kr ? KERN_MEMORY_ERROR : KERN_SUCCESS;
+	}
+
+	for (int slot = 0; slot < DYLD_MAX_PROCESS_INFO_NOTIFY_COUNT; slot++) {
+		portp = &current_task()->itk_dyld_notify[slot];
+		if (*portp == IPC_PORT_NULL) {
+			continue;
+		} else {
+			sright = ipc_port_copy_send(*portp);
+			if (IP_VALID(sright)) {
+				copyout_ports[active_count++] = sright; /* donates */
+				sright = IPC_PORT_NULL;
+			} else {
+				release_ports[release_count++] = *portp; /* donates */
+				*portp = IPC_PORT_NULL;
+			}
+		}
+	}
+
+	task_dyld_process_info_update_helper(current_task(), active_count,
+	    (vm_map_address_t)ports_addr, release_ports, release_count);
+	/* itk_lock, g_dyldinfo_mtx are unlocked upon return */
+
+	for (int i = 0; i < active_count; i++) {
+		sright = copyout_ports[i]; /* donates */
+		copyout_ports[i] = IPC_PORT_NULL;
+
+		assert(IP_VALID(sright));
+		ip_reference(sright);
+		/*
+		 * Below we consume each send right in copyout_ports, and if copyout_send
+		 * succeeds, replace it with a port ref; otherwise release the port ref.
+		 *
+		 * We can reuse copyout_ports array for this purpose since
+		 * copyout_count <= active_count.
+		 */
+		new_name = ipc_port_copyout_send(sright, current_space()); /* consumes */
+		if (MACH_PORT_VALID(new_name)) {
+			copyout_names[copyout_count] = new_name;
+			copyout_ports[copyout_count] = sright; /* now holds port ref */
+			copyout_count++;
+		} else {
+			ip_release(sright);
+		}
+	}
+
+	assert(copyout_count <= active_count);
+
+	if (user_names_count < copyout_count) {
+		kr = KERN_NO_SPACE;
+		goto copyout_failed;
+	}
+
+	/* copyout to caller's local copy */
+	kr = copyout(copyout_names, (vm_map_address_t)args->names_addr,
+	    copyout_count * sizeof(mach_port_name_t));
+	if (kr) {
+		kr = KERN_MEMORY_ERROR;
+		goto copyout_failed;
+	}
+
+	kr = copyout(&copyout_count, (vm_map_address_t)args->names_count_addr, sizeof(natural_t));
+	if (kr) {
+		kr = KERN_MEMORY_ERROR;
+		goto copyout_failed;
+	}
+
+	/* now, release port refs on copyout_ports */
+	for (int i = 0; i < copyout_count; i++) {
+		sright = copyout_ports[i];
+		assert(IP_VALID(sright));
+		ip_release(sright);
+	}
+
+	return KERN_SUCCESS;
+
+
+copyout_failed:
+	/*
+	 * No locks are held beyond this point.
+	 *
+	 * Release port refs on copyout_ports, and deallocate ports that we copied out
+	 * earlier.
+	 */
+	for (int i = 0; i < copyout_count; i++) {
+		sright = copyout_ports[i];
+		assert(IP_VALID(sright));
+
+		if (ipc_right_lookup_write(current_space(), copyout_names[i], &entry)) {
+			/* userspace has deallocated the name we copyout */
+			ip_release(sright);
+			continue;
+		}
+		/* space is locked and active */
+		if (entry->ie_object == ip_to_object(sright) ||
+		    IE_BITS_TYPE(entry->ie_bits) == MACH_PORT_TYPE_DEAD_NAME) {
+			(void)ipc_right_dealloc(current_space(), copyout_names[i], entry); /* unlocks space */
+		} else {
+			is_write_unlock(current_space());
+		}
+
+		/* space is unlocked */
+		ip_release(sright);
+	}
+
 	return kr;
 }

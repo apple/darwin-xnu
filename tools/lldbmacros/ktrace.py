@@ -2,7 +2,9 @@ from xnu import *
 from utils import *
 from core.lazytarget import *
 from misc import *
+from kcdata import kcdata_item_iterator, KCObject, GetTypeForName, KCCompressedBufferObject
 from collections import namedtuple
+import heapq
 
 # From the defines in bsd/sys/kdebug.h:
 
@@ -261,11 +263,96 @@ def ShowKtrace(cmd_args=None):
     print GetKperfStatus()
 
 
+class KDEvent(object):
+    """
+    Wrapper around kevent pointer that handles sorting logic.
+    """
+    def __init__(self, timestamp, kevent):
+        self.kevent = kevent
+        self.timestamp = timestamp
+
+    def get_kevent(self):
+        return self.kevent
+
+    def __eq__(self, other):
+        return self.timestamp == other.timestamp
+
+    def __lt__(self, other):
+        return self.timestamp < other.timestamp
+
+    def __gt__(self, other):
+        return self.timestamp > other.timestamp
+
+
 class KDCPU(object):
-    def __init__(self, store, curidx):
-        self.store = store
-        self.curidx = curidx
-        self.oldest_time = None
+    """
+    Represents all events from a single CPU.
+    """
+    def __init__(self, cpuid):
+        self.cpuid = cpuid
+        self.iter_store = None
+
+        kdstoreinfo = kern.globals.kdbip[cpuid]
+        self.kdstorep = kdstoreinfo.kd_list_head
+
+        if self.kdstorep.raw == xnudefines.KDS_PTR_NULL:
+            # Returns an empty iterrator. It will immediatelly stop at
+            # first call to __next__().
+            return
+
+        self.iter_store = self.get_kdstore(self.kdstorep)
+
+        # XXX Doesn't have the same logic to avoid un-mergeable events
+        #     (respecting barrier_min and bufindx) as the C code.
+
+        self.iter_idx = self.iter_store.kds_readlast
+
+    def get_kdstore(self, kdstorep):
+        """
+        See POINTER_FROM_KDSPTR.
+        """
+        buf = kern.globals.kd_bufs[kdstorep.buffer_index]
+        return addressof(buf.kdsb_addr[kdstorep.offset])
+
+    # Event iterator implementation returns KDEvent instance
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        # This CPU is out of events
+        if self.iter_store is None:
+            raise StopIteration
+
+        if self.iter_idx == self.iter_store.kds_bufindx:
+            self.iter_store = None
+            raise StopIteration
+
+        keventp = addressof(self.iter_store.kds_records[self.iter_idx])
+        timestamp = unsigned(keventp.timestamp)
+
+        # check for writer overrun
+        if timestamp < self.iter_store.kds_timestamp:
+            raise StopIteration
+
+        # Advance iterator
+        self.iter_idx += 1
+
+        if self.iter_idx == xnudefines.EVENTS_PER_STORAGE_UNIT:
+            snext = self.iter_store.kds_next
+            if snext.raw == xnudefines.KDS_PTR_NULL:
+                # Terminate iteration in next loop. Current element is the
+                # last one in this CPU buffer.
+                self.iter_store = None
+            else:
+                self.iter_store = self.get_kdstore(snext)
+                self.iter_idx = self.iter_store.kds_readlast
+
+        return KDEvent(timestamp, keventp)
+
+    # Python 2 compatibility
+    def next(self):
+        return self.__next__()
 
 
 def IterateKdebugEvents():
@@ -273,17 +360,6 @@ def IterateKdebugEvents():
     Yield events from the in-memory kdebug trace buffers.
     """
     ctrl = kern.globals.kd_ctrl_page
-
-    def get_kdstore(kdstorep):
-        """
-        See POINTER_FROM_KDSPTR.
-        """
-        buf = kern.globals.kd_bufs[kdstorep.buffer_index]
-        return addressof(buf.kdsb_addr[kdstorep.offset])
-
-    def get_kdbuf_timestamp(kdbuf):
-        time_cpu = kdbuf.timestamp
-        return unsigned(time_cpu)
 
     if (ctrl.kdebug_flags & xnudefines.KDBG_BFINIT) == 0:
         return
@@ -294,67 +370,11 @@ def IterateKdebugEvents():
         # TODO Yield a wrap event with the barrier_min timestamp.
         pass
 
-    # Set up CPU state for merging events.
-    ncpus = ctrl.kdebug_cpus
-    cpus = []
-    for cpu in range(ncpus):
-        kdstoreinfo = kern.globals.kdbip[cpu]
-        storep = kdstoreinfo.kd_list_head
-        store = None
-        curidx = 0
-        if storep.raw != xnudefines.KDS_PTR_NULL:
-            store = get_kdstore(storep)
-            curidx = store.kds_readlast
-        # XXX Doesn't have the same logic to avoid un-mergeable events
-        #     (respecting barrier_min and bufindx) as the C code.
+    # Merge sort all events from all CPUs.
+    cpus = [KDCPU(cpuid) for cpuid in range(ctrl.kdebug_cpus)]
 
-        cpus.append(KDCPU(store, curidx))
-
-    while True:
-        earliest_time = 0xffffffffffffffff
-        min_cpu = None
-        for cpu in cpus:
-            if not cpu.store:
-                continue
-
-            # Check for overrunning the writer, which also indicates the CPU is
-            # out of events.
-            if cpu.oldest_time:
-                timestamp = cpu.oldest_time
-            else:
-                timestamp = get_kdbuf_timestamp(
-                        addressof(cpu.store.kds_records[cpu.curidx]))
-                cpu.oldest_time = timestamp
-
-            if timestamp < cpu.store.kds_timestamp:
-                cpu.store = None
-                continue
-
-            if timestamp < earliest_time:
-                earliest_time = timestamp
-                min_cpu = cpu
-
-        # Out of events.
-        if not min_cpu:
-            return
-
-        yield min_cpu.store.kds_records[min_cpu.curidx]
-        min_cpu.oldest_time = None
-
-        min_cpu.curidx += 1
-        if min_cpu.curidx == xnudefines.EVENTS_PER_STORAGE_UNIT:
-            next = min_cpu.store.kds_next
-            if next.raw == xnudefines.KDS_PTR_NULL:
-                min_cpu.store = None
-                min_cpu.curidx = None
-            else:
-                min_cpu.store = get_kdstore(next)
-                min_cpu.curidx = min_cpu.store.kds_readlast
-
-        # This CPU is out of events.
-        if min_cpu.curidx == min_cpu.store.kds_bufindx:
-            min_cpu.store = None
-            continue
+    for event in heapq.merge(*cpus):
+        yield event.get_kevent()
 
 
 def GetKdebugEvent(event):
@@ -476,7 +496,7 @@ def SaveKdebugTrace(cmd_args=None, cmd_options={}):
                 continue
 
             event = process.ReadMemory(
-                    unsigned(addressof(event)), event_size, error)
+                    unsigned(event), event_size, error)
             file_offset += event_size
             f.write(event)
             written_nevents += 1
@@ -499,12 +519,30 @@ def SaveKdebugTrace(cmd_args=None, cmd_options={}):
         kcdata_length = unsigned(kcdata.kcd_length)
         if kcdata_addr != 0 and kcdata_length != 0:
             print('writing stackshot')
+            if verbose:
+                print('stackshot starts at offset {}'.format(file_offset))
+                print('stackshot is {} bytes long'.format(kcdata_length))
+            ssdata = process.ReadMemory(kcdata_addr, kcdata_length, error)
+            magic = struct.unpack('I', ssdata[:4])
+            if magic[0] == GetTypeForName('KCDATA_BUFFER_BEGIN_COMPRESSED'):
+                if verbose:
+                    print('found compressed stackshot')
+                iterator = kcdata_item_iterator(ssdata)
+                for item in iterator:
+                    kcdata_buffer = KCObject.FromKCItem(item)
+                    if isinstance(kcdata_buffer, KCCompressedBufferObject):
+                        kcdata_buffer.ReadItems(iterator)
+                        decompressed = kcdata_buffer.Decompress(ssdata)
+                        ssdata = decompressed
+                        kcdata_length = len(ssdata)
+                        if verbose:
+                            print(
+                                    'compressed stackshot is {} bytes long'.
+                                    format(kcdata_length))
+
             f.write(struct.pack(CHUNKHDR_PACK, SSHOT_TAG, 1, 0, kcdata_length))
             file_offset += 16
-            if verbose:
-                print('stackshot is {} bytes long'.format(kcdata_length))
-                print('stackshot starts at offset {}'.format(file_offset))
-            ssdata = process.ReadMemory(kcdata_addr, kcdata_length, error)
+
             f.write(ssdata)
             file_offset += kcdata_length
             if verbose:

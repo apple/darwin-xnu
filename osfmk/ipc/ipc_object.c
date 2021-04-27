@@ -336,7 +336,8 @@ ipc_object_alloc_dead_name(
 	}
 	/* space is write-locked */
 
-	if (ipc_right_inuse(space, name, entry)) {
+	if (ipc_right_inuse(entry)) {
+		is_write_unlock(space);
 		return KERN_NAME_EXISTS;
 	}
 
@@ -382,19 +383,9 @@ ipc_object_alloc(
 	assert(type != MACH_PORT_TYPE_NONE);
 	assert(urefs <= MACH_PORT_UREFS_MAX);
 
-	object = io_alloc(otype);
+	object = io_alloc(otype, Z_WAITOK | Z_ZERO);
 	if (object == IO_NULL) {
 		return KERN_RESOURCE_SHORTAGE;
-	}
-
-	if (otype == IOT_PORT) {
-		ipc_port_t port = ip_object_to_port(object);
-
-		bzero((char *)port, sizeof(*port));
-	} else if (otype == IOT_PORT_SET) {
-		ipc_pset_t pset = ips_object_to_pset(object);
-
-		bzero((char *)pset, sizeof(*pset));
 	}
 
 	io_lock_init(object);
@@ -451,19 +442,9 @@ ipc_object_alloc_name(
 	assert(type != MACH_PORT_TYPE_NONE);
 	assert(urefs <= MACH_PORT_UREFS_MAX);
 
-	object = io_alloc(otype);
+	object = io_alloc(otype, Z_WAITOK | Z_ZERO);
 	if (object == IO_NULL) {
 		return KERN_RESOURCE_SHORTAGE;
-	}
-
-	if (otype == IOT_PORT) {
-		ipc_port_t port = ip_object_to_port(object);
-
-		bzero((char *)port, sizeof(*port));
-	} else if (otype == IOT_PORT_SET) {
-		ipc_pset_t pset = ips_object_to_pset(object);
-
-		bzero((char *)pset, sizeof(*pset));
 	}
 
 	io_lock_init(object);
@@ -474,7 +455,8 @@ ipc_object_alloc_name(
 	}
 	/* space is write-locked */
 
-	if (ipc_right_inuse(space, name, entry)) {
+	if (ipc_right_inuse(entry)) {
+		is_write_unlock(space);
 		io_free(otype, object);
 		return KERN_NAME_EXISTS;
 	}
@@ -562,13 +544,13 @@ ipc_object_copyin_type(
 
 kern_return_t
 ipc_object_copyin(
-	ipc_space_t             space,
-	mach_port_name_t        name,
-	mach_msg_type_name_t    msgt_name,
-	ipc_object_t            *objectp,
-	mach_port_context_t     context,
-	mach_msg_guard_flags_t  *guard_flags,
-	ipc_kmsg_flags_t        kmsg_flags)
+	ipc_space_t                space,
+	mach_port_name_t           name,
+	mach_msg_type_name_t       msgt_name,
+	ipc_object_t               *objectp,
+	mach_port_context_t        context,
+	mach_msg_guard_flags_t     *guard_flags,
+	ipc_object_copyin_flags_t  copyin_flags)
 {
 	ipc_entry_t entry;
 	ipc_port_t soright;
@@ -576,11 +558,9 @@ ipc_object_copyin(
 	kern_return_t kr;
 	int assertcnt = 0;
 
-	ipc_right_copyin_flags_t irc_flags = IPC_RIGHT_COPYIN_FLAGS_DEADOK;
-	if (kmsg_flags & IPC_KMSG_FLAGS_ALLOW_IMMOVABLE_SEND) {
-		irc_flags |= IPC_RIGHT_COPYIN_FLAGS_ALLOW_IMMOVABLE_SEND;
-	}
-
+	ipc_object_copyin_flags_t irc_flags = IPC_OBJECT_COPYIN_FLAGS_ALLOW_IMMOVABLE_SEND |
+	    IPC_OBJECT_COPYIN_FLAGS_SOFT_FAIL_IMMOVABLE_SEND;
+	irc_flags = (copyin_flags & irc_flags) | IPC_OBJECT_COPYIN_FLAGS_DEADOK;
 	/*
 	 *	Could first try a read lock when doing
 	 *	MACH_MSG_TYPE_COPY_SEND, MACH_MSG_TYPE_MAKE_SEND,
@@ -685,8 +665,8 @@ ipc_object_copyin_from_kernel(
 		ip_lock(port);
 		if (ip_active(port)) {
 			assert(port->ip_srights > 0);
-			port->ip_srights++;
 		}
+		port->ip_srights++;
 		ip_reference(port);
 		ip_unlock(port);
 		break;
@@ -908,7 +888,7 @@ ipc_object_insert_send_right(
  *	Routine:	ipc_object_copyout
  *	Purpose:
  *		Copyout a capability, placing it into a space.
- *		If successful, consumes a ref for the object.
+ *		Always consumes a ref for the object.
  *	Conditions:
  *		Nothing locked.
  *	Returns:
@@ -926,12 +906,14 @@ ipc_object_copyout(
 	ipc_space_t             space,
 	ipc_object_t            object,
 	mach_msg_type_name_t    msgt_name,
+	ipc_object_copyout_flags_t flags,
 	mach_port_context_t     *context,
 	mach_msg_guard_flags_t  *guard_flags,
 	mach_port_name_t        *namep)
 {
 	struct knote *kn = current_thread()->ith_knote;
 	mach_port_name_t name;
+	ipc_port_t port = ip_object_to_port(object);
 	ipc_entry_t entry;
 	kern_return_t kr;
 
@@ -939,73 +921,98 @@ ipc_object_copyout(
 	assert(io_otype(object) == IOT_PORT);
 
 	if (ITH_KNOTE_VALID(kn, msgt_name)) {
-		filt_machport_turnstile_prepare_lazily(kn,
-		    msgt_name, ip_object_to_port(object));
+		filt_machport_turnstile_prepare_lazily(kn, msgt_name, port);
 	}
 
 	is_write_lock(space);
 
 	for (;;) {
+		ipc_port_t port_subst = IP_NULL;
+
 		if (!is_active(space)) {
 			is_write_unlock(space);
-			return KERN_INVALID_TASK;
+			kr = KERN_INVALID_TASK;
+			goto out;
 		}
 
-		if ((msgt_name != MACH_MSG_TYPE_PORT_SEND_ONCE) &&
-		    ipc_right_reverse(space, object, &name, &entry)) {
-			/* object is locked and active */
-
-			assert(entry->ie_bits & MACH_PORT_TYPE_SEND_RECEIVE);
-			break;
-		}
-
-
-		name = CAST_MACH_PORT_TO_NAME(object);
-		kr = ipc_entry_get(space, &name, &entry);
+		kr = ipc_entries_hold(space, 1);
 		if (kr != KERN_SUCCESS) {
 			/* unlocks/locks space, so must start again */
 
 			kr = ipc_entry_grow_table(space, ITS_SIZE_NONE);
 			if (kr != KERN_SUCCESS) {
-				return kr; /* space is unlocked */
+				/* space is unlocked */
+				goto out;
 			}
 			continue;
 		}
 
-		assert(IE_BITS_TYPE(entry->ie_bits) == MACH_PORT_TYPE_NONE);
-		assert(entry->ie_object == IO_NULL);
-
 		io_lock(object);
 		if (!io_active(object)) {
 			io_unlock(object);
-			ipc_entry_dealloc(space, name, entry);
 			is_write_unlock(space);
-			return KERN_INVALID_CAPABILITY;
+			kr = KERN_INVALID_CAPABILITY;
+			goto out;
 		}
 
 		/* Don't actually copyout rights we aren't allowed to */
-		if (!ip_label_check(space, ip_object_to_port(object), msgt_name)) {
+		if (!ip_label_check(space, port, msgt_name, &flags, &port_subst)) {
 			io_unlock(object);
-			ipc_entry_dealloc(space, name, entry);
 			is_write_unlock(space);
-			return KERN_INVALID_CAPABILITY;
+			assert(port_subst == IP_NULL);
+			kr = KERN_INVALID_CAPABILITY;
+			goto out;
 		}
 
-		entry->ie_object = object;
+		/* is the kolabel requesting a substitution */
+		if (port_subst != IP_NULL) {
+			/*
+			 * port is unlocked, its right consumed
+			 * space is unlocked
+			 */
+			assert(msgt_name == MACH_MSG_TYPE_PORT_SEND);
+			port = port_subst;
+			if (!IP_VALID(port)) {
+				object = IO_DEAD;
+				kr = KERN_INVALID_CAPABILITY;
+				goto out;
+			}
+
+			object = ip_to_object(port);
+			is_write_lock(space);
+			continue;
+		}
+
 		break;
 	}
 
 	/* space is write-locked and active, object is locked and active */
 
+	if ((msgt_name != MACH_MSG_TYPE_PORT_SEND_ONCE) &&
+	    ipc_right_reverse(space, object, &name, &entry)) {
+		assert(entry->ie_bits & MACH_PORT_TYPE_SEND_RECEIVE);
+	} else {
+		ipc_entry_claim(space, &name, &entry);
+
+		assert(!ipc_right_inuse(entry));
+		assert(entry->ie_object == IO_NULL);
+
+		entry->ie_object = object;
+	}
+
 	kr = ipc_right_copyout(space, name, entry,
-	    msgt_name, context, guard_flags, object);
+	    msgt_name, flags, context, guard_flags, object);
 
 	/* object is unlocked */
 	is_write_unlock(space);
 
+out:
 	if (kr == KERN_SUCCESS) {
 		*namep = name;
+	} else if (IO_VALID(object)) {
+		ipc_object_destroy(object, msgt_name);
 	}
+
 	return kr;
 }
 
@@ -1035,6 +1042,7 @@ ipc_object_copyout_name(
 	mach_msg_type_name_t    msgt_name,
 	mach_port_name_t        name)
 {
+	ipc_port_t port = ip_object_to_port(object);
 	mach_port_name_t oname;
 	ipc_entry_t oentry;
 	ipc_entry_t entry;
@@ -1054,51 +1062,47 @@ ipc_object_copyout_name(
 	}
 	/* space is write-locked and active */
 
+	io_lock(object);
+
+	/*
+	 * Don't actually copyout rights we aren't allowed to
+	 *
+	 * In particular, kolabel-ed objects do not allow callers
+	 * to pick the name they end up with.
+	 */
+	if (!io_active(object) || ip_is_kolabeled(port)) {
+		io_unlock(object);
+		if (!ipc_right_inuse(entry)) {
+			ipc_entry_dealloc(space, name, entry);
+		}
+		is_write_unlock(space);
+		return KERN_INVALID_CAPABILITY;
+	}
+
+	/* space is write-locked and active, object is locked and active */
+
 	if ((msgt_name != MACH_MSG_TYPE_PORT_SEND_ONCE) &&
 	    ipc_right_reverse(space, object, &oname, &oentry)) {
-		/* object is locked and active */
-
 		if (name != oname) {
 			io_unlock(object);
-
-			if (IE_BITS_TYPE(entry->ie_bits) == MACH_PORT_TYPE_NONE) {
+			if (!ipc_right_inuse(entry)) {
 				ipc_entry_dealloc(space, name, entry);
 			}
-
 			is_write_unlock(space);
 			return KERN_RIGHT_EXISTS;
 		}
 
 		assert(entry == oentry);
 		assert(entry->ie_bits & MACH_PORT_TYPE_SEND_RECEIVE);
+	} else if (ipc_right_inuse(entry)) {
+		io_unlock(object);
+		is_write_unlock(space);
+		return KERN_NAME_EXISTS;
 	} else {
-		if (ipc_right_inuse(space, name, entry)) {
-			return KERN_NAME_EXISTS;
-		}
-
-		assert(IE_BITS_TYPE(entry->ie_bits) == MACH_PORT_TYPE_NONE);
 		assert(entry->ie_object == IO_NULL);
-
-		io_lock(object);
-		if (!io_active(object)) {
-			io_unlock(object);
-			ipc_entry_dealloc(space, name, entry);
-			is_write_unlock(space);
-			return KERN_INVALID_CAPABILITY;
-		}
-
-		/* Don't actually copyout rights we aren't allowed to */
-		if (!ip_label_check(space, ip_object_to_port(object), msgt_name)) {
-			io_unlock(object);
-			ipc_entry_dealloc(space, name, entry);
-			is_write_unlock(space);
-			return KERN_INVALID_CAPABILITY;
-		}
 
 		entry->ie_object = object;
 	}
-
-	/* space is write-locked and active, object is locked and active */
 
 #if IMPORTANCE_INHERITANCE
 	/*
@@ -1108,8 +1112,6 @@ ipc_object_copyout_name(
 	 * port has assertions (and the task wants them).
 	 */
 	if (msgt_name == MACH_MSG_TYPE_PORT_RECEIVE) {
-		ipc_port_t port = ip_object_to_port(object);
-
 		if (space->is_task != TASK_NULL) {
 			task_imp = space->is_task->task_imp_base;
 			if (ipc_importance_task_is_any_receiver_type(task_imp)) {
@@ -1128,7 +1130,7 @@ ipc_object_copyout_name(
 #endif /* IMPORTANCE_INHERITANCE */
 
 	kr = ipc_right_copyout(space, name, entry,
-	    msgt_name, NULL, NULL, object);
+	    msgt_name, IPC_OBJECT_COPYOUT_FLAGS_NONE, NULL, NULL, object);
 
 	/* object is unlocked */
 	is_write_unlock(space);

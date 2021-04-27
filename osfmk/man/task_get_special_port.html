@@ -46,8 +46,8 @@ values are:
 <dt> <strong>TASK_KERNEL_PORT</strong>
 <dd>
 [task-self send right] The port used to control this task.  Used 
-to send messages that affect the task.  This is the port returned 
-by <strong>mach_task_self</strong>.
+to send messages that affect the task.  This is the movable task port and 
+different from the one returned by <strong>mach_task_self</strong> (immovable).
 <p>
 <dt> <strong>TASK_BOOTSTRAP_PORT</strong>
 <dd>

@@ -59,18 +59,18 @@ COMPONENT_LIST	= osfmk bsd libkern iokit pexpert libsa security san
 COMPONENT	= $(if $(word 2,$(subst /, ,$(RELATIVE_SOURCE_PATH))),$(word 2,$(subst /, ,$(RELATIVE_SOURCE_PATH))),$(firstword $(subst /, ,$(RELATIVE_SOURCE_PATH))))
 COMPONENT_IMPORT_LIST = $(filter-out $(COMPONENT),$(COMPONENT_LIST))
 
-MACHINE_FLAGS_ARM64_T7000 = -DARM64_BOARD_CONFIG_T7000
-MACHINE_FLAGS_ARM64_T7001 = -DARM64_BOARD_CONFIG_T7001
-MACHINE_FLAGS_ARM64_S8000 = -DARM64_BOARD_CONFIG_S8000
-MACHINE_FLAGS_ARM64_S8001 = -DARM64_BOARD_CONFIG_S8001
+MACHINE_FLAGS_ARM64_T7000 = -DARM64_BOARD_CONFIG_T7000 -mcpu=apple-h7
+MACHINE_FLAGS_ARM64_T7001 = -DARM64_BOARD_CONFIG_T7001 -mcpu=apple-h7
+MACHINE_FLAGS_ARM64_S8000 = -DARM64_BOARD_CONFIG_S8000 -mcpu=apple-h8
+MACHINE_FLAGS_ARM64_S8001 = -DARM64_BOARD_CONFIG_S8001 -mcpu=apple-h8
 MACHINE_FLAGS_ARM_T8002 = -DARM_BOARD_CONFIG_T8002
 MACHINE_FLAGS_ARM_T8004 = -DARM_BOARD_CONFIG_T8004
 MACHINE_FLAGS_ARM64_T8010 = -DARM64_BOARD_CONFIG_T8010 -mcpu=hurricane
 MACHINE_FLAGS_ARM64_T8011 = -DARM64_BOARD_CONFIG_T8011 -mcpu=hurricane
 MACHINE_FLAGS_ARM64_BCM2837 = -DARM64_BOARD_CONFIG_BCM2837
 MACHINE_FLAGS_ARM64_T8020 = -DARM64_BOARD_CONFIG_T8020 -mcpu=vortex
-MACHINE_FLAGS_ARM64_T8101 = -DARM64_BOARD_CONFIG_T8101 -D__ARM_ARCH_8_5__=1
-MACHINE_FLAGS_ARM64_T8103 = -DARM64_BOARD_CONFIG_T8103 -D__ARM_ARCH_8_5__=1
+MACHINE_FLAGS_ARM64_T8101 = -DARM64_BOARD_CONFIG_T8101 -mcpu=apple-a14
+MACHINE_FLAGS_ARM64_T8103 = -DARM64_BOARD_CONFIG_T8103 -mcpu=apple-a14
 
 
 #
@@ -575,6 +575,10 @@ LDFLAGS_KERNEL_RELEASEX86_64 = \
 	-Wl,-sectalign,__HIB,__cstring,0x1000 \
 	-Wl,-rename_section,__DATA,__const,__DATA_CONST,__const \
 	-Wl,-segprot,__DATA_CONST,r--,r-- \
+	-Wl,-rename_section,__KLD,__const,__KLDDATA,__const \
+	-Wl,-rename_section,__KLD,__cstring,__KLDDATA,__cstring \
+	-Wl,-segprot,__KLDDATA,rw-,rw- \
+	-Wl,-segprot,__KLD,r-x,r-x \
 	-Wl,-no_zero_fill_sections \
 	$(LDFLAGS_NOSTRIP_FLAG)
 
@@ -616,7 +620,11 @@ LDFLAGS_KERNEL_GENARM = \
 	-Wl,-static \
 	-Wl,-image_base,0x80001000 \
 	-Wl,-sectalign,__DATA,__const,0x1000 \
-	-Wl,-u,___udivmoddi4
+	-Wl,-u,___udivmoddi4 \
+	-Wl,-rename_section,__KLD,__const,__KLDDATA,__const \
+	-Wl,-rename_section,__KLD,__cstring,__KLDDATA,__cstring \
+	-Wl,-segprot,__KLDDATA,rw-,rw- \
+	-Wl,-segprot,__KLD,r-x,r-x
 
 LDFLAGS_KERNEL_RELEASEARM     = \
 	$(LDFLAGS_KERNEL_GENARM) \
@@ -685,6 +693,10 @@ LDFLAGS_KERNEL_GENARM64 = \
 	-Wl,-rename_section,__DATA,__auth_got,__DATA_CONST,__auth_got \
 	-Wl,-rename_section,__DATA,__const,__DATA_CONST,__const \
 	-Wl,-segprot,__DATA_CONST,r--,r-- \
+	-Wl,-rename_section,__KLD,__const,__KLDDATA,__const \
+	-Wl,-rename_section,__KLD,__cstring,__KLDDATA,__cstring \
+	-Wl,-segprot,__KLDDATA,rw-,rw- \
+	-Wl,-segprot,__KLD,r-x,r-x \
 	-Wl,-rename_section,__TEXT,__text,__TEXT_EXEC,__text \
 	-Wl,-rename_section,__TEXT,__stubs,__TEXT_EXEC,__stubs \
 	-Wl,-sectcreate,"__PLK_TEXT_EXEC",__text,/dev/null \
@@ -695,8 +707,8 @@ LDFLAGS_KERNEL_GENARM64 = \
 
 LDFLAGS_KERNEL_SEGARM64 = \
 	-Wl,-rename_section,__PPLDATA,__const,__PPLDATA_CONST,__const \
-	-Wl,-segment_order,__TEXT:__DATA_CONST:__LINKEDIT:__TEXT_EXEC:__PPLTEXT:__PPLTRAMP:__PPLDATA_CONST:__LASTDATA_CONST:__LAST:__PPLDATA:__KLD:__DATA:__HIBDATA:__BOOTDATA \
-	-Wl,-segprot,__PPLTEXT,r-x,r-x  -Wl,-segprot,__PPLTRAMP,r-x,r-x -Wl,-segprot,__PPLDATA_CONST,r--,r-- -Wl,-segprot,__LASTDATA_CONST,r--,r-- -Wl,-segprot,__LAST,r-x,r-x
+	-Wl,-segment_order,__TEXT:__DATA_CONST:__LINKEDIT:__TEXT_EXEC:__KLD:__PPLTEXT:__PPLTRAMP:__PPLDATA_CONST:__LASTDATA_CONST:__LAST:__PPLDATA:__KLDDATA:__DATA:__HIBDATA:__BOOTDATA \
+	-Wl,-segprot,__PPLTEXT,r-x,r-x  -Wl,-segprot,__PPLTRAMP,r-x,r-x -Wl,-segprot,__PPLDATA_CONST,r--,r-- -Wl,-segprot,__LASTDATA_CONST,r--,r-- -Wl,-segprot,__LAST,r-x,r-x \
 
 LDFLAGS_KERNEL_RELEASEARM64     = \
 	$(LDFLAGS_KERNEL_GENARM64) \

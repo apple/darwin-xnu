@@ -139,8 +139,8 @@ struct vnodeop_desc_fake {
 __BEGIN_DECLS
 
 int nullfs_init(struct vfsconf * vfsp);
-int nullfs_init_lck(lck_mtx_t * lck);
-int nullfs_destroy_lck(lck_mtx_t * lck);
+void nullfs_init_lck(lck_mtx_t * lck);
+void nullfs_destroy_lck(lck_mtx_t * lck);
 int nullfs_uninit(void);
 int null_nodeget(
 	struct mount * mp, struct vnode * lowervp, struct vnode * dvp, struct vnode ** vpp, struct componentname * cnp, int root);

@@ -68,9 +68,9 @@ T_DECL(test_quiescent_counter, "Validate that _COMM_PAGE_CPU_QUIESCENT_COUNTER i
 
 	T_ASSERT_GT(cpu_checkin_min_interval, 0, "kern.cpu_checkin_interval should be > 0");
 
-	uint64_t* commpage_addr = (uint64_t *)(uintptr_t)_COMM_PAGE_CPU_QUIESCENT_COUNTER;
+	COMM_PAGE_SLOT_TYPE(uint64_t) commpage_addr = COMM_PAGE_SLOT(uint64_t, CPU_QUIESCENT_COUNTER);
 
-	T_LOG("address of _COMM_PAGE_CPU_QUIESCENT_COUNTER is %p", (void*) commpage_addr);
+	T_LOG("address of _COMM_PAGE_CPU_QUIESCENT_COUNTER is %p", commpage_addr);
 
 	uint64_t counter = *commpage_addr;
 	uint64_t last_counter = counter;

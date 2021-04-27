@@ -1334,6 +1334,7 @@ void *  vfs_mntlabel(mount_t mp); /* Safe to cast to "struct label*"; returns "v
 void    vfs_setcompoundopen(mount_t mp);
 uint64_t vfs_throttle_mask(mount_t mp);
 int vfs_isswapmount(mount_t mp);
+int     vfs_context_dataless_materialization_is_prevented(vfs_context_t);
 boolean_t vfs_context_is_dataless_manipulator(vfs_context_t);
 boolean_t vfs_context_can_resolve_triggers(vfs_context_t);
 void    vfs_setmntsystem(mount_t mp);

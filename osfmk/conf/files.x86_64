@@ -94,8 +94,10 @@ osfmk/i386/ucode.c				standard
 
 osfmk/i386/vmx/vmx_cpu.c			optional config_vmx
 osfmk/i386/vmx/vmx_shims.c			optional config_vmx
+osfmk/i386/x86_hypercall.c			optional development
 
 osfmk/kern/hv_support_kext.c			optional hypervisor
+osfmk/kern/hv_io_notifier.c			optional hypervisor
 
 # DUMMIES TO FORCE GENERATION OF .h FILES
 #osfmk/OPTIONS/ln		optional ln
@@ -114,3 +116,4 @@ osfmk/x86_64/idt64.s		standard
 osfmk/i386/panic_hooks.c	standard
 osfmk/i386/panic_notify.c	standard
 osfmk/x86_64/machine_remote_time.c 		optional config_mach_bridge_send_time
+osfmk/x86_64/counter.c		standard

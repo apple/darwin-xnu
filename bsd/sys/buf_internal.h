@@ -167,7 +167,7 @@ extern vm_offset_t buf_kernel_addrperm;
 
 /*
  * These flags are kept in b_lflags...
- * buf_mtxp must be held before examining/updating
+ * buf_mtx must be held before examining/updating
  */
 #define BL_BUSY         0x00000001      /* I/O in progress. */
 #define BL_WANTED       0x00000002      /* Process wants this buffer. */
@@ -273,6 +273,7 @@ extern vm_offset_t buf_kernel_addrperm;
 #define BA_STRATEGY_TRACKED_IO  0x00002000 /* tracked by spec_strategy */
 #define BA_IO_TIER_UPGRADE      0x00004000 /* effective I/O tier is higher than BA_IO_TIER */
 #define BA_IO_SCHEDULED         0x00008000 /* buf is associated with a mount point that is io scheduled */
+#define BA_EXPEDITED_META_IO    0x00010000 /* metadata I/O which needs a high I/O tier */
 
 #define GET_BUFATTR_IO_TIER(bap)        ((bap->ba_flags & BA_IO_TIER_MASK) >> BA_IO_TIER_SHIFT)
 #define SET_BUFATTR_IO_TIER(bap, tier)                                          \

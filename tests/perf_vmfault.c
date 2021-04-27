@@ -8,6 +8,8 @@
 #include <TargetConditionals.h>
 #include <perfcheck_keys.h>
 
+#include "benchmark/helpers.h"
+
 T_GLOBAL_META(
 	T_META_NAMESPACE("xnu.vm.perf"),
 	T_META_CHECK_LEAKS(false),
@@ -74,7 +76,6 @@ static void execute_threads(void);
 static void *thread_setup(void *arg);
 static void run_test(int fault_type, int mapping_variant, size_t memsize);
 static void setup_and_run_test(int test, int threads);
-static int get_ncpu(void);
 
 /* Allocates memory using the default mmap behavior. Each VM region created is capped at 128 MB. */
 static void
@@ -408,17 +409,6 @@ setup_and_run_test(int fault_type, int threads)
 	}
 
 	T_END;
-}
-
-static int
-get_ncpu(void)
-{
-	int ncpu;
-	size_t length = sizeof(ncpu);
-
-	T_QUIET; T_ASSERT_POSIX_SUCCESS(sysctlbyname("hw.ncpu", &ncpu, &length, NULL, 0),
-	    "failed to query hw.ncpu");
-	return ncpu;
 }
 
 T_DECL(read_soft_fault,

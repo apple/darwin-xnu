@@ -64,13 +64,29 @@ SYSCTL_QUAD(_net_classq, OID_AUTO, update_interval,
     CTLFLAG_RW | CTLFLAG_LOCKED, &ifclassq_update_interval,
     "update interval in nanoseconds");
 
+#if DEBUG || DEVELOPMENT
+uint32_t ifclassq_flow_control_adv = 1; /* flow control advisory */
+SYSCTL_UINT(_net_classq, OID_AUTO, flow_control_adv,
+    CTLFLAG_RW | CTLFLAG_LOCKED, &ifclassq_flow_control_adv, 1,
+    "enable/disable flow control advisory");
+
+uint16_t fq_codel_quantum = 0;
+#endif /* DEBUG || DEVELOPMENT */
+
 void
 classq_init(void)
 {
 	_CASSERT(MBUF_TC_BE == 0);
 	_CASSERT(MBUF_SC_BE == 0);
 	_CASSERT(IFCQ_SC_MAX == MBUF_SC_MAX_CLASSES);
-
+#if DEBUG || DEVELOPMENT
+	PE_parse_boot_argn("fq_codel_quantum", &fq_codel_quantum,
+	    sizeof(fq_codel_quantum));
+	PE_parse_boot_argn("ifclassq_target_qdelay", &ifclassq_target_qdelay,
+	    sizeof(ifclassq_target_qdelay));
+	PE_parse_boot_argn("ifclassq_update_interval",
+	    &ifclassq_update_interval, sizeof(ifclassq_update_interval));
+#endif /* DEBUG || DEVELOPMENT */
 	fq_codel_init();
 }
 

@@ -107,6 +107,9 @@ struct ucred {
 		uid_t   cr_ruid;        /* real user id */
 		uid_t   cr_svuid;       /* saved user id */
 		u_short cr_ngroups;     /* number of groups in advisory list */
+#if XNU_KERNEL_PRIVATE
+		u_short __cr_padding;
+#endif
 		gid_t   cr_groups[NGROUPS];/* advisory group list */
 		gid_t   cr_rgid;        /* real group id */
 		gid_t   cr_svgid;       /* saved group id */

@@ -496,31 +496,6 @@ telemetry_take_sample(thread_t thread, uint8_t microsnapshot_flags, struct micro
 	bool user64_va = task_has_64Bit_addr(task);
 
 	/*
-	 * Find the actual [slid] address of the shared cache's UUID, and copy it in from userland.
-	 */
-	int shared_cache_uuid_valid = 0;
-	uint64_t shared_cache_base_address = 0;
-	struct _dyld_cache_header shared_cache_header = {};
-	uint64_t shared_cache_slide = 0;
-
-	/*
-	 * Don't copy in the entire shared cache header; we only need the UUID. Calculate the
-	 * offset of that one field.
-	 */
-	int sc_header_uuid_offset = (char *)&shared_cache_header.uuid - (char *)&shared_cache_header;
-	vm_shared_region_t sr = vm_shared_region_get(task);
-	if (sr != NULL) {
-		if ((vm_shared_region_start_address(sr, &shared_cache_base_address) == KERN_SUCCESS) &&
-		    (copyin(shared_cache_base_address + sc_header_uuid_offset, (char *)&shared_cache_header.uuid,
-		    sizeof(shared_cache_header.uuid)) == 0)) {
-			shared_cache_uuid_valid = 1;
-			shared_cache_slide = sr->sr_slide;
-		}
-		// vm_shared_region_get() gave us a reference on the shared region.
-		vm_shared_region_deallocate(sr);
-	}
-
-	/*
 	 * Retrieve the array of UUID's for binaries used by this task.
 	 * We reach down into DYLD's data structures to find the array.
 	 *
@@ -670,7 +645,7 @@ copytobuffer:
 	tsnap->system_time_in_terminated_threads = task->total_system_time;
 	tsnap->suspend_count = task->suspend_count;
 	tsnap->task_size = (typeof(tsnap->task_size))(get_task_phys_footprint(task) / PAGE_SIZE);
-	tsnap->faults = task->faults;
+	tsnap->faults = counter_load(&task->faults);
 	tsnap->pageins = task->pageins;
 	tsnap->cow_faults = task->cow_faults;
 	/*
@@ -713,9 +688,11 @@ copytobuffer:
 		tsnap->ss_flags |= kUser64_p;
 	}
 
-	if (shared_cache_uuid_valid) {
-		tsnap->shared_cache_slide = shared_cache_slide;
-		bcopy(shared_cache_header.uuid, tsnap->shared_cache_identifier, sizeof(shared_cache_header.uuid));
+
+	if (task->task_shared_region_slide != -1) {
+		tsnap->shared_cache_slide = task->task_shared_region_slide;
+		bcopy(task->task_shared_region_uuid, tsnap->shared_cache_identifier,
+		    sizeof(task->task_shared_region_uuid));
 	}
 
 	current_buffer->current_position += sizeof(struct task_snapshot);

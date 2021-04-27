@@ -70,7 +70,6 @@ static struct {
 	log_t           *logs;          // Protect
 	uint32_t        size;           // Protect
 	uint64_t        rdidx, wridx;   // Protect
-	decl_simple_lock_data(, loglock);
 
 	uint64_t id;
 	uint32_t option;
@@ -78,12 +77,11 @@ static struct {
 	uint32_t bytes;
 
 	queue_head_t    probes;         // Protect
+} pgtrace;
 
-	lck_grp_t       *lock_grp;
-	lck_grp_attr_t  *lock_grp_attr;
-	lck_attr_t      *lock_attr;
-	lck_mtx_t       probelock;
-} pgtrace = {};
+static LCK_GRP_DECLARE(pgtrace_lock_grp, "pgtrace_lock");
+static LCK_MTX_DECLARE(pgtrace_probelock, &pgtrace_lock_grp);
+static SIMPLE_LOCK_DECLARE(pgtrace_loglock, 0);
 
 //--------------------------------------------
 // Globals
@@ -91,14 +89,6 @@ static struct {
 void
 pgtrace_init(void)
 {
-	simple_lock_init(&pgtrace.loglock, 0);
-
-	pgtrace.lock_attr = lck_attr_alloc_init();
-	pgtrace.lock_grp_attr = lck_grp_attr_alloc_init();
-	pgtrace.lock_grp = lck_grp_alloc_init("pgtrace_lock", pgtrace.lock_grp_attr);
-
-	lck_mtx_init(&pgtrace.probelock, pgtrace.lock_grp, pgtrace.lock_attr);
-
 	queue_init(&pgtrace.probes);
 
 	pgtrace.size = RBUF_DEFAULT_SIZE;
@@ -111,7 +101,7 @@ pgtrace_clear_probe(void)
 	probe_t *p, *next;
 	queue_head_t *q = &pgtrace.probes;
 
-	lck_mtx_lock(&pgtrace.probelock);
+	lck_mtx_lock(&pgtrace_probelock);
 
 	p = (probe_t *)queue_first(q);
 	while (!queue_end(q, (queue_entry_t)p)) {
@@ -123,9 +113,7 @@ pgtrace_clear_probe(void)
 		p = next;
 	}
 
-	lck_mtx_unlock(&pgtrace.probelock);
-
-	return;
+	lck_mtx_unlock(&pgtrace_probelock);
 }
 
 int
@@ -148,9 +136,9 @@ pgtrace_add_probe(thread_t thread, vm_offset_t start, vm_offset_t end)
 		p->pmap = vm_map_pmap(thread->map);
 	}
 
-	lck_mtx_lock(&pgtrace.probelock);
+	lck_mtx_lock(&pgtrace_probelock);
 	queue_enter(q, p, probe_t *, chain);
-	lck_mtx_unlock(&pgtrace.probelock);
+	lck_mtx_unlock(&pgtrace_probelock);
 
 	return 0;
 }
@@ -169,15 +157,13 @@ pgtrace_start(void)
 
 	pgtrace.enabled = 1;
 
-	lck_mtx_lock(&pgtrace.probelock);
+	lck_mtx_lock(&pgtrace_probelock);
 
 	queue_iterate(q, p, probe_t *, chain) {
 		pmap_pgtrace_add_page(p->pmap, p->start, p->end);
 	}
 
-	lck_mtx_unlock(&pgtrace.probelock);
-
-	return;
+	lck_mtx_unlock(&pgtrace_probelock);
 }
 
 void
@@ -188,13 +174,13 @@ pgtrace_stop(void)
 
 	kprintf("%s\n", __func__);
 
-	lck_mtx_lock(&pgtrace.probelock);
+	lck_mtx_lock(&pgtrace_probelock);
 
 	queue_iterate(q, p, probe_t *, chain) {
 		pmap_pgtrace_delete_page(p->pmap, p->start, p->end);
 	}
 
-	lck_mtx_unlock(&pgtrace.probelock);
+	lck_mtx_unlock(&pgtrace_probelock);
 
 	pgtrace.enabled = 0;
 }
@@ -229,13 +215,13 @@ pgtrace_set_size(uint32_t size)
 
 	pgtrace_stop();
 
-	simple_lock(&pgtrace.loglock);
+	simple_lock(&pgtrace_loglock);
 	old_buf = pgtrace.logs;
 	old_size = pgtrace.size;
 	pgtrace.logs = new_buf;
 	pgtrace.size = new_size;
 	pgtrace.rdidx = pgtrace.wridx = 0;
-	simple_unlock(&pgtrace.loglock);
+	simple_unlock(&pgtrace_loglock);
 
 	if (old_buf) {
 		kfree(old_buf, old_size * sizeof(log_t));
@@ -247,9 +233,9 @@ pgtrace_set_size(uint32_t size)
 void
 pgtrace_clear_trace(void)
 {
-	simple_lock(&pgtrace.loglock);
+	simple_lock(&pgtrace_loglock);
 	pgtrace.rdidx = pgtrace.wridx = 0;
-	simple_unlock(&pgtrace.loglock);
+	simple_unlock(&pgtrace_loglock);
 }
 
 boolean_t
@@ -304,7 +290,7 @@ pgtrace_write_log(pgtrace_run_result_t res)
 
 	pgtrace.bytes += sizeof(log);
 
-	simple_lock(&pgtrace.loglock);
+	simple_lock(&pgtrace_loglock);
 
 	pgtrace.logs[RBUF_IDX(pgtrace.wridx, pgtrace.size - 1)] = log;
 
@@ -320,9 +306,7 @@ pgtrace_write_log(pgtrace_run_result_t res)
 		thread_wakeup(pgtrace.logs);
 	}
 
-	simple_unlock(&pgtrace.loglock);
-
-	return;
+	simple_unlock(&pgtrace_loglock);
 }
 
 // pgtrace_read_log() is in user thread
@@ -345,13 +329,13 @@ pgtrace_read_log(uint8_t *buf, uint32_t size)
 	}
 
 	ints = ml_set_interrupts_enabled(FALSE);
-	simple_lock(&pgtrace.loglock);
+	simple_lock(&pgtrace_loglock);
 
 	// Wait if ring is empty
 	if (pgtrace.rdidx == pgtrace.wridx) {
 		assert_wait(pgtrace.logs, THREAD_ABORTSAFE);
 
-		simple_unlock(&pgtrace.loglock);
+		simple_unlock(&pgtrace_loglock);
 		ml_set_interrupts_enabled(ints);
 
 		wr = thread_block(NULL);
@@ -360,7 +344,7 @@ pgtrace_read_log(uint8_t *buf, uint32_t size)
 		}
 
 		ints = ml_set_interrupts_enabled(FALSE);
-		simple_lock(&pgtrace.loglock);
+		simple_lock(&pgtrace_loglock);
 	}
 
 	// Trim the size
@@ -386,7 +370,7 @@ pgtrace_read_log(uint8_t *buf, uint32_t size)
 
 	pgtrace.rdidx += total;
 
-	simple_unlock(&pgtrace.loglock);
+	simple_unlock(&pgtrace_loglock);
 	ml_set_interrupts_enabled(ints);
 
 	return total * sizeof(log_t);
@@ -412,12 +396,10 @@ static struct {
 	decoder_t       *decoder;
 	logger_t        *logger;
 	queue_head_t    probes;
+} pgtrace;
 
-	lck_grp_t       *lock_grp;
-	lck_grp_attr_t  *lock_grp_attr;
-	lck_attr_t      *lock_attr;
-	lck_mtx_t       probelock;
-} pgtrace = {};
+static LCK_GRP_DECLARE(pgtrace_lock_grp, "pgtrace_lock");
+static LCK_MTX_DECLARE(pgtrace_probelock, &pgtrace_lock_grp);
 
 //------------------------------------
 // functions for pmap fault handler
@@ -482,12 +464,6 @@ pgtrace_init(decoder_t *decoder, logger_t *logger)
 		return EINVAL;
 	}
 
-	pgtrace.lock_attr = lck_attr_alloc_init();
-	pgtrace.lock_grp_attr = lck_grp_attr_alloc_init();
-	pgtrace.lock_grp = lck_grp_alloc_init("pgtrace_lock", pgtrace.lock_grp_attr);
-
-	lck_mtx_init(&pgtrace.probelock, pgtrace.lock_grp, pgtrace.lock_attr);
-
 	queue_init(&pgtrace.probes);
 	pgtrace.decoder = decoder;
 	pgtrace.logger = logger;
@@ -517,9 +493,9 @@ pgtrace_add_probe(thread_t thread, vm_offset_t start, vm_offset_t end)
 		p->pmap = vm_map_pmap(thread->map);
 	}
 
-	lck_mtx_lock(&pgtrace.probelock);
+	lck_mtx_lock(&pgtrace_probelock);
 	queue_enter(q, p, probe_t *, chain);
-	lck_mtx_unlock(&pgtrace.probelock);
+	lck_mtx_unlock(&pgtrace_probelock);
 
 	return 0;
 }
@@ -532,7 +508,7 @@ pgtrace_clear_probe(void)
 
 	kprintf("%s\n", __func__);
 
-	lck_mtx_lock(&pgtrace.probelock);
+	lck_mtx_lock(&pgtrace_probelock);
 
 	p = (probe_t *)queue_first(q);
 	while (!queue_end(q, (queue_entry_t)p)) {
@@ -544,9 +520,7 @@ pgtrace_clear_probe(void)
 		p = next;
 	}
 
-	lck_mtx_unlock(&pgtrace.probelock);
-
-	return;
+	lck_mtx_unlock(&pgtrace_probelock);
 }
 
 void
@@ -563,15 +537,13 @@ pgtrace_start(void)
 
 	pgtrace.active = true;
 
-	lck_mtx_lock(&pgtrace.probelock);
+	lck_mtx_lock(&pgtrace_probelock);
 
 	queue_iterate(q, p, probe_t *, chain) {
 		pmap_pgtrace_add_page(p->pmap, p->start, p->end);
 	}
 
-	lck_mtx_unlock(&pgtrace.probelock);
-
-	return;
+	lck_mtx_unlock(&pgtrace_probelock);
 }
 
 void
@@ -582,13 +554,13 @@ pgtrace_stop(void)
 
 	kprintf("%s\n", __func__);
 
-	lck_mtx_lock(&pgtrace.probelock);
+	lck_mtx_lock(&pgtrace_probelock);
 
 	queue_iterate(q, p, probe_t *, chain) {
 		pmap_pgtrace_delete_page(p->pmap, p->start, p->end);
 	}
 
-	lck_mtx_unlock(&pgtrace.probelock);
+	lck_mtx_unlock(&pgtrace_probelock);
 
 	pgtrace.active = false;
 }

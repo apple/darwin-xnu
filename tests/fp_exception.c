@@ -54,6 +54,8 @@ static volatile bool mach_exc_caught = false;
 #ifdef __arm64__
 static size_t
 exc_arithmetic_handler(
+	__unused mach_port_t task,
+	__unused mach_port_t thread,
 	exception_type_t type,
 	mach_exception_data_t codes_64)
 {

@@ -110,7 +110,9 @@
 #include <device/device_types.h>
 #include <device/device_server.h>
 
+#if     CONFIG_USER_NOTIFICATION
 #include <UserNotification/UNDReplyServer.h>
+#endif
 
 #if     CONFIG_ARCADE
 #include <mach/arcade_register_server.h>
@@ -127,6 +129,7 @@
 #include <uk_xkern/xk_uproxy_server.h>
 #endif  /* XK_PROXY */
 
+#include <kern/counter.h>
 #include <kern/ipc_tt.h>
 #include <kern/ipc_mig.h>
 #include <kern/ipc_misc.h>
@@ -143,9 +146,9 @@
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_voucher.h>
 #include <kern/sync_sema.h>
-#include <kern/counters.h>
 #include <kern/work_interval.h>
 #include <kern/suid_cred.h>
+#include <kern/task_ident.h>
 
 #if HYPERVISOR
 #include <kern/hv_support.h>
@@ -174,9 +177,6 @@ typedef struct {
 	mig_routine_t routine;
 	int size;
 	int kobjidx;
-#if     MACH_COUNTERS
-	mach_counter_t callcount;
-#endif
 } mig_hash_t;
 
 #define MAX_MIG_ENTRIES 1031
@@ -213,7 +213,9 @@ static const struct mig_subsystem *mig_e[] = {
 #ifdef VM32_SUPPORT
 	(const struct mig_subsystem *)&vm32_map_subsystem,
 #endif
+#if CONFIG_USER_NOTIFICATION
 	(const struct mig_subsystem *)&UNDReply_subsystem,
+#endif
 	(const struct mig_subsystem *)&mach_voucher_subsystem,
 	(const struct mig_subsystem *)&mach_voucher_attr_control_subsystem,
 	(const struct mig_subsystem *)&memory_entry_subsystem,
@@ -301,10 +303,6 @@ find_mig_hash_entry(int msgh_id)
 
 	if (!ptr->routine || msgh_id != ptr->num) {
 		ptr = (mig_hash_t *)0;
-	} else {
-#if     MACH_COUNTERS
-		ptr->callcount++;
-#endif
 	}
 
 	return ptr;
@@ -724,6 +722,9 @@ ipc_kobject_init_port(
 	if (options & IPC_KOBJECT_ALLOC_IMMOVABLE_SEND) {
 		port->ip_immovable_send = 1;
 	}
+	if (options & IPC_KOBJECT_ALLOC_PINNED) {
+		port->ip_pinned = 1;
+	}
 }
 
 /*
@@ -791,6 +792,42 @@ ipc_kobject_alloc_labeled_port(
 	return port;
 }
 
+static void
+ipc_kobject_subst_once_notify(mach_msg_header_t *msg)
+{
+	mach_no_senders_notification_t *notification = (void *)msg;
+	ipc_port_t port = notification->not_header.msgh_remote_port;
+
+	require_ip_active(port);
+	assert(IKOT_PORT_SUBST_ONCE == ip_kotype(port));
+
+	ip_release((ipc_port_t)ip_get_kobject(port));
+	ipc_port_dealloc_kernel(port);
+}
+
+/*
+ *	Routine:	ipc_kobject_alloc_subst_once
+ *	Purpose:
+ *		Make a port that will be substituted by the kolabel
+ *		rules once, preventing the next substitution (of its target)
+ *		to happen if any.
+ *
+ *	Returns:
+ *		A port with a send right, that will substitute to its "kobject".
+ *
+ *	Conditions:
+ *		No locks held (memory is allocated)
+ *		`target` has a refcount that this function consumes
+ */
+ipc_port_t
+ipc_kobject_alloc_subst_once(
+	ipc_port_t                  target)
+{
+	return ipc_kobject_alloc_labeled_port(target,
+	           IKOT_PORT_SUBST_ONCE, IPC_LABEL_SUBST_ONCE,
+	           IPC_KOBJECT_ALLOC_MAKE_SEND | IPC_KOBJECT_ALLOC_NSREQUEST);
+}
+
 /*
  *	Routine:	ipc_kobject_make_send_lazy_alloc_port
  *	Purpose:
@@ -820,6 +857,7 @@ ipc_kobject_make_send_lazy_alloc_port(
 	ipc_port_t              *port_store,
 	ipc_kobject_t           kobject,
 	ipc_kobject_type_t      type,
+	ipc_kobject_alloc_options_t alloc_opts,
 	boolean_t               __ptrauth_only should_ptrauth,
 	uint64_t                __ptrauth_only ptrauth_discriminator)
 {
@@ -839,7 +877,7 @@ ipc_kobject_make_send_lazy_alloc_port(
 
 	if (!IP_VALID(port)) {
 		port = ipc_kobject_alloc_port(kobject, type,
-		    IPC_KOBJECT_ALLOC_MAKE_SEND | IPC_KOBJECT_ALLOC_NSREQUEST);
+		    IPC_KOBJECT_ALLOC_MAKE_SEND | IPC_KOBJECT_ALLOC_NSREQUEST | alloc_opts);
 
 #if __has_feature(ptrauth_calls)
 		if (should_ptrauth) {
@@ -1009,40 +1047,150 @@ ipc_kobject_destroy(
 }
 
 /*
- *	Routine:	 ipc_kobject_label_check
+ *	Routine:	ipc_kobject_label_substitute_task
  *	Purpose:
- *		Check to see if the space is allowed to possess a
- *      right for the given port. In order to qualify, the
- *      space label must contain all the privileges listed
- *      in the port/kobject label.
+ *		Substitute a task control port for its immovable
+ *		equivalent when the receiver is that task.
+ *	Conditions:
+ *		Space is write locked and active.
+ *		Port is locked and active.
+ *	Returns:
+ *		- IP_NULL port if no substitution is to be done
+ *		- a valid port if a substitution needs to happen
+ */
+static ipc_port_t
+ipc_kobject_label_substitute_task(
+	ipc_space_t             space,
+	ipc_port_t              port)
+{
+	ipc_port_t subst = IP_NULL;
+	task_t task = ipc_kobject_get(port);
+
+	if (task != TASK_NULL && task == space->is_task) {
+		if ((subst = port->ip_alt_port)) {
+			return subst;
+		}
+	}
+
+	return IP_NULL;
+}
+
+/*
+ *	Routine:	ipc_kobject_label_substitute_thread
+ *	Purpose:
+ *		Substitute a thread control port for its immovable
+ *		equivalent when it belongs to the receiver task.
+ *	Conditions:
+ *		Space is write locked and active.
+ *		Port is locked and active.
+ *	Returns:
+ *		- IP_NULL port if no substitution is to be done
+ *		- a valid port if a substitution needs to happen
+ */
+static ipc_port_t
+ipc_kobject_label_substitute_thread(
+	ipc_space_t             space,
+	ipc_port_t              port)
+{
+	ipc_port_t subst = IP_NULL;
+	thread_t thread = ipc_kobject_get(port);
+
+	if (thread != THREAD_NULL && space->is_task == thread->task) {
+		if ((subst = port->ip_alt_port) != IP_NULL) {
+			return subst;
+		}
+	}
+
+	return IP_NULL;
+}
+
+/*
+ *	Routine:	ipc_kobject_label_check
+ *	Purpose:
+ *		Check to see if the space is allowed to possess
+ *		a right for the given port. In order to qualify,
+ *		the space label must contain all the privileges
+ *		listed in the port/kobject label.
  *
  *	Conditions:
  *		Space is write locked and active.
- *      Port is locked and active.
+ *		Port is locked and active.
+ *
+ *	Returns:
+ *		Whether the copyout is authorized.
+ *
+ *		If a port substitution is requested, the space is unlocked,
+ *		the port is unlocked and its "right" consumed.
+ *
+ *		As of now, substituted ports only happen for send rights.
  */
-boolean_t
+bool
 ipc_kobject_label_check(
-	ipc_space_t                   space,
-	ipc_port_t                    port,
-	__unused mach_msg_type_name_t msgt_name)
+	ipc_space_t                     space,
+	ipc_port_t                      port,
+	mach_msg_type_name_t            msgt_name,
+	ipc_object_copyout_flags_t     *flags,
+	ipc_port_t                     *subst_portp)
 {
 	ipc_kobject_label_t labelp;
+	ipc_label_t label;
 
 	assert(is_active(space));
 	assert(ip_active(port));
 
+	*subst_portp = IP_NULL;
+
 	/* Unlabled ports/kobjects are always allowed */
 	if (!ip_is_kolabeled(port)) {
-		return TRUE;
+		return true;
 	}
 
 	/* Never OK to copyout the receive right for a labeled kobject */
 	if (msgt_name == MACH_MSG_TYPE_PORT_RECEIVE) {
-		panic("ipc_kobject_label_check: attempted receive right copyout for labeled kobject");
+		panic("ipc_kobject_label_check: attempted receive right "
+		    "copyout for labeled kobject");
 	}
 
 	labelp = port->ip_kolabel;
-	return (labelp->ikol_label & space->is_label) == labelp->ikol_label;
+	label = labelp->ikol_label;
+
+	if ((*flags & IPC_OBJECT_COPYOUT_FLAGS_NO_LABEL_CHECK) == 0 &&
+	    (label & IPC_LABEL_SUBST_MASK)) {
+		ipc_port_t subst = IP_NULL;
+
+		if (msgt_name != MACH_MSG_TYPE_PORT_SEND) {
+			return false;
+		}
+
+		switch (label & IPC_LABEL_SUBST_MASK) {
+		case IPC_LABEL_SUBST_TASK:
+			subst = ipc_kobject_label_substitute_task(space, port);
+			break;
+		case IPC_LABEL_SUBST_THREAD:
+			subst = ipc_kobject_label_substitute_thread(space, port);
+			break;
+		case IPC_LABEL_SUBST_ONCE:
+			/* the next check will _not_ substitute */
+			*flags |= IPC_OBJECT_COPYOUT_FLAGS_NO_LABEL_CHECK;
+			subst = ip_get_kobject(port);
+			break;
+		default:
+			panic("unexpected label: %llx\n", label);
+		}
+
+		if (subst != IP_NULL) {
+			ip_reference(subst);
+			is_write_unlock(space);
+			ipc_port_release_send_and_unlock(port);
+			port = ipc_port_make_send(subst);
+			ip_release(subst);
+			*subst_portp = port;
+			return true;
+		}
+	}
+
+	return (label & space->is_label & IPC_LABEL_SPACE_MASK) ==
+	       (label & IPC_LABEL_SPACE_MASK);
 }
 
 boolean_t
@@ -1081,6 +1229,10 @@ ipc_kobject_notify(
 
 		case IKOT_VOUCHER_ATTR_CONTROL:
 			ipc_voucher_attr_control_notify(request_header);
+			return TRUE;
+
+		case IKOT_PORT_SUBST_ONCE:
+			ipc_kobject_subst_once_notify(request_header);
 			return TRUE;
 
 		case IKOT_SEMAPHORE:
@@ -1138,6 +1290,9 @@ ipc_kobject_notify(
 			return TRUE;
 		case IKOT_SUID_CRED:
 			suid_cred_notify(request_header);
+			return TRUE;
+		case IKOT_TASK_ID_TOKEN:
+			task_id_token_notify(request_header);
 			return TRUE;
 #if HYPERVISOR
 		case IKOT_HYPERVISOR:

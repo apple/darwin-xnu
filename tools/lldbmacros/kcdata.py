@@ -16,6 +16,10 @@ import contextlib
 import base64
 import zlib
 
+# can be removed once we move to Python3.1+
+from future.utils.surrogateescape import register_surrogateescape
+register_surrogateescape()
+
 class Globals(object):
     pass
 G = Globals()
@@ -165,6 +169,13 @@ KNOWN_TOPLEVEL_CONTAINER_TYPES = ()
 def enum(**args):
     return type('enum', (), args)
 
+#
+# Decode bytes as UTF-8, using surrogateescape if there are invalid UTF-8
+# sequences; see PEP-383
+#
+def BytesToString(b):
+    return b.decode('utf-8', errors="surrogateescape")
+
 KCSUBTYPE_TYPE = enum(KC_ST_CHAR=1, KC_ST_INT8=2, KC_ST_UINT8=3, KC_ST_INT16=4, KC_ST_UINT16=5, KC_ST_INT32=6, KC_ST_UINT32=7, KC_ST_INT64=8, KC_ST_UINT64=9)
 
 
@@ -210,7 +221,7 @@ class KCSubTypeElement(object):
     @staticmethod
     def FromBinaryTypeData(byte_data):
         (st_flag, st_type, st_offset, st_size, st_name) = struct.unpack_from('=BBHI32s', byte_data)
-        st_name = st_name.rstrip('\x00')
+        st_name = BytesToString(st_name.rstrip('\0'))
         return KCSubTypeElement(st_name, st_type, st_size, st_offset, st_flag)
 
     @staticmethod
@@ -238,7 +249,10 @@ class KCSubTypeElement(object):
         return self.totalsize
 
     def GetValueAsString(self, base_data, array_pos=0):
-        return str(self.GetValue(base_data, array_pos))
+        v = self.GetValue(base_data, array_pos)
+        if isinstance(v, bytes):
+            return BytesToString(v)
+        return str(v)
 
     def GetValue(self, base_data, array_pos=0):
         return struct.unpack_from(self.unpack_fmt, base_data[self.offset + (array_pos * self.size):])[0]
@@ -499,14 +513,14 @@ class KCObject(object):
         elif self.i_type == GetTypeForName('KCDATA_TYPE_UINT32_DESC'):
             self.is_naked_type = True
             u_d = struct.unpack_from('32sI', self.i_data)
-            self.i_name = u_d[0].strip(chr(0))
+            self.i_name = BytesToString(u_d[0].rstrip('\0'))
             self.obj = u_d[1]
             logging.info("0x%08x: %s%s" % (self.offset, INDENT(), self.i_name))
 
         elif self.i_type == GetTypeForName('KCDATA_TYPE_UINT64_DESC'):
             self.is_naked_type = True
             u_d = struct.unpack_from('32sQ', self.i_data)
-            self.i_name = u_d[0].strip(chr(0))
+            self.i_name = BytesToString(u_d[0].rstrip('\0'))
             self.obj = u_d[1]
             logging.info("0x%08x: %s%s" % (self.offset, INDENT(), self.i_name))
 
@@ -944,6 +958,7 @@ KNOWN_TYPES_COLLECTION[GetTypeForName('STACKSHOT_KCTYPE_SHAREDCACHE_LOADINFO')] 
     KCSubTypeElement('imageLoadAddress', KCSUBTYPE_TYPE.KC_ST_UINT64, 8, 0, 0),
     KCSubTypeElement('imageUUID', KCSUBTYPE_TYPE.KC_ST_UINT8, KCSubTypeElement.GetSizeForArray(16, 1), 8, 1),
     KCSubTypeElement('imageSlidBaseAddress', KCSUBTYPE_TYPE.KC_ST_UINT64, 8, 24, 0),
+    KCSubTypeElement('sharedCacheSlidFirstMapping', KCSUBTYPE_TYPE.KC_ST_UINT64, 8, 32, 0),
 ),
     'shared_cache_dyld_load_info',
     legacy_size = 0x18
@@ -1238,6 +1253,7 @@ KNOWN_TYPES_COLLECTION[GetTypeForName('STACKSHOT_KCTYPE_STACKSHOT_DURATION')] = 
     (
         KCSubTypeElement.FromBasicCtype('stackshot_duration', KCSUBTYPE_TYPE.KC_ST_UINT64, 0),
         KCSubTypeElement.FromBasicCtype('stackshot_duration_outer', KCSUBTYPE_TYPE.KC_ST_UINT64, 8),
+        KCSubTypeElement.FromBasicCtype('stackshot_duration_prior', KCSUBTYPE_TYPE.KC_ST_UINT64, 16),
     ), 'stackshot_duration', merge=True
 )
 
@@ -1759,30 +1775,6 @@ def RunCommand(bash_cmd_string, get_stderr = True):
         return (exit_code, output_str)
 
 
-parser = argparse.ArgumentParser(description="Decode a kcdata binary file.")
-parser.add_argument("-l", "--listtypes", action="store_true", required=False, default=False,
-                    help="List all known types",
-                    dest="list_known_types")
-
-parser.add_argument("-s", "--stackshot", required=False, default=False,
-                    help="Generate a stackshot report file",
-                    dest="stackshot_file")
-
-parser.add_argument("--multiple", help="look for multiple stackshots in a single file", action='store_true')
-
-parser.add_argument("-p", "--plist", required=False, default=False,
-                    help="output as plist", action="store_true")
-
-parser.add_argument("-S", "--sdk", required=False, default="", help="sdk property passed to xcrun command to find the required tools. Default is empty string.", dest="sdk")
-parser.add_argument("--pretty", default=False, action='store_true', help="make the output a little more human readable")
-parser.add_argument("--incomplete", action='store_true', help="accept incomplete data")
-parser.add_argument("kcdata_file", type=argparse.FileType('r'), help="Path to a kcdata binary file.")
-
-class VerboseAction(argparse.Action):
-    def __call__(self, parser, namespace, values, option_string=None):
-        logging.basicConfig(level=logging.INFO, stream=sys.stderr, format='%(message)s')
-parser.add_argument('-v', "--verbose", action=VerboseAction, nargs=0)
-
 @contextlib.contextmanager
 def data_from_stream(stream):
     try:
@@ -1858,7 +1850,7 @@ def prettify(data):
                 value = '%02X%02X%02X%02X-%02X%02X-%02X%02X-%02X%02X-%02X%02X%02X%02X%02X%02X' % tuple(value)
             elif 'address' in key.lower() and isinstance(value, (int, long)):
                 value = '0x%X' % value
-            elif key == 'lr':
+            elif key == 'lr' or key == 'sharedCacheSlidFirstMapping':
                 value = '0x%X' % value
             elif key == 'thread_waitinfo':
                 value = map(formatWaitInfo, value)
@@ -1876,6 +1868,30 @@ def prettify(data):
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Decode a kcdata binary file.")
+    parser.add_argument("-l", "--listtypes", action="store_true", required=False, default=False,
+                        help="List all known types",
+                        dest="list_known_types")
+
+    parser.add_argument("-s", "--stackshot", required=False, default=False,
+                        help="Generate a stackshot report file",
+                        dest="stackshot_file")
+
+    parser.add_argument("--multiple", help="look for multiple stackshots in a single file", action='store_true')
+
+    parser.add_argument("-p", "--plist", required=False, default=False,
+                        help="output as plist", action="store_true")
+
+    parser.add_argument("-S", "--sdk", required=False, default="", help="sdk property passed to xcrun command to find the required tools. Default is empty string.", dest="sdk")
+    parser.add_argument("--pretty", default=False, action='store_true', help="make the output a little more human readable")
+    parser.add_argument("--incomplete", action='store_true', help="accept incomplete data")
+    parser.add_argument("kcdata_file", type=argparse.FileType('r'), help="Path to a kcdata binary file.")
+
+    class VerboseAction(argparse.Action):
+        def __call__(self, parser, namespace, values, option_string=None):
+            logging.basicConfig(level=logging.INFO, stream=sys.stderr, format='%(message)s')
+    parser.add_argument('-v', "--verbose", action=VerboseAction, nargs=0)
+
     args = parser.parse_args()
 
     if args.multiple and args.stackshot_file:

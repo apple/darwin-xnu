@@ -282,11 +282,12 @@ kasan_init_fakestack(void)
 
 		snprintf(fakestack_names[i], 16, "fakestack.%d", i);
 		fakestack_zones[i] = zone_create_ext(fakestack_names[i], sz,
-		    ZC_NOCALLOUT | ZC_NOGC | ZC_KASAN_NOREDZONE | ZC_KASAN_NOQUARANTINE,
+		    ZC_NOCALLOUT | ZC_NOGC | ZC_NOCACHING |
+		    ZC_KASAN_NOREDZONE | ZC_KASAN_NOQUARANTINE,
 		    ZONE_ID_ANY, ^(zone_t z) {
-			zone_set_exhaustible(z, maxsz);
+			zone_set_exhaustible(z, maxsz / sz);
 		});
-		zfill(fakestack_zones[i], (int)maxsz / sz);
+		zone_fill_initially(fakestack_zones[i], maxsz / sz);
 	}
 
 	/* globally enable */

@@ -1605,44 +1605,38 @@ cfil_sock_id_from_socket(struct socket *so)
 	}
 }
 
-static bool
-cfil_socket_safe_lock(struct inpcb *inp)
-{
-	if (in_pcb_checkstate(inp, WNT_ACQUIRE, 0) != WNT_STOPUSING) {
-		socket_lock(inp->inp_socket, 1);
-		if (in_pcb_checkstate(inp, WNT_RELEASE, 1) != WNT_STOPUSING) {
-			return true;
-		}
-		socket_unlock(inp->inp_socket, 1);
-	}
-	return false;
-}
-
 /*
- * cfil_socket_safe_lock_rip -
- * This routine attempts to lock the rip socket safely.
- * The passed in ripcbinfo is assumed to be locked and must be unlocked (regardless
- * of success/failure) before calling socket_unlock().  This is to avoid double
- * locking since rip_unlock() will lock ripcbinfo if it needs to dispose inpcb when
+ * cfil_socket_safe_lock -
+ * This routine attempts to lock the socket safely.
+ *
+ * The passed in pcbinfo is assumed to be locked and must be unlocked once the
+ * inp state is safeguarded and before we attempt to lock/unlock the socket.
+ * This is to prevent getting blocked by socket_lock() while holding the pcbinfo
+ * lock, avoiding potential deadlock with other processes contending for the same
+ * resources.  This is also to avoid double locking the pcbinfo for rip sockets
+ * since rip_unlock() will lock ripcbinfo if it needs to dispose inpcb when
  * so_usecount is 0.
  */
 static bool
-cfil_socket_safe_lock_rip(struct inpcb *inp, struct inpcbinfo *pcbinfo)
+cfil_socket_safe_lock(struct inpcb *inp, struct inpcbinfo *pcbinfo)
 {
 	struct socket *so = NULL;
 
 	VERIFY(pcbinfo != NULL);
 
 	if (in_pcb_checkstate(inp, WNT_ACQUIRE, 0) != WNT_STOPUSING) {
+		// Safeguarded the inp state, unlock pcbinfo before locking socket.
+		lck_rw_done(pcbinfo->ipi_lock);
+
 		so = inp->inp_socket;
 		socket_lock(so, 1);
 		if (in_pcb_checkstate(inp, WNT_RELEASE, 1) != WNT_STOPUSING) {
-			lck_rw_done(pcbinfo->ipi_lock);
 			return true;
 		}
+	} else {
+		// Failed to safeguarded the inp state, unlock pcbinfo and abort.
+		lck_rw_done(pcbinfo->ipi_lock);
 	}
-
-	lck_rw_done(pcbinfo->ipi_lock);
 
 	if (so) {
 		socket_unlock(so, 1);
@@ -1675,10 +1669,11 @@ cfil_socket_from_sock_id(cfil_sock_id_t cfil_sock_id, bool udp_only)
 		    inp->inp_flowhash == flowhash &&
 		    (inp->inp_socket->so_gencnt & 0x0ffffffff) == gencnt &&
 		    inp->inp_socket->so_cfil != NULL) {
-			if (cfil_socket_safe_lock(inp)) {
+			if (cfil_socket_safe_lock(inp, pcbinfo)) {
 				so = inp->inp_socket;
 			}
-			break;
+			/* pcbinfo is already unlocked, we are done. */
+			goto done;
 		}
 	}
 	lck_rw_done(pcbinfo->ipi_lock);
@@ -1695,10 +1690,11 @@ find_udp:
 		    inp->inp_socket != NULL &&
 		    inp->inp_socket->so_cfil_db != NULL &&
 		    (inp->inp_socket->so_gencnt & 0x0ffffffff) == gencnt) {
-			if (cfil_socket_safe_lock(inp)) {
+			if (cfil_socket_safe_lock(inp, pcbinfo)) {
 				so = inp->inp_socket;
 			}
-			break;
+			/* pcbinfo is already unlocked, we are done. */
+			goto done;
 		}
 	}
 	lck_rw_done(pcbinfo->ipi_lock);
@@ -1713,7 +1709,7 @@ find_udp:
 		    inp->inp_socket != NULL &&
 		    inp->inp_socket->so_cfil_db != NULL &&
 		    (inp->inp_socket->so_gencnt & 0x0ffffffff) == gencnt) {
-			if (cfil_socket_safe_lock_rip(inp, pcbinfo)) {
+			if (cfil_socket_safe_lock(inp, pcbinfo)) {
 				so = inp->inp_socket;
 			}
 			/* pcbinfo is already unlocked, we are done. */
@@ -1746,10 +1742,11 @@ cfil_socket_from_client_uuid(uuid_t necp_client_uuid, bool *cfil_attached)
 		    inp->inp_socket != NULL &&
 		    uuid_compare(inp->necp_client_uuid, necp_client_uuid) == 0) {
 			*cfil_attached = (inp->inp_socket->so_cfil != NULL);
-			if (cfil_socket_safe_lock(inp)) {
+			if (cfil_socket_safe_lock(inp, pcbinfo)) {
 				so = inp->inp_socket;
 			}
-			break;
+			/* pcbinfo is already unlocked, we are done. */
+			goto done;
 		}
 	}
 	lck_rw_done(pcbinfo->ipi_lock);
@@ -1764,10 +1761,11 @@ cfil_socket_from_client_uuid(uuid_t necp_client_uuid, bool *cfil_attached)
 		    inp->inp_socket != NULL &&
 		    uuid_compare(inp->necp_client_uuid, necp_client_uuid) == 0) {
 			*cfil_attached = (inp->inp_socket->so_cfil_db != NULL);
-			if (cfil_socket_safe_lock(inp)) {
+			if (cfil_socket_safe_lock(inp, pcbinfo)) {
 				so = inp->inp_socket;
 			}
-			break;
+			/* pcbinfo is already unlocked, we are done. */
+			goto done;
 		}
 	}
 	lck_rw_done(pcbinfo->ipi_lock);
@@ -4265,6 +4263,7 @@ cfil_service_pending_queue(struct socket *so, struct cfil_info *cfil_info, uint3
 	struct cfil_entry *entry;
 	struct cfe_buf *entrybuf;
 	struct cfil_queue *pending_q;
+	struct cfil_entry *iter_entry = NULL;
 
 	CFIL_LOG(LOG_INFO, "so %llx kcunit %u outgoing %d",
 	    (uint64_t)VM_KERNEL_ADDRPERM(so), kcunit, outgoing);
@@ -4282,13 +4281,25 @@ cfil_service_pending_queue(struct socket *so, struct cfil_info *cfil_info, uint3
 
 	passlen = entrybuf->cfe_pass_offset - pending_q->q_start;
 
+	if (cfil_queue_empty(pending_q)) {
+		for (iter_entry = SLIST_NEXT(entry, cfe_order_link);
+		    iter_entry != NULL;
+		    iter_entry = SLIST_NEXT(iter_entry, cfe_order_link)) {
+			error = cfil_data_service_ctl_q(so, cfil_info, CFI_ENTRY_KCUNIT(cfil_info, iter_entry), outgoing);
+			/* 0 means passed so we can continue */
+			if (error != 0) {
+				break;
+			}
+		}
+		goto done;
+	}
+
 	/*
 	 * Locate the chunks of data that we can pass to the next filter
 	 * A data chunk must be on mbuf boundaries
 	 */
 	curlen = 0;
 	while ((data = cfil_queue_first(pending_q)) != NULL) {
-		struct cfil_entry *iter_entry;
 		datalen = cfil_data_length(data, NULL, NULL);
 
 #if DATA_DEBUG
@@ -4334,6 +4345,7 @@ cfil_service_pending_queue(struct socket *so, struct cfil_info *cfil_info, uint3
 		}
 	}
 
+done:
 	CFIL_INFO_VERIFY(cfil_info);
 
 	return error;
@@ -7193,6 +7205,13 @@ cfil_info_udp_expire(void *v, wait_result_t w)
 #if GC_DEBUG || LIFECYCLE_DEBUG
 		cfil_info_log(LOG_ERR, cfil_info, "CFIL: LIFECYCLE: GC CLEAN UP");
 #endif
+
+		for (int kcunit = 1; kcunit <= MAX_CONTENT_FILTER; kcunit++) {
+			/* Let the filters know of the closing */
+			if (cfil_dispatch_closed_event(so, cfil_info, kcunit) != 0) {
+				goto unlock;
+			}
+		}
 
 		cfil_db_delete_entry(db, hash_entry);
 		CFIL_INFO_FREE(cfil_info);

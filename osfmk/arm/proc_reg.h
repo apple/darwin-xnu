@@ -856,6 +856,8 @@
 #define ARM_PTE_PNX            0x00000000             /* no privilege execute. not impl */
 #define ARM_PTE_PNX_MASK       (0<<ARM_PTE_NXSHIFT)
 
+#define ARM_PTE_XMASK          (ARM_PTE_PNX_MASK | ARM_PTE_NX_MASK)
+
 #define ARM_PTE_TEX0SHIFT      6
 #define ARM_PTE_TEX0           (1<<ARM_PTE_TEX0SHIFT)
 #define ARM_PTE_TEX0_MASK      (1<<ARM_PTE_TEX0SHIFT)

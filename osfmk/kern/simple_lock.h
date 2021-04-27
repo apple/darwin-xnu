@@ -76,10 +76,18 @@
 #include <kern/lock_group.h>
 #include <machine/simple_lock.h>
 
-#ifdef MACH_KERNEL_PRIVATE
+#ifdef XNU_KERNEL_PRIVATE
+
+#if MACH_KERNEL_PRIVATE
 #include <machine/atomic.h>
 #include <mach_ldebug.h>
+#endif
 
+__BEGIN_DECLS
+
+#pragma GCC visibility push(hidden)
+
+#ifdef MACH_KERNEL_PRIVATE
 extern void                     hw_lock_init(
 	hw_lock_t);
 
@@ -97,6 +105,11 @@ extern unsigned int             hw_lock_to(
 	uint64_t,
 	lck_grp_t*);
 
+extern unsigned int             hw_lock_to_nopreempt(
+	hw_lock_t,
+	uint64_t,
+	lck_grp_t*);
+
 extern unsigned int             hw_lock_try(
 	hw_lock_t,
 	lck_grp_t*);
@@ -109,27 +122,36 @@ extern unsigned int             hw_lock_try_nopreempt(
 
 extern void                     hw_lock_lock(
 	hw_lock_t);
-
-#define hw_lock_lock(lck, grp) hw_lock_lock(lck)
+#define hw_lock_lock(lck, grp) \
+	hw_lock_lock(lck)
 
 extern void                     hw_lock_lock_nopreempt(
 	hw_lock_t);
-#define hw_lock_lock_nopreempt(lck, grp) hw_lock_lock_nopreempt(lck)
+#define hw_lock_lock_nopreempt(lck, grp) \
+	hw_lock_lock_nopreempt(lck)
 
 extern unsigned int             hw_lock_to(
 	hw_lock_t,
 	uint64_t);
-#define hw_lock_to(lck, timeout, grp) hw_lock_to(lck, timeout)
+#define hw_lock_to(lck, timeout, grp) \
+	hw_lock_to(lck, timeout)
+
+extern unsigned int             hw_lock_to_nopreempt(
+	hw_lock_t,
+	uint64_t);
+#define hw_lock_to_nopreempt(lck, timeout, grp) \
+	hw_lock_to_nopreempt(lck, timeout)
 
 
 extern unsigned int             hw_lock_try(
 	hw_lock_t);
-#define hw_lock_try(lck, grp) hw_lock_try(lck)
+#define hw_lock_try(lck, grp) \
+	hw_lock_try(lck)
 
 extern unsigned int             hw_lock_try_nopreempt(
 	hw_lock_t);
-#define hw_lock_try_nopreempt(lck, grp) hw_lock_try_nopreempt(lck)
-
+#define hw_lock_try_nopreempt(lck, grp) \
+	hw_lock_try_nopreempt(lck)
 
 #endif /* LOCK_STATS */
 
@@ -149,8 +171,10 @@ extern boolean_t                hw_atomic_test_and_set32(
 	enum memory_order ord,
 	boolean_t wait);
 
+extern void                     usimple_unlock_nopreempt(
+	usimple_lock_t);
+
 #endif /* MACH_KERNEL_PRIVATE */
-#if XNU_KERNEL_PRIVATE
 
 struct usimple_lock_startup_spec {
 	usimple_lock_t  lck;
@@ -166,10 +190,6 @@ extern void                     usimple_lock_startup_init(
 	__startup_usimple_lock_spec_ ## var = { &var, arg }; \
 	STARTUP_ARG(LOCKS_EARLY, STARTUP_RANK_FOURTH, usimple_lock_startup_init, \
 	    &__startup_usimple_lock_spec_ ## var)
-
-#endif /* XNU_KERNEL_PRIVATE */
-
-__BEGIN_DECLS
 
 extern void *                   hw_wait_while_equals(
 	void    **address,
@@ -203,32 +223,35 @@ extern unsigned int     usimple_lock_try_lock_mp_signal_safe_loop_duration(
 	uint64_t,
 	lck_grp_t*);
 #endif
-
 #else
 extern void                     usimple_lock(
 	usimple_lock_t);
-#define usimple_lock(lck, grp) usimple_lock(lck)
+#define usimple_lock(lck, grp) \
+	usimple_lock(lck)
 
 
 extern unsigned int             usimple_lock_try(
 	usimple_lock_t);
-
-#define usimple_lock_try(lck, grp) usimple_lock_try(lck)
+#define usimple_lock_try(lck, grp) \
+	usimple_lock_try(lck)
 
 extern void             usimple_lock_try_lock_loop(
 	usimple_lock_t);
-#define usimple_lock_try_lock_loop(lck, grp) usimple_lock_try_lock_loop(lck)
+#define usimple_lock_try_lock_loop(lck, grp) \
+	usimple_lock_try_lock_loop(lck)
 
 #if defined(__x86_64__)
 extern unsigned int     usimple_lock_try_lock_mp_signal_safe_loop_deadline(
 	usimple_lock_t,
 	uint64_t);
-#define usimple_lock_try_lock_mp_signal_safe_loop_deadline(lck, ddl, grp) usimple_lock_try_lock_mp_signal_safe_loop_deadline(lck, ddl)
+#define usimple_lock_try_lock_mp_signal_safe_loop_deadline(lck, ddl, grp) \
+	usimple_lock_try_lock_mp_signal_safe_loop_deadline(lck, ddl)
 
 extern unsigned int     usimple_lock_try_lock_mp_signal_safe_loop_duration(
 	usimple_lock_t,
 	uint64_t);
-#define usimple_lock_try_lock_mp_signal_safe_loop_duration(lck, dur, grp) usimple_lock_try_lock_mp_signal_safe_loop_duration(lck, dur)
+#define usimple_lock_try_lock_mp_signal_safe_loop_duration(lck, dur, grp) \
+	usimple_lock_try_lock_mp_signal_safe_loop_duration(lck, dur)
 #endif
 
 #endif /* LOCK_STATS */
@@ -237,24 +260,21 @@ extern void                     usimple_unlock(
 	usimple_lock_t);
 
 
-__END_DECLS
-
-#define ETAP_NO_TRACE   0
-#define ETAP_IO_AHA             0
-
 /*
  * If we got to here and we still don't have simple_lock_init
  * defined, then we must either be outside the osfmk component,
  * running on a true SMP, or need debug.
  */
 #if !defined(simple_lock_init)
-#define simple_lock_init(l, t)   usimple_lock_init(l,t)
-#define simple_lock(l, grp)          usimple_lock(l, grp)
-#define simple_unlock(l)        usimple_unlock(l)
-#define simple_lock_try(l, grp)      usimple_lock_try(l, grp)
+#define simple_lock_init(l, t)               usimple_lock_init(l,t)
+#define simple_lock(l, grp)                  usimple_lock(l, grp)
+#define simple_unlock(l)                     usimple_unlock(l)
+#define simple_lock_try(l, grp)              usimple_lock_try(l, grp)
 #define simple_lock_try_lock_loop(l, grp)    usimple_lock_try_lock_loop(l, grp)
-#define simple_lock_try_lock_mp_signal_safe_loop_deadline(l, ddl, grp)    usimple_lock_try_lock_mp_signal_safe_loop_deadline(l, ddl, grp)
-#define simple_lock_try_lock_mp_signal_safe_loop_duration(l, dur, grp)    usimple_lock_try_lock_mp_signal_safe_loop_duration(l, dur, grp)
+#define simple_lock_try_lock_mp_signal_safe_loop_deadline(l, ddl, grp) \
+	usimple_lock_try_lock_mp_signal_safe_loop_deadline(l, ddl, grp)
+#define simple_lock_try_lock_mp_signal_safe_loop_duration(l, dur, grp) \
+	usimple_lock_try_lock_mp_signal_safe_loop_duration(l, dur, grp)
 #define simple_lock_addr(l)     (&(l))
 #endif /* !defined(simple_lock_init) */
 
@@ -288,23 +308,27 @@ extern unsigned int hw_lock_bit_to(
 extern void     hw_lock_bit(
 	hw_lock_bit_t *,
 	unsigned int);
-#define hw_lock_bit(lck, bit, grp) hw_lock_bit(lck, bit)
+#define hw_lock_bit(lck, bit, grp) \
+	hw_lock_bit(lck, bit)
 
 extern void     hw_lock_bit_nopreempt(
 	hw_lock_bit_t *,
 	unsigned int);
-#define hw_lock_bit_nopreempt(lck, bit, grp) hw_lock_bit_nopreempt(lck, bit)
+#define hw_lock_bit_nopreempt(lck, bit, grp) \
+	hw_lock_bit_nopreempt(lck, bit)
 
 extern unsigned int hw_lock_bit_try(
 	hw_lock_bit_t *,
 	unsigned int);
-#define hw_lock_bit_try(lck, bit, grp) hw_lock_bit_try(lck, bit)
+#define hw_lock_bit_try(lck, bit, grp) \
+	hw_lock_bit_try(lck, bit)
 
 extern unsigned int hw_lock_bit_to(
 	hw_lock_bit_t *,
 	unsigned int,
 	uint32_t);
-#define hw_lock_bit_to(lck, bit, timeout, grp) hw_lock_bit_to(lck, bit, timeout)
+#define hw_lock_bit_to(lck, bit, timeout, grp) \
+	hw_lock_bit_to(lck, bit, timeout)
 
 #endif /* LOCK_STATS */
 
@@ -316,10 +340,16 @@ extern void     hw_unlock_bit_nopreempt(
 	hw_lock_bit_t *,
 	unsigned int);
 
-#define hw_lock_bit_held(l, b) (((*(l))&(1<<b))!=0)
+#define hw_lock_bit_held(l, b) \
+	(((*(l)) & (1 << (b))) != 0)
 
 #endif  /* MACH_KERNEL_PRIVATE */
 
+__END_DECLS
+
+#pragma GCC visibility pop
+
+#endif /* XNU_KERNEL_PRIVATE */
 #endif /*!_KERN_SIMPLE_LOCK_H_*/
 
 #endif  /* KERNEL_PRIVATE */

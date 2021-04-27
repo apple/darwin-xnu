@@ -690,6 +690,7 @@ _copyin
 _copyinstr
 _copyout
 _copyoutstr
+_coretrust_interface_register
 _crc32
 _debug_ivars_size
 _deflate

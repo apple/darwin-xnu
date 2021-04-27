@@ -439,7 +439,7 @@ mach_port_space_basic_info(
 }
 
 static inline mach_port_t
-_tsd_get_special_reply_port()
+_tsd_get_special_reply_port(void)
 {
 	return (mach_port_t)(uintptr_t)_os_tsd_get_direct(__TSD_MACH_SPECIAL_REPLY);
 }

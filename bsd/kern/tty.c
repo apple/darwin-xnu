@@ -116,9 +116,7 @@
 #include <kern/waitq.h>
 #include <libkern/section_keywords.h>
 
-static lck_grp_t        *tty_lck_grp;
-static lck_grp_attr_t   *tty_lck_grp_attr;
-static lck_attr_t      *tty_lck_attr;
+static LCK_GRP_DECLARE(tty_lck_grp, "tty");
 
 __private_extern__ int ttnread(struct tty *tp);
 static void     ttyecho(int c, struct tty *tp);
@@ -257,32 +255,6 @@ termios64to32(struct user_termios *in, struct termios32 *out)
 
 	out->c_ispeed = (uint32_t)MIN(in->c_ispeed, UINT32_MAX);
 	out->c_ospeed = (uint32_t)MIN(in->c_ospeed, UINT32_MAX);
-}
-
-
-/*
- * tty_init
- *
- * Initialize the tty line discipline subsystem.
- *
- * Parameters:	void
- *
- * Returns:	void
- *
- * Locks:	No ttys can be allocated and no tty locks can be used
- *		until after this function is called
- *
- * Notes:	The intent of this is to set up a log group attribute,
- *		lock group, and loc atribute for subsequent per-tty locks.
- *		This function is called early in bsd_init(), prior to the
- *		console device initialization.
- */
-void
-tty_init(void)
-{
-	tty_lck_grp_attr = lck_grp_attr_alloc_init();
-	tty_lck_grp = lck_grp_alloc_init("tty", tty_lck_grp_attr);
-	tty_lck_attr = lck_attr_alloc_init();
 }
 
 
@@ -3198,14 +3170,14 @@ ttymalloc(void)
 {
 	struct tty *tp;
 
-	MALLOC(tp, struct tty *, sizeof(struct tty), M_TTYS, M_WAITOK | M_ZERO);
+	tp = kheap_alloc(KM_TTYS, sizeof(struct tty), Z_WAITOK | Z_ZERO);
 	if (tp != NULL) {
 		/* XXX: default to TTYCLSIZE(1024) chars for now */
 		clalloc(&tp->t_rawq, TTYCLSIZE, 1);
 		clalloc(&tp->t_canq, TTYCLSIZE, 1);
 		/* output queue doesn't need quoting */
 		clalloc(&tp->t_outq, TTYCLSIZE, 0);
-		lck_mtx_init(&tp->t_lock, tty_lck_grp, tty_lck_attr);
+		lck_mtx_init(&tp->t_lock, &tty_lck_grp, LCK_ATTR_NULL);
 		klist_init(&tp->t_rsel.si_note);
 		klist_init(&tp->t_wsel.si_note);
 		tp->t_refcnt = 1;
@@ -3263,8 +3235,8 @@ ttydeallocate(struct tty *tp)
 	clfree(&tp->t_rawq);
 	clfree(&tp->t_canq);
 	clfree(&tp->t_outq);
-	lck_mtx_destroy(&tp->t_lock, tty_lck_grp);
-	FREE(tp, M_TTYS);
+	lck_mtx_destroy(&tp->t_lock, &tty_lck_grp);
+	kheap_free(KM_TTYS, tp, sizeof(struct tty));
 }
 
 

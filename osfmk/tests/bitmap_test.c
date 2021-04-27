@@ -32,6 +32,7 @@
 #include <tests/xnupost.h>
 #include <kern/kalloc.h>
 #include <kern/bits.h>
+#include <pexpert/pexpert.h>
 
 extern void dump_bitmap_next(bitmap_t *map, uint nbits);
 extern void dump_bitmap_lsb(bitmap_t *map, uint nbits);
@@ -117,7 +118,57 @@ test_bitmap(void)
 		assert(bitmap_first(map, nbits) == -1);
 		assert(bitmap_lsb_first(map, nbits) == -1);
 
+		/* bitmap_not */
+		bitmap_not(map, map, nbits);
+		assert(bitmap_is_full(map, nbits));
+
+		bitmap_not(map, map, nbits);
+		assert(bitmap_first(map, nbits) == -1);
+		assert(bitmap_lsb_first(map, nbits) == -1);
+
+		/* bitmap_and */
+		bitmap_t *map0 = bitmap_alloc(nbits);
+		assert(bitmap_first(map0, nbits) == -1);
+
+		bitmap_t *map1 = bitmap_alloc(nbits);
+		bitmap_full(map1, nbits);
+		assert(bitmap_is_full(map1, nbits));
+
+		bitmap_and(map, map0, map1, nbits);
+		assert(bitmap_first(map, nbits) == -1);
+
+		bitmap_and(map, map1, map1, nbits);
+		assert(bitmap_is_full(map, nbits));
+
+		/* bitmap_and_not */
+		bitmap_and_not(map, map0, map1, nbits);
+		assert(bitmap_first(map, nbits) == -1);
+
+		bitmap_and_not(map, map1, map0, nbits);
+		assert(bitmap_is_full(map, nbits));
+
+		/* bitmap_equal */
+		for (uint i = 0; i < nbits; i++) {
+			bitmap_clear(map, i);
+			assert(!bitmap_equal(map, map1, nbits));
+			bitmap_set(map, i);
+			assert(bitmap_equal(map, map1, nbits));
+		}
+
+		/* bitmap_and_not_mask_first */
+		for (uint i = 0; i < nbits; i++) {
+			bitmap_clear(map, i);
+			expected_result = i;
+			int result = bitmap_and_not_mask_first(map1, map, nbits);
+			assert(result == expected_result);
+			bitmap_set(map, i);
+			result = bitmap_and_not_mask_first(map1, map, nbits);
+			assert(result == -1);
+		}
+
 		bitmap_free(map, nbits);
+		bitmap_free(map0, nbits);
+		bitmap_free(map1, nbits);
 	}
 }
 

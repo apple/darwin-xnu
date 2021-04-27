@@ -34,6 +34,30 @@
 
 __BEGIN_DECLS
 
+static inline uint32_t
+os_hash_jenkins_update(const void *data, size_t length, uint32_t hash)
+{
+	const uint8_t *key = (const uint8_t *)data;
+
+	for (size_t i = 0; i < length; i++) {
+		hash += key[i];
+		hash += (hash << 10);
+		hash ^= (hash >> 6);
+	}
+
+	return hash;
+}
+
+static inline uint32_t
+os_hash_jenkins_finish(uint32_t hash)
+{
+	hash += (hash << 3);
+	hash ^= (hash >> 11);
+	hash += (hash << 15);
+
+	return hash;
+}
+
 /*!
  * @function os_hash_jenkins
  *
@@ -56,20 +80,7 @@ __BEGIN_DECLS
 static inline uint32_t
 os_hash_jenkins(const void *data, size_t length)
 {
-	const uint8_t *key = (const uint8_t *)data;
-	uint32_t hash = 0;
-
-	for (size_t i = 0; i < length; i++) {
-		hash += key[i];
-		hash += (hash << 10);
-		hash ^= (hash >> 6);
-	}
-
-	hash += (hash << 3);
-	hash ^= (hash >> 11);
-	hash += (hash << 15);
-
-	return hash;
+	return os_hash_jenkins_finish(os_hash_jenkins_update(data, length, 0));
 }
 
 /*!

@@ -226,9 +226,9 @@ done:
 /*
  * cpuvar
  */
-lck_mtx_t cpu_lock;
-lck_mtx_t cyc_lock;
-lck_mtx_t mod_lock;
+LCK_MTX_DECLARE_ATTR(cpu_lock, &dtrace_lck_grp, &dtrace_lck_attr);
+LCK_MTX_DECLARE_ATTR(cyc_lock, &dtrace_lck_grp, &dtrace_lck_attr);
+LCK_MTX_DECLARE_ATTR(mod_lock, &dtrace_lck_grp, &dtrace_lck_attr);
 
 dtrace_cpu_t *cpu_list;
 cpu_core_t *cpu_core; /* XXX TLB lockdown? */

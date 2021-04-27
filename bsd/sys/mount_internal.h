@@ -474,7 +474,7 @@ typedef uint32_t vfs_switch_root_flags_t;
 int vfs_switch_root(const char *, const char *, vfs_switch_root_flags_t);
 
 int     vfs_mountroot(void);
-void    vfs_unmountall(void);
+void    vfs_unmountall(int only_non_system);
 int     safedounmount(struct mount *, int, vfs_context_t);
 int     dounmount(struct mount *, int, int, vfs_context_t);
 void    dounmount_submounts(struct mount *, int, vfs_context_t);
@@ -502,6 +502,7 @@ void mount_iterreset(mount_t);
 #define KERNEL_MOUNT_PREBOOTVOL         0x20 /* mount the Preboot volume */
 #define KERNEL_MOUNT_RECOVERYVOL        0x40 /* mount the Recovery volume */
 #define KERNEL_MOUNT_BASESYSTEMROOT     0x80 /* mount a base root volume "instead of" the full root volume (only used during bsd_init) */
+#define KERNEL_MOUNT_DEVFS             0x100 /* kernel startup mount of devfs */
 
 /* mask for checking if any of the "mount volume by role" flags are set */
 #define KERNEL_MOUNT_VOLBYROLE_MASK (KERNEL_MOUNT_DATAVOL | KERNEL_MOUNT_VMVOL | KERNEL_MOUNT_PREBOOTVOL | KERNEL_MOUNT_RECOVERYVOL)
@@ -529,8 +530,6 @@ void rethrottle_thread(uthread_t ut);
 extern int num_trailing_0(uint64_t n);
 
 /* sync lock */
-extern lck_mtx_t * sync_mtx_lck;
-
 extern int sync_timeout_seconds;
 
 extern zone_t mount_zone;

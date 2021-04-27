@@ -27,6 +27,7 @@
  */
 
 #include <machine/asm.h>
+#include <arm64/machine_machdep.h>
 #include <arm64/machine_routines_asm.h>
 #include <arm64/proc_reg.h>
 #include <pexpert/arm64/board_config.h>
@@ -69,14 +70,14 @@
 
 .macro COMPARE_BRANCH_FUSION
 #if	defined(APPLE_ARM64_ARCH_FAMILY)
-	mrs             $1, ARM64_REG_HID1
+	mrs             $1, HID1
 	.if $0 == CBF_DISABLE
 	orr		$1, $1, ARM64_REG_HID1_disCmpBrFusion
 	.else
 	mov		$2, ARM64_REG_HID1_disCmpBrFusion
 	bic		$1, $1, $2
 	.endif
-	msr             ARM64_REG_HID1, $1
+	msr             HID1, $1
 	.if $0 == CBF_DISABLE
 	isb             sy
 	.endif
@@ -938,13 +939,9 @@ no_asts:
 	ARM64_IS_PCORE x12                                  // if we're not a pCORE, also do nothing
 	cbz		x12, 1f
 
-#endif
-
-#if defined(APPLELIGHTNING) || defined(APPLEFIRESTORM)
-
-	mrs		x12, ARM64_REG_HID1                         // if any debug session ever existed, set forceNexL3ClkOn
+	mrs		x12, HID1                         // if any debug session ever existed, set forceNexL3ClkOn
 	orr		x12, x12, ARM64_REG_HID1_forceNexL3ClkOn
-	msr		ARM64_REG_HID1, x12
+	msr		HID1, x12
 1:
 
 #endif

@@ -117,7 +117,11 @@ SYSCTL_INT(_debug, OID_AUTO, lockf_debug, CTLFLAG_RW | CTLFLAG_LOCKED, &lockf_de
 #define LOCKF_DEBUG(mask, ...)          /* mask */
 #endif  /* !LOCKF_DEBUGGING */
 
-MALLOC_DEFINE(M_LOCKF, "lockf", "Byte-range locking structures");
+/*
+ * If you need accounting for KM_LOCKF consider using
+ * ZONE_VIEW_DEFINE to define a view.
+ */
+#define KM_LOCKF       KHEAP_DEFAULT
 
 #define NOLOCKF (struct lockf *)0
 #define SELF    0x1
@@ -152,15 +156,8 @@ static void      lf_boost_blocking_proc(struct lockf *, struct lockf *);
 static void      lf_adjust_assertion(struct lockf *block);
 #endif /* IMPORTANCE_INHERITANCE */
 
-static lck_mtx_t lf_dead_lock;
-static lck_grp_t *lf_dead_lock_grp;
-
-void
-lf_init(void)
-{
-	lf_dead_lock_grp = lck_grp_alloc_init("lf_dead_lock", LCK_GRP_ATTR_NULL);
-	lck_mtx_init(&lf_dead_lock, lf_dead_lock_grp, LCK_ATTR_NULL);
-}
+static LCK_GRP_DECLARE(lf_dead_lock_grp, "lf_dead_lock");
+static LCK_MTX_DECLARE(lf_dead_lock, &lf_dead_lock_grp);
 
 /*
  * lf_advlock
@@ -285,7 +282,7 @@ lf_advlock(struct vnop_advlock_args *ap)
 	/*
 	 * Create the lockf structure
 	 */
-	MALLOC(lock, struct lockf *, sizeof *lock, M_LOCKF, M_WAITOK);
+	lock = kheap_alloc(KM_LOCKF, sizeof(struct lockf), Z_WAITOK);
 	if (lock == NULL) {
 		return ENOLCK;
 	}
@@ -336,21 +333,21 @@ lf_advlock(struct vnop_advlock_args *ap)
 
 	case F_UNLCK:
 		error = lf_clearlock(lock);
-		FREE(lock, M_LOCKF);
+		kheap_free(KM_LOCKF, lock, sizeof(struct lockf));
 		break;
 
 	case F_GETLK:
 		error = lf_getlock(lock, fl, -1);
-		FREE(lock, M_LOCKF);
+		kheap_free(KM_LOCKF, lock, sizeof(struct lockf));
 		break;
 
 	case F_GETLKPID:
 		error = lf_getlock(lock, fl, fl->l_pid);
-		FREE(lock, M_LOCKF);
+		kheap_free(KM_LOCKF, lock, sizeof(struct lockf));
 		break;
 
 	default:
-		FREE(lock, M_LOCKF);
+		kheap_free(KM_LOCKF, lock, sizeof(struct lockf));
 		error = EINVAL;
 		break;
 	}
@@ -451,7 +448,7 @@ lf_coalesce_adjacent(struct lockf *lock)
 
 			lf_move_blocked(lock, adjacent);
 
-			FREE(adjacent, M_LOCKF);
+			kheap_free(KM_LOCKF, adjacent, sizeof(struct lockf));
 			continue;
 		}
 		/* If the lock starts adjacent to us, we can coalesce it */
@@ -466,7 +463,7 @@ lf_coalesce_adjacent(struct lockf *lock)
 
 			lf_move_blocked(lock, adjacent);
 
-			FREE(adjacent, M_LOCKF);
+			kheap_free(KM_LOCKF, adjacent, sizeof(struct lockf));
 			continue;
 		}
 
@@ -538,7 +535,7 @@ scan:
 		 */
 		if ((lock->lf_flags & F_WAIT) == 0) {
 			DTRACE_FSINFO(advlock__nowait, vnode_t, vp);
-			FREE(lock, M_LOCKF);
+			kheap_free(KM_LOCKF, lock, sizeof(struct lockf));
 			return EAGAIN;
 		}
 
@@ -676,7 +673,7 @@ scan:
 						LOCKF_DEBUG(LF_DBG_DEADLOCK, "lock %p which is me, so EDEADLK\n", lock);
 						proc_unlock(wproc);
 						lck_mtx_unlock(&lf_dead_lock);
-						FREE(lock, M_LOCKF);
+						kheap_free(KM_LOCKF, lock, sizeof(struct lockf));
 						return EDEADLK;
 					}
 				}
@@ -695,7 +692,7 @@ scan:
 		    lock->lf_type == F_WRLCK) {
 			lock->lf_type = F_UNLCK;
 			if ((error = lf_clearlock(lock)) != 0) {
-				FREE(lock, M_LOCKF);
+				kheap_free(KM_LOCKF, lock, sizeof(struct lockf));
 				return error;
 			}
 			lock->lf_type = F_WRLCK;
@@ -799,7 +796,7 @@ scan:
 			if (!TAILQ_EMPTY(&lock->lf_blkhd)) {
 				lf_wakelock(lock, TRUE);
 			}
-			FREE(lock, M_LOCKF);
+			kheap_free(KM_LOCKF, lock, sizeof(struct lockf));
 			/* Return ETIMEDOUT if timeout occoured. */
 			if (error == EWOULDBLOCK) {
 				error = ETIMEDOUT;
@@ -852,7 +849,7 @@ scan:
 			}
 			overlap->lf_type = lock->lf_type;
 			lf_move_blocked(overlap, lock);
-			FREE(lock, M_LOCKF);
+			kheap_free(KM_LOCKF, lock, sizeof(struct lockf));
 			lock = overlap; /* for lf_coalesce_adjacent() */
 			break;
 
@@ -862,7 +859,7 @@ scan:
 			 */
 			if (overlap->lf_type == lock->lf_type) {
 				lf_move_blocked(overlap, lock);
-				FREE(lock, M_LOCKF);
+				kheap_free(KM_LOCKF, lock, sizeof(struct lockf));
 				lock = overlap; /* for lf_coalesce_adjacent() */
 				break;
 			}
@@ -877,7 +874,7 @@ scan:
 				 * resource shortage.
 				 */
 				if (lf_split(overlap, lock)) {
-					FREE(lock, M_LOCKF);
+					kheap_free(KM_LOCKF, lock, sizeof(struct lockf));
 					return ENOLCK;
 				}
 			}
@@ -906,7 +903,7 @@ scan:
 			} else {
 				*prev = overlap->lf_next;
 			}
-			FREE(overlap, M_LOCKF);
+			kheap_free(KM_LOCKF, overlap, sizeof(struct lockf));
 			continue;
 
 		case OVERLAP_STARTS_BEFORE_LOCK:
@@ -1000,7 +997,7 @@ lf_clearlock(struct lockf *unlock)
 
 		case OVERLAP_EQUALS_LOCK:
 			*prev = overlap->lf_next;
-			FREE(overlap, M_LOCKF);
+			kheap_free(KM_LOCKF, overlap, sizeof(struct lockf));
 			break;
 
 		case OVERLAP_CONTAINS_LOCK: /* split it */
@@ -1021,7 +1018,7 @@ lf_clearlock(struct lockf *unlock)
 		case OVERLAP_CONTAINED_BY_LOCK:
 			*prev = overlap->lf_next;
 			lf = overlap->lf_next;
-			FREE(overlap, M_LOCKF);
+			kheap_free(KM_LOCKF, overlap, sizeof(struct lockf));
 			continue;
 
 		case OVERLAP_STARTS_BEFORE_LOCK:
@@ -1346,7 +1343,7 @@ lf_split(struct lockf *lock1, struct lockf *lock2)
 	 * Make a new lock consisting of the last part of
 	 * the encompassing lock
 	 */
-	MALLOC(splitlock, struct lockf *, sizeof *splitlock, M_LOCKF, M_WAITOK);
+	splitlock = kheap_alloc(KM_LOCKF, sizeof(struct lockf), Z_WAITOK);
 	if (splitlock == NULL) {
 		return ENOLCK;
 	}
@@ -1465,13 +1462,13 @@ lf_print(const char *tag, struct lockf *lock)
 		    lock->lf_type == F_RDLCK ? "shared" :
 		    lock->lf_type == F_WRLCK ? "exclusive" :
 		    lock->lf_type == F_UNLCK ? "unlock" : "unknown",
-		    (intmax_t)lock->lf_start, (intmax_t)lock->lf_end);
+		    (uint64_t)lock->lf_start, (uint64_t)lock->lf_end);
 	} else {
 		printf(" %s, start 0x%016llx, end 0x%016llx",
 		    lock->lf_type == F_RDLCK ? "shared" :
 		    lock->lf_type == F_WRLCK ? "exclusive" :
 		    lock->lf_type == F_UNLCK ? "unlock" : "unknown",
-		    (intmax_t)lock->lf_start, (intmax_t)lock->lf_end);
+		    (uint64_t)lock->lf_start, (uint64_t)lock->lf_end);
 	}
 	if (!TAILQ_EMPTY(&lock->lf_blkhd)) {
 		printf(" block %p\n", (void *)TAILQ_FIRST(&lock->lf_blkhd));
@@ -1519,7 +1516,7 @@ lf_printlist(const char *tag, struct lockf *lock)
 		    lf->lf_type == F_RDLCK ? "shared" :
 		    lf->lf_type == F_WRLCK ? "exclusive" :
 		    lf->lf_type == F_UNLCK ? "unlock" :
-		    "unknown", (intmax_t)lf->lf_start, (intmax_t)lf->lf_end);
+		    "unknown", (uint64_t)lf->lf_start, (uint64_t)lf->lf_end);
 		TAILQ_FOREACH(blk, &lf->lf_blkhd, lf_block) {
 			printf("\n\t\tlock request %p for ", (void *)blk);
 			if (blk->lf_flags & F_POSIX) {
@@ -1535,8 +1532,8 @@ lf_printlist(const char *tag, struct lockf *lock)
 			    blk->lf_type == F_RDLCK ? "shared" :
 			    blk->lf_type == F_WRLCK ? "exclusive" :
 			    blk->lf_type == F_UNLCK ? "unlock" :
-			    "unknown", (intmax_t)blk->lf_start,
-			    (intmax_t)blk->lf_end);
+			    "unknown", (uint64_t)blk->lf_start,
+			    (uint64_t)blk->lf_end);
 			if (!TAILQ_EMPTY(&blk->lf_blkhd)) {
 				panic("lf_printlist: bad list");
 			}

@@ -685,10 +685,18 @@ tcp6_usr_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 		struct sockaddr_in sin;
 
 		if ((inp->inp_flags & IN6P_IPV6_V6ONLY) != 0) {
-			return EINVAL;
+			error = EINVAL;
+			goto out;
 		}
 
 		in6_sin6_2_sin(&sin, sin6p);
+		/*
+		 * Must disallow TCP ``connections'' to multicast addresses.
+		 */
+		if (IN_MULTICAST(ntohl(sin.sin_addr.s_addr))) {
+			error = EAFNOSUPPORT;
+			goto out;
+		}
 		inp->inp_vflag |= INP_IPV4;
 		inp->inp_vflag &= ~INP_IPV6;
 		if ((error = tcp_connect(tp, (struct sockaddr *)&sin, p)) != 0) {

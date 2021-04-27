@@ -88,8 +88,9 @@ enum {
  * @field       scalarOutput Array of scalars to return to the caller.
  * @field       scalarOutputCount Count of scalars to return to the caller in scalarOutput.
  * @field       structureOutput An OSData to be returned to the caller as structure output.
- *				A reference will be consumed by the caller. It is an error to set this field if
- *              structureOutputDescriptor was passed in
+ *              This field should be set by the driver to an OSData object it created with
+ *              the data to be returned, and the OSData instance will be released by the OS.
+ *              It is an error for the driver to set this field if structureOutputDescriptor was passed in
  * @field       structureOutputDescriptor A IOMemoryDescriptor specified by the caller for structure output.
  * @field       structureOutputMaximumSize Maximum size of structure output specified by caller
  *              or kIOUserClientVariableStructureSize.

@@ -115,7 +115,7 @@ const mach_trap_t       mach_trap_table[MACH_TRAP_TABLE_COUNT] = {
 /* 10 */ MACH_TRAP(_kernelrpc_mach_vm_allocate_trap, 4, 5, munge_wwlw),
 /* 11 */ MACH_TRAP(_kernelrpc_mach_vm_purgable_control_trap, 4, 5, munge_wlww),
 /* 12 */ MACH_TRAP(_kernelrpc_mach_vm_deallocate_trap, 3, 5, munge_wll),
-/* 13 */ MACH_TRAP(kern_invalid, 0, 0, NULL),
+/* 13 */ MACH_TRAP(task_dyld_process_info_notify_get_trap, 2, 4, munge_ll),
 /* 14 */ MACH_TRAP(_kernelrpc_mach_vm_protect_trap, 5, 7, munge_wllww),
 /* 15 */ MACH_TRAP(_kernelrpc_mach_vm_map_trap, 6, 8, munge_wwllww),
 /* 16 */ MACH_TRAP(_kernelrpc_mach_port_allocate_trap, 3, 3, munge_www),
@@ -233,7 +233,7 @@ const mach_trap_t       mach_trap_table[MACH_TRAP_TABLE_COUNT] = {
 /* 127 */ MACH_TRAP(kern_invalid, 0, 0, NULL),
 };
 
-const char * mach_syscall_name_table[MACH_TRAP_TABLE_COUNT] = {
+const char * const mach_syscall_name_table[MACH_TRAP_TABLE_COUNT] = {
 /* 0 */ "kern_invalid",
 /* 1 */ "kern_invalid",
 /* 2 */ "kern_invalid",
@@ -247,7 +247,7 @@ const char * mach_syscall_name_table[MACH_TRAP_TABLE_COUNT] = {
 /* 10 */ "_kernelrpc_mach_vm_allocate_trap",
 /* 11 */ "kern_invalid",
 /* 12 */ "_kernelrpc_mach_vm_deallocate_trap",
-/* 13 */ "kern_invalid",
+/* 13 */ "task_dyld_process_info_notify_get_trap",
 /* 14 */ "_kernelrpc_mach_vm_protect_trap",
 /* 15 */ "_kernelrpc_mach_vm_map_trap",
 /* 16 */ "_kernelrpc_mach_port_allocate_trap",
@@ -368,7 +368,7 @@ const char * mach_syscall_name_table[MACH_TRAP_TABLE_COUNT] = {
 /* 127 */ "kern_invalid",
 };
 
-int     mach_trap_count = (sizeof(mach_trap_table) / sizeof(mach_trap_table[0]));
+const int mach_trap_count = (sizeof(mach_trap_table) / sizeof(mach_trap_table[0]));
 
 kern_return_t
 kern_invalid(

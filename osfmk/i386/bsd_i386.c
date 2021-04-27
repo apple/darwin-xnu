@@ -34,7 +34,6 @@
 #include <mach/thread_status.h>
 #include <mach/vm_param.h>
 
-#include <kern/counters.h>
 #include <kern/cpu_data.h>
 #include <kern/mach_param.h>
 #include <kern/task.h>
@@ -483,7 +482,7 @@ mach_call_arg_munger32(uint32_t sp, struct mach_call_args *args, const mach_trap
 
 __private_extern__ void mach_call_munger(x86_saved_state_t *state);
 
-extern const char *mach_syscall_name_table[];
+extern const char *const mach_syscall_name_table[];
 
 __attribute__((noreturn))
 void

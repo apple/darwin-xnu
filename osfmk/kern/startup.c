@@ -197,7 +197,6 @@ void scale_setup(void);
 extern void bsd_scale_setup(int);
 extern unsigned int semaphore_max;
 extern void stackshot_init(void);
-extern void ktrace_init(void);
 
 /*
  *	Running in virtual memory, on the interrupt stack.
@@ -324,6 +323,7 @@ kernel_startup_log(startup_subsystem_id_t subsystem)
 		[STARTUP_SUB_CODESIGNING] = "codesigning",
 		[STARTUP_SUB_OSLOG] = "oslog",
 		[STARTUP_SUB_MACH_IPC] = "mach_ipc",
+		[STARTUP_SUB_SYSCTL] = "sysctl",
 		[STARTUP_SUB_EARLY_BOOT] = "early_boot",
 
 		/* LOCKDOWN is special and its value won't fit here. */
@@ -642,13 +642,6 @@ kernel_bootstrap_thread(void)
 	bootprofile_init();
 #endif
 
-#if (defined(__i386__) || defined(__x86_64__)) && CONFIG_VMX
-	vmx_init();
-#endif
-
-	kernel_bootstrap_thread_log("ktrace_init");
-	ktrace_init();
-
 	char trace_typefilter[256] = {};
 	PE_parse_boot_arg_str("trace_typefilter", trace_typefilter,
 	    sizeof(trace_typefilter));
@@ -658,10 +651,7 @@ kernel_bootstrap_thread(void)
 	kdebug_init(new_nkdbufs, trace_typefilter,
 	    (trace_wrap ? KDOPT_WRAPPING : 0) | KDOPT_ATBOOT);
 
-#ifdef  MACH_BSD
-	kernel_bootstrap_log("bsd_early_init");
-	bsd_early_init();
-#endif
+	kernel_startup_initialize_upto(STARTUP_SUB_SYSCTL);
 
 #ifdef  IOKIT
 	kernel_bootstrap_log("PE_init_iokit");

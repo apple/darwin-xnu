@@ -16,9 +16,9 @@
 #  Standard Apple OS Configurations:
 #  -------- ----- -- ---------------
 #
-#  KERNEL_BASE =    [ arm64 medium msgb_large config_arrow config_requires_u32_munging config_zcache config_delay_idle_sleep config_proc_udata_storage ARM_EXTRAS_BASE ]
+#  KERNEL_BASE =    [ arm64 medium msgb_large config_arrow config_requires_u32_munging config_delay_idle_sleep config_proc_udata_storage config_uexc config_darkboot ARM_EXTRAS_BASE ]
 #  KERNEL_RELEASE = [ KERNEL_BASE ]
-#  KERNEL_DEV =     [ KERNEL_BASE development mach_assert config_xnupost proc_ref_debug os_reason_debug pgtrace ]
+#  KERNEL_DEV =     [ KERNEL_BASE development mach_assert config_xnupost proc_ref_debug pgtrace ]
 #  KERNEL_DEBUG =   [ KERNEL_BASE debug mach_assert config_xnupost config_ltable_stats config_ltable_debug config_waitq_stats config_workloop_debug config_waitq_debug pgtrace ]
 #  BSD_BASE =       [ mach_bsd sysv_sem sysv_msg sysv_shm config_netboot config_imageboot config_workqueue psynch config_proc_uuid_policy config_coredump pgo config_personas ]
 #  BSD_RELEASE =    [ BSD_BASE ]
@@ -40,7 +40,11 @@
 #  VPN =            [ ipsec flow_divert necp content_filter ]
 #  PF =             [ pf pflog ]
 #  MULTIPATH =      [ multipath mptcp ]
+#if defined(SOC_CONFIG_t8020)
 #  HIBERNATION =    [ ]
+#else /*!(defined(SOC_CONFIG_t8020)*/
+#  HIBERNATION =    [ ]
+#endif /*!(defined(SOC_CONFIG_t8020)*/
 #  IOKIT_BASE =     [ iokit iokitcpp no_kernel_hid config_sleep iokitstats HIBERNATION ]
 #  IOKIT_RELEASE =  [ IOKIT_BASE ]
 #  IOKIT_DEV =      [ IOKIT_BASE iotracking ]
@@ -53,7 +57,7 @@
 #  PERF_DBG_RELEASE=[ PERF_DBG_BASE ist_kdebug ]
 #  PERF_DBG_DEV =   [ PERF_DBG_BASE lock_stats zleaks alternate_debugger interrupt_masked_debug ]
 #  PERF_DBG_DEBUG = [ PERF_DBG_BASE lock_stats zleaks alternate_debugger interrupt_masked_debug ]
-#  MACH_BASE =      [ mach slidable config_ecc_logging vc_progress_white mdebug ipc_debug importance_inheritance config_atm config_coalitions config_iosched config_sysdiagnose config_telemetry config_mach_bridge_recv_time config_quiesce_counter config_arm_pfz ]
+#  MACH_BASE =      [ mach slidable config_ecc_logging vc_progress_white mdebug ipc_debug importance_inheritance config_atm config_coalitions config_iosched config_sysdiagnose config_telemetry config_mach_bridge_recv_time config_quiesce_counter config_arm_pfz config_user_notification phys_write_acct ]
 #  MACH_RELEASE =   [ MACH_BASE debugger_for_zone_info ]
 #  MACH_DEV =       [ MACH_BASE task_zone_info config_io_accounting importance_trace config_ledger_interval_max ]
 #  MACH_DEBUG =     [ MACH_BASE task_zone_info config_io_accounting importance_trace config_ledger_interval_max importance_debug ]

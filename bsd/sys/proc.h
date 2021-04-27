@@ -87,6 +87,10 @@
 #include <mach/coalition.h>             /* COALITION_NUM_TYPES */
 #endif
 
+#ifndef KERNEL
+#include <Availability.h>
+#endif
+
 #if defined(XNU_KERNEL_PRIVATE) || !defined(KERNEL)
 
 struct session;
@@ -410,6 +414,9 @@ extern boolean_t proc_is_translated(proc_t);
 /* true if the process ignores errors from content protection APIs */
 extern bool proc_ignores_content_protection(proc_t proc);
 
+/* true if the file system shouldn't update mtime for operations by the process */
+extern bool proc_skip_mtime_update(proc_t proc);
+
 /*!
  *  @function    proc_exitstatus
  *  @abstract    KPI to determine a process's exit status.
@@ -498,8 +505,10 @@ __BEGIN_DECLS
 
 int pid_suspend(int pid);
 int pid_resume(int pid);
-int task_inspect_for_pid(unsigned int target_tport, int pid, unsigned int *t);
-int task_read_for_pid(unsigned int target_tport, int pid, unsigned int *t);
+__API_AVAILABLE(macos(11.3), ios(14.5), tvos(14.5), watchos(7.3))
+int task_inspect_for_pid(unsigned int target_tport, int pid, unsigned int *t);  /* Returns task inspect port */
+__API_AVAILABLE(macos(11.3), ios(14.5), tvos(14.5), watchos(7.3))
+int task_read_for_pid(unsigned int target_tport, int pid, unsigned int *t);     /* Returns task read port */
 
 #if defined(__arm__) || defined(__arm64__)
 int pid_hibernate(int pid);

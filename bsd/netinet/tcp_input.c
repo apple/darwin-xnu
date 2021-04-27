@@ -2237,6 +2237,11 @@ findpcb:
 		goto dropwithreset;
 	}
 
+	/* Now that we found the tcpcb, we can adjust the TCP timestamp */
+	if (to.to_flags & TOF_TS) {
+		to.to_tsecr -= tp->t_ts_offset;
+	}
+
 	TCP_LOG_TH_FLAGS(TCP_LOG_HDR, th, tp, false, ifp);
 
 	if (tp->t_state == TCPS_CLOSED) {
@@ -2889,7 +2894,8 @@ findpcb:
 	 * be TH_NEEDSYN.
 	 */
 	if (tp->t_state == TCPS_ESTABLISHED &&
-	    (thflags & (TH_SYN | TH_FIN | TH_RST | TH_URG | TH_ACK | TH_ECE | TH_CWR)) == TH_ACK &&
+	    !(so->so_state & SS_CANTRCVMORE) &&
+	    (thflags & TH_FLAGS) == TH_ACK &&
 	    ((tp->t_flags & TF_NEEDFIN) == 0) &&
 	    ((to.to_flags & TOF_TS) == 0 ||
 	    TSTMP_GEQ(to.to_tsval, tp->ts_recent)) &&
@@ -3066,11 +3072,6 @@ findpcb:
 			so_recv_data_stat(so, m, 0);
 			m_adj(m, drop_hdrlen);  /* delayed header drop */
 
-			/*
-			 * If message delivery (SOF_ENABLE_MSGS) is enabled on
-			 * this socket, deliver the packet received as an
-			 * in-order message with sequence number attached to it.
-			 */
 			if (isipv6) {
 				memcpy(&saved_hdr, ip6, sizeof(struct ip6_hdr));
 				ip6 = (struct ip6_hdr *)&saved_hdr[0];
@@ -3926,6 +3927,11 @@ close:
 
 		if ((so->so_flags & SOF_DEFUNCT) && tp->t_state > TCPS_FIN_WAIT_1) {
 			TCP_LOG_DROP_PCB(TCP_LOG_HDR, th, tp, false, "SOF_DEFUNCT");
+			close_it = TRUE;
+		}
+
+		if (so->so_state & SS_CANTRCVMORE) {
+			TCP_LOG_DROP_PCB(TCP_LOG_HDR, th, tp, false, "SS_CANTRCVMORE");
 			close_it = TRUE;
 		}
 
@@ -5165,6 +5171,11 @@ dodata:
 		    (m->m_pkthdr.pkt_flags & PKTF_MPTCP_DFIN) &&
 		    (m->m_pkthdr.pkt_flags & PKTF_MPTCP)) {
 			m_adj(m, drop_hdrlen);  /* delayed header drop */
+			/*
+			 * 0-length DATA_FIN. The rlen is actually 0. We special-case the
+			 * byte consumed by the dfin in mptcp_input and mptcp_reass_present
+			 */
+			m->m_pkthdr.mp_rlen = 0;
 			mptcp_input(tptomptp(tp)->mpt_mpte, m);
 			tp->t_flags |= TF_ACKNOW;
 		} else {
@@ -5457,6 +5468,7 @@ tcp_dooptions(struct tcpcb *tp, u_char *cp, int cnt, struct tcphdr *th,
 			bcopy((char *)cp + 6,
 			    (char *)&to->to_tsecr, sizeof(to->to_tsecr));
 			NTOHL(to->to_tsecr);
+			to->to_tsecr -= tp->t_ts_offset;
 			/* Re-enable sending Timestamps if we received them */
 			if (!(tp->t_flags & TF_REQ_TSTMP)) {
 				tp->t_flags |= TF_REQ_TSTMP;

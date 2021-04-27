@@ -256,6 +256,9 @@ struct thread {
 	vm_offset_t             kernel_stack;   /* current kernel stack */
 	vm_offset_t             reserved_stack; /* reserved kernel stack */
 
+	/*** Machine-dependent state ***/
+	struct machine_thread   machine;
+
 #if KASAN
 	struct kasan_thread_data kasan_data;
 #endif
@@ -516,13 +519,14 @@ struct thread {
 
 	/* Miscellaneous bits guarded by mutex */
 	uint32_t
-	    active:1,                                   /* Thread is active and has not been terminated */
-	    started:1,                                  /* Thread has been started after creation */
-	    static_param:1,                             /* Disallow policy parameter changes */
-	    inspection:1,                               /* TRUE when task is being inspected by crash reporter */
-	    policy_reset:1,                             /* Disallow policy parameter changes on terminating threads */
-	    suspend_parked:1,                           /* thread parked in thread_suspended */
-	    corpse_dup:1,                               /* TRUE when thread is an inactive duplicate in a corpse */
+	    active:1,           /* Thread is active and has not been terminated */
+	    ipc_active:1,       /* IPC with the thread ports is allowed */
+	    started:1,          /* Thread has been started after creation */
+	    static_param:1,     /* Disallow policy parameter changes */
+	    inspection:1,       /* TRUE when task is being inspected by crash reporter */
+	    policy_reset:1,     /* Disallow policy parameter changes on terminating threads */
+	    suspend_parked:1,   /* thread parked in thread_suspended */
+	    corpse_dup:1,       /* TRUE when thread is an inactive duplicate in a corpse */
 	:0;
 
 	decl_lck_mtx_data(, mutex);
@@ -531,8 +535,9 @@ struct thread {
 	 * Different flavors of thread port.
 	 * These flavors THREAD_FLAVOR_* are defined in mach_types.h
 	 */
-	struct ipc_port         *ith_self[THREAD_SELF_PORT_COUNT];        /* does not hold right */
+	struct ipc_port         *ith_thread_ports[THREAD_SELF_PORT_COUNT];        /* does not hold right */
 	struct ipc_port         *ith_settable_self;        /* a send right */
+	struct ipc_port         *ith_self;                 /* immovable/pinned thread port */
 	struct ipc_port         *ith_special_reply_port;   /* ref to special reply port */
 	struct exception_action *exc_actions;
 
@@ -592,9 +597,6 @@ struct thread {
 	/* hypervisor virtual CPU object associated with this thread */
 	void                   *hv_thread_target;
 #endif /* HYPERVISOR */
-
-	/*** Machine-dependent state ***/
-	struct machine_thread   machine;
 
 	/* Statistics accumulated per-thread and aggregated per-task */
 	uint32_t                syscalls_unix;
@@ -662,13 +664,13 @@ struct thread {
 #if     SCHED_TRACE_THREAD_WAKEUPS
 	uintptr_t               thread_wakeup_bt[64];
 #endif
-	turnstile_update_flags_t inheritor_flags; /* inheritor flags for inheritor field */
-	block_hint_t            pending_block_hint;
-	block_hint_t            block_hint;      /* What type of primitive last caused us to block. */
-	integer_t               decompressions;  /* Per-thread decompressions counter to be added to per-task decompressions counter */
-	int                     thread_region_page_shift; /* Page shift that this thread would like to use when */
-	                                                  /* introspecting a task. This is currently being used */
-	                                                  /* by footprint which uses a thread for each task being inspected. */
+	turnstile_update_flags_t inheritor_flags;          /* inheritor flags for inheritor field */
+	block_hint_t             pending_block_hint;
+	block_hint_t             block_hint;               /* What type of primitive last caused us to block. */
+	integer_t                decompressions;           /* Per-thread decompressions counter to be added to per-task decompressions counter */
+	int                      thread_region_page_shift; /* Page shift that this thread would like to use when */
+	                                                   /* introspecting a task. This is currently being used */
+	                                                   /* by footprint which uses a thread for each task being inspected. */
 };
 
 #define ith_state           saved.receive.state
@@ -740,8 +742,14 @@ extern void                     thread_read_deallocate(
 
 extern void                     thread_terminate_self(void);
 
+__options_decl(thread_terminate_options_t, uint32_t, {
+	TH_TERMINATE_OPTION_NONE,
+	TH_TERMINATE_OPTION_UNPIN
+});
+
 extern kern_return_t    thread_terminate_internal(
-	thread_t                thread);
+	thread_t                    thread,
+	thread_terminate_options_t  options);
 
 extern void                     thread_start(
 	thread_t                        thread) __attribute__ ((noinline));
@@ -1067,10 +1075,18 @@ extern kern_return_t    thread_create_with_continuation(
 	thread_t *new_thread,
 	thread_continue_t continuation);
 
-extern kern_return_t thread_create_waiting(task_t               task,
-    thread_continue_t    continuation,
-    event_t              event,
-    thread_t             *new_thread);
+/* thread_create_waiting options */
+__options_decl(th_create_waiting_options_t, uint32_t, {
+	TH_CREATE_WAITING_OPTION_PINNED = 0x10,
+	TH_CREATE_WAITING_OPTION_IMMOVABLE = 0x20,
+});
+#define TH_CREATE_WAITING_OPTION_MASK          0x30
+
+extern kern_return_t thread_create_waiting(task_t    task,
+    thread_continue_t              continuation,
+    event_t                        event,
+    th_create_waiting_options_t    options,
+    thread_t                       *new_thread);
 
 extern kern_return_t    thread_create_workq_waiting(
 	task_t                  task,
@@ -1381,6 +1397,7 @@ void thread_clear_eager_preempt(thread_t thread);
 void thread_set_honor_qlimit(thread_t thread);
 void thread_clear_honor_qlimit(thread_t thread);
 extern ipc_port_t convert_thread_to_port(thread_t);
+extern ipc_port_t convert_thread_to_port_pinned(thread_t);
 extern ipc_port_t convert_thread_inspect_to_port(thread_inspect_t);
 extern ipc_port_t convert_thread_read_to_port(thread_read_t);
 extern boolean_t is_vm_privileged(void);
@@ -1391,6 +1408,9 @@ extern void thread_iokit_tls_set(uint32_t index, void * data);
 extern void thread_port_with_flavor_notify(mach_msg_header_t *msg);
 extern int thread_self_region_page_shift(void);
 extern void thread_self_region_page_shift_set(int pgshift);
+extern kern_return_t thread_create_pinned(task_t task, thread_t *new_thread);
+extern kern_return_t thread_create_immovable(task_t task, thread_t *new_thread);
+extern kern_return_t thread_terminate_pinned(thread_t thread);
 #endif /* KERNEL_PRIVATE */
 
 __END_DECLS

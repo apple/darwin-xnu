@@ -78,6 +78,7 @@ OS_ENUM(firehose_stream, uint8_t,
     firehose_stream_memory_baseband             = 6,
 
     _firehose_stream_max,
+    _firehose_stream_disabled = (uint8_t)-1,
     );
 
 /*!
@@ -131,9 +132,10 @@ OS_OPTIONS(firehose_tracepoint_flags, uint16_t,
         _firehose_tracepoint_flags_pc_style_main_plugin         = 0x0003 << 1,
         _firehose_tracepoint_flags_pc_style_absolute            = 0x0004 << 1,
         _firehose_tracepoint_flags_pc_style_uuid_relative       = 0x0005 << 1,
-        _firehose_tracepoint_flags_pc_style__unused6            = 0x0006 << 1,
+        _firehose_tracepoint_flags_pc_style_large_shared_cache  = 0x0006 << 1,
         _firehose_tracepoint_flags_pc_style__unused7            = 0x0007 << 1,
         _firehose_tracepoint_flags_base_has_unique_pid          = 0x0010,
+        _firehose_tracepoint_flags_base_has_large_offset        = 0x0020,
     );
 
 /*
@@ -264,14 +266,18 @@ OS_ENUM(_firehose_tracepoint_type_signpost, firehose_tracepoint_type_t,
  * @abstract
  * Flags for Log tracepoints (namespace signpost).
  *
- * When flags are shared with the log type, they should havethe same values.
+ * When flags are shared with the log type, they should have the same values.
  */
 OS_OPTIONS(_firehose_tracepoint_flags_signpost, uint16_t,
+    // shared with log
     _firehose_tracepoint_flags_signpost_has_private_data    = 0x0100,
     _firehose_tracepoint_flags_signpost_has_subsystem       = 0x0200,
     _firehose_tracepoint_flags_signpost_has_rules           = 0x0400,
     _firehose_tracepoint_flags_signpost_has_oversize        = 0x0800,
     _firehose_tracepoint_flags_signpost_has_context_data    = 0x1000,
+
+    // specific to signpost
+    _firehose_tracepoint_flags_signpost_has_name            = 0x8000,
     );
 
 /* MIG firehose push reply structure */

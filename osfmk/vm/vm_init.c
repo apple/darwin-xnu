@@ -87,9 +87,6 @@ const vm_offset_t vm_max_kernel_address = VM_MAX_KERNEL_ADDRESS;
 TUNABLE(bool, iokit_iomd_setownership_enabled,
     "iokit_iomd_setownership_enabled", true);
 
-vm_offset_t kmapoff_kaddr;
-unsigned int kmapoff_pgcnt;
-
 static inline void
 vm_mem_bootstrap_log(const char *message)
 {
@@ -105,7 +102,7 @@ __startup_func
 void
 vm_mem_bootstrap(void)
 {
-	vm_offset_t     start, end;
+	vm_offset_t start, end, kmapoff_kaddr;
 
 	/*
 	 *	Initializes resident memory structures.
@@ -124,6 +121,8 @@ vm_mem_bootstrap(void)
 
 	vm_mem_bootstrap_log("vm_object_bootstrap");
 	vm_object_bootstrap();
+
+	vm_retire_boot_pages();
 
 	kernel_startup_initialize_upto(STARTUP_SUB_VM_KERNEL);
 
@@ -144,10 +143,11 @@ vm_mem_bootstrap(void)
 	 * pointer packing schemes using KERNEL_PMAP_HEAP_RANGE_START as a base
 	 * do not admit this address to be part of any zone submap.
 	 */
-	kmapoff_pgcnt = (early_random() & 0x1ff) + 1; /* 9 bits */
-	if (vm_allocate_kernel(kernel_map, &kmapoff_kaddr,
-	    kmapoff_pgcnt * PAGE_SIZE_64, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_OSFMK) != KERN_SUCCESS) {
-		panic("cannot vm_allocate %u kernel_map pages", kmapoff_pgcnt);
+	uint32_t kmapoff_pgcnt = (early_random() & 0x1ff) + 1; /* 9 bits */
+	if (kernel_memory_allocate(kernel_map, &kmapoff_kaddr,
+	    ptoa(kmapoff_pgcnt), 0, KMA_KOBJECT | KMA_PERMANENT | KMA_VAONLY,
+	    VM_KERN_MEMORY_OSFMK) != KERN_SUCCESS) {
+		panic("cannot kernel_memory_allocate %u pages", kmapoff_pgcnt);
 	}
 
 	vm_mem_bootstrap_log("pmap_init");

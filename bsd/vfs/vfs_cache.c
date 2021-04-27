@@ -145,21 +145,15 @@ struct  nchstats nchstats;              /* cache effectiveness statistics */
 
 
 /* vars for name cache list lock */
-lck_grp_t * namecache_lck_grp;
-lck_grp_attr_t * namecache_lck_grp_attr;
-lck_attr_t * namecache_lck_attr;
+static LCK_GRP_DECLARE(namecache_lck_grp, "Name Cache");
+static LCK_RW_DECLARE(namecache_rw_lock, &namecache_lck_grp);
 
-lck_grp_t * strcache_lck_grp;
-lck_grp_attr_t * strcache_lck_grp_attr;
-lck_attr_t * strcache_lck_attr;
+static LCK_GRP_DECLARE(strcache_lck_grp, "String Cache");
+static LCK_ATTR_DECLARE(strcache_lck_attr, 0, 0);
+LCK_RW_DECLARE_ATTR(strtable_rw_lock, &strcache_lck_grp, &strcache_lck_attr);
 
-lck_grp_t * rootvnode_lck_grp;
-lck_grp_attr_t * rootvnode_lck_grp_attr;
-lck_attr_t * rootvnode_lck_attr;
-
-lck_rw_t  * namecache_rw_lock;
-lck_rw_t  * strtable_rw_lock;
-lck_rw_t  * rootvnode_rw_lock;
+static LCK_GRP_DECLARE(rootvnode_lck_grp, "rootvnode");
+LCK_RW_DECLARE(rootvnode_rw_lock, &rootvnode_lck_grp);
 
 #define NUM_STRCACHE_LOCKS 1024
 
@@ -2400,8 +2394,6 @@ init_crc32(void)
 void
 nchinit(void)
 {
-	int     i;
-
 	desiredNegNodes = (desiredvnodes / 10);
 	desiredNodes = desiredvnodes + desiredNegNodes;
 
@@ -2416,61 +2408,27 @@ nchinit(void)
 
 	init_string_table();
 
-	/* Allocate name cache lock group attribute and group */
-	namecache_lck_grp_attr = lck_grp_attr_alloc_init();
-
-	namecache_lck_grp = lck_grp_alloc_init("Name Cache", namecache_lck_grp_attr);
-
-	/* Allocate name cache lock attribute */
-	namecache_lck_attr = lck_attr_alloc_init();
-
-	/* Allocate name cache lock */
-	namecache_rw_lock = lck_rw_alloc_init(namecache_lck_grp, namecache_lck_attr);
-
-
-	/* Allocate string cache lock group attribute and group */
-	strcache_lck_grp_attr = lck_grp_attr_alloc_init();
-
-	strcache_lck_grp = lck_grp_alloc_init("String Cache", strcache_lck_grp_attr);
-
-	/* Allocate string cache lock attribute */
-	strcache_lck_attr = lck_attr_alloc_init();
-
-	/* Allocate string cache lock */
-	strtable_rw_lock = lck_rw_alloc_init(strcache_lck_grp, strcache_lck_attr);
-
-	for (i = 0; i < NUM_STRCACHE_LOCKS; i++) {
-		lck_mtx_init(&strcache_mtx_locks[i], strcache_lck_grp, strcache_lck_attr);
+	for (int i = 0; i < NUM_STRCACHE_LOCKS; i++) {
+		lck_mtx_init(&strcache_mtx_locks[i], &strcache_lck_grp, &strcache_lck_attr);
 	}
-
-	/* Allocate root vnode lock group attribute and group */
-	rootvnode_lck_grp_attr = lck_grp_attr_alloc_init();
-
-	rootvnode_lck_grp = lck_grp_alloc_init("rootvnode", rootvnode_lck_grp_attr);
-
-	/* Allocate rootvnode lock attribute */
-	rootvnode_lck_attr = lck_attr_alloc_init();
-
-	/* Allocate rootvnode lock */
-	rootvnode_rw_lock = lck_rw_alloc_init(rootvnode_lck_grp, rootvnode_lck_attr);
 }
 
 void
 name_cache_lock_shared(void)
 {
-	lck_rw_lock_shared(namecache_rw_lock);
+	lck_rw_lock_shared(&namecache_rw_lock);
 }
 
 void
 name_cache_lock(void)
 {
-	lck_rw_lock_exclusive(namecache_rw_lock);
+	lck_rw_lock_exclusive(&namecache_rw_lock);
 }
 
 void
 name_cache_unlock(void)
 {
-	lck_rw_done(namecache_rw_lock);
+	lck_rw_done(&namecache_rw_lock);
 }
 
 
@@ -2718,10 +2676,10 @@ resize_string_ref_table(void)
 	 * the lock exclusively in case some other thread
 	 * beat us to the punch
 	 */
-	lck_rw_lock_exclusive(strtable_rw_lock);
+	lck_rw_lock_exclusive(&strtable_rw_lock);
 
 	if (4 * filled_buckets < ((string_table_mask + 1) * 3)) {
-		lck_rw_done(strtable_rw_lock);
+		lck_rw_done(&strtable_rw_lock);
 		return;
 	}
 	assert(string_table_mask < INT32_MAX);
@@ -2729,7 +2687,7 @@ resize_string_ref_table(void)
 
 	if (new_table == NULL) {
 		printf("failed to resize the hash table.\n");
-		lck_rw_done(strtable_rw_lock);
+		lck_rw_done(&strtable_rw_lock);
 		return;
 	}
 
@@ -2755,7 +2713,7 @@ resize_string_ref_table(void)
 			LIST_INSERT_HEAD(head, entry, hash_chain);
 		}
 	}
-	lck_rw_done(strtable_rw_lock);
+	lck_rw_done(&strtable_rw_lock);
 
 	FREE(old_table, M_CACHE);
 }
@@ -2806,17 +2764,17 @@ add_name_internal(const char *name, uint32_t len, u_int hashval, boolean_t need_
 	 * if someone else decides to grow the pool they
 	 * will take this lock exclusively
 	 */
-	lck_rw_lock_shared(strtable_rw_lock);
+	lck_rw_lock_shared(&strtable_rw_lock);
 
 	/*
 	 * If the table gets more than 3/4 full, resize it
 	 */
 	if (4 * filled_buckets >= ((string_table_mask + 1) * 3)) {
-		lck_rw_done(strtable_rw_lock);
+		lck_rw_done(&strtable_rw_lock);
 
 		resize_string_ref_table();
 
-		lck_rw_lock_shared(strtable_rw_lock);
+		lck_rw_lock_shared(&strtable_rw_lock);
 	}
 	hash_index = hashval & string_table_mask;
 	lock_index = hash_index % NUM_STRCACHE_LOCKS;
@@ -2853,7 +2811,7 @@ add_name_internal(const char *name, uint32_t len, u_int hashval, boolean_t need_
 	}
 
 	lck_mtx_unlock(&strcache_mtx_locks[lock_index]);
-	lck_rw_done(strtable_rw_lock);
+	lck_rw_done(&strtable_rw_lock);
 
 	return (const char *)entry->str;
 }
@@ -2876,7 +2834,7 @@ vfs_removename(const char *nameref)
 	 * if someone else decides to grow the pool they
 	 * will take this lock exclusively
 	 */
-	lck_rw_lock_shared(strtable_rw_lock);
+	lck_rw_lock_shared(&strtable_rw_lock);
 	/*
 	 * must compute the head behind the table lock
 	 * since the size and location of the table
@@ -2907,7 +2865,7 @@ vfs_removename(const char *nameref)
 		}
 	}
 	lck_mtx_unlock(&strcache_mtx_locks[lock_index]);
-	lck_rw_done(strtable_rw_lock);
+	lck_rw_done(&strtable_rw_lock);
 
 	kheap_free_addr(KHEAP_DEFAULT, entry);
 
@@ -2923,7 +2881,7 @@ dump_string_table(void)
 	string_t          *entry;
 	u_long            i;
 
-	lck_rw_lock_shared(strtable_rw_lock);
+	lck_rw_lock_shared(&strtable_rw_lock);
 
 	for (i = 0; i <= string_table_mask; i++) {
 		head = &string_ref_table[i];
@@ -2931,6 +2889,6 @@ dump_string_table(void)
 			printf("%6d - %s\n", entry->refcount, entry->str);
 		}
 	}
-	lck_rw_done(strtable_rw_lock);
+	lck_rw_done(&strtable_rw_lock);
 }
 #endif  /* DUMP_STRING_TABLE */

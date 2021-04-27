@@ -50,6 +50,8 @@ extern "C" {
 /*
  * DTrace Implementation Locks
  */
+extern lck_attr_t dtrace_lck_attr;
+extern lck_grp_t dtrace_lck_grp;
 extern lck_mtx_t dtrace_procwaitfor_lock;
 
 /*
@@ -1395,7 +1397,6 @@ extern void dtrace_probe_error(dtrace_state_t *, dtrace_epid_t, int, int,
 extern int dtrace_assfail(const char *, const char *, int);
 extern int dtrace_attached(void);
 extern hrtime_t dtrace_gethrestime(void);
-extern void dtrace_isa_init(void);
 
 extern void dtrace_flush_caches(void);
 

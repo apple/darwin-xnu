@@ -102,7 +102,7 @@ static au_sentry_t audit_default_se = {
 struct auditinfo_addr * const audit_default_aia_p = &audit_default_se.se_auinfo;
 
 /* Copied from <ipc/ipc_object.h> */
-#define IPC_KMSG_FLAGS_ALLOW_IMMOVABLE_SEND 0x1
+#define IPC_OBJECT_COPYIN_FLAGS_ALLOW_IMMOVABLE_SEND 0x1
 kern_return_t ipc_object_copyin(ipc_space_t, mach_port_name_t,
     mach_msg_type_name_t, ipc_port_t *, mach_port_context_t, mach_msg_guard_flags_t *, uint32_t);
 void ipc_port_release_send(ipc_port_t);
@@ -1517,7 +1517,7 @@ audit_session_join(proc_t p, struct audit_session_join_args *uap,
 
 
 	if (ipc_object_copyin(get_task_ipcspace(p->task), send,
-	    MACH_MSG_TYPE_COPY_SEND, &port, 0, NULL, IPC_KMSG_FLAGS_ALLOW_IMMOVABLE_SEND) != KERN_SUCCESS) {
+	    MACH_MSG_TYPE_COPY_SEND, &port, 0, NULL, IPC_OBJECT_COPYIN_FLAGS_ALLOW_IMMOVABLE_SEND) != KERN_SUCCESS) {
 		*ret_asid = AU_DEFAUDITSID;
 		err = EINVAL;
 	} else {

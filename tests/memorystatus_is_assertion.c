@@ -122,8 +122,8 @@ memorystatus_assertion_test_repetitive(char *test, boolean_t turn_on_dirty_track
 	pid_t mypid = getpid();
 
 	/* these values will remain fixed during testing */
-	int             active_limit_mb = 15;   /* arbitrary */
-	int             inactive_limit_mb = 10;  /* arbitrary */
+	int             active_limit_mb = 35;   /* arbitrary */
+	int             inactive_limit_mb = 25;  /* arbitrary */
 
 	/* these values may vary during test */
 	int             requestedpriority = 0;
@@ -224,8 +224,8 @@ memorystatus_assertion_test_allow_idle_exit()
 	pid_t mypid = getpid();
 
 	/* these values will remain fixed during testing */
-	int active_limit_mb   = 15; /* arbitrary */
-	int inactive_limit_mb = 10;  /* arbitrary */
+	int active_limit_mb   = 35; /* arbitrary */
+	int inactive_limit_mb = 25;  /* arbitrary */
 
 	/* these values may vary during test */
 	int requestedpriority = JETSAM_PRIORITY_UI_SUPPORT;
@@ -349,8 +349,8 @@ memorystatus_assertion_test_do_not_allow_idle_exit()
 	pid_t mypid = getpid();
 
 	/* these values will remain fixed during testing */
-	int             active_limit_mb = 15;   /* arbitrary */
-	int             inactive_limit_mb = 10;  /* arbitrary */
+	int             active_limit_mb = 35;   /* arbitrary */
+	int             inactive_limit_mb = 25;  /* arbitrary */
 	int             requestedpriority = JETSAM_PRIORITY_AUDIO_AND_ACCESSORY;
 
 	T_SETUPBEGIN;

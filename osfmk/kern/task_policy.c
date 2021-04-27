@@ -3177,10 +3177,9 @@ task_removewatchers(task_t task)
 	queue_head_t queue;
 	task_watch_t *twp;
 
-	queue_init(&queue);
-
 	task_watch_lock();
-	movqueue(&queue, &task->task_watchers);
+	queue_new_head(&task->task_watchers, &queue, task_watch_t *, tw_links);
+	queue_init(&task->task_watchers);
 
 	queue_iterate(&queue, twp, task_watch_t *, tw_links) {
 		/*
@@ -3193,7 +3192,8 @@ task_removewatchers(task_t task)
 	task->num_taskwatchers = 0;
 	task_watch_unlock();
 
-	while ((twp = qe_dequeue_head(&task->task_watchers, task_watch_t, tw_links)) != NULL) {
+	while (!queue_empty(&queue)) {
+		queue_remove_first(&queue, twp, task_watch_t *, tw_links);
 		/* remove thread and network bg */
 		set_thread_appbg(twp->tw_thread, 0, twp->tw_importance);
 		thread_deallocate(twp->tw_thread);

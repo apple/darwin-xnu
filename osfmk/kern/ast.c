@@ -55,7 +55,7 @@
  */
 
 #include <kern/ast.h>
-#include <kern/counters.h>
+#include <kern/counter.h>
 #include <kern/cpu_quiesce.h>
 #include <kern/misc_protos.h>
 #include <kern/queue.h>
@@ -131,8 +131,6 @@ ast_taken_kernel(void)
 	ast_t urgent_reason = ast_consume(AST_PREEMPTION);
 
 	assert(urgent_reason & AST_PREEMPT);
-
-	counter(c_ast_taken_block++);
 
 	thread_block_reason(THREAD_CONTINUE_NULL, NULL, urgent_reason);
 
@@ -311,7 +309,6 @@ ast_taken_user(void)
 #endif
 
 		if (preemption_reasons & AST_PREEMPT) {
-			counter(c_ast_taken_block++);
 			/* switching to a continuation implicitly re-enables interrupts */
 			thread_block_reason(thread_preempted, NULL, preemption_reasons);
 			/* NOTREACHED */

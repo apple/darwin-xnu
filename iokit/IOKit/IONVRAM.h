@@ -79,10 +79,12 @@ class IODTNVRAM : public IOService
 	OSDeclareDefaultStructors(IODTNVRAM);
 
 private:
+	friend class IODTNVRAMVariables;
+
 	IONVRAMController      *_nvramController;
 	OSPtr<const OSSymbol>  _registryPropertiesKey;
 	UInt8                  *_nvramImage;
-	IOLock                 *_variableLock;
+	IORWLock               *_variableLock;
 	IOLock                 *_controllerLock;
 	UInt32                 _commonPartitionOffset;
 	UInt32                 _commonPartitionSize;
@@ -151,7 +153,11 @@ private:
 	IOReturn removePropertyInternal(const OSSymbol *aKey);
 	IOReturn chooseDictionary(IONVRAMOperation operation, const uuid_t *varGuid,
 	    const char *variableName, OSDictionary **dict) const;
-	bool handleSpecialVariables(const char *name, uuid_t *guid, OSObject *obj, IOReturn *error);
+	IOReturn flushDict(const uuid_t *guid, IONVRAMOperation op);
+	bool handleSpecialVariables(const char *name, const uuid_t *guid, const OSObject *obj, IOReturn *error);
+	OSSharedPtr<OSObject> copyPropertyWithGUIDAndName(const uuid_t *guid, const char *name) const;
+	IOReturn removePropertyWithGUIDAndName(const uuid_t *guid, const char *name);
+	IOReturn setPropertyWithGUIDAndName(const uuid_t *guid, const char *name, OSObject *anObject);
 
 public:
 	virtual bool init(IORegistryEntry *old, const IORegistryPlane *plane) APPLE_KEXT_OVERRIDE;

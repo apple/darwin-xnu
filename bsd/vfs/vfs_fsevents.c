@@ -152,16 +152,18 @@ static void fsevents_wakeup(fs_event_watcher *watcher);
 //
 // Locks
 //
-static lck_grp_attr_t *  fsevent_group_attr;
-static lck_attr_t *      fsevent_lock_attr;
-static lck_grp_t *       fsevent_mutex_group;
+static LCK_ATTR_DECLARE(fsevent_lock_attr, 0, 0);
+static LCK_GRP_DECLARE(fsevent_mutex_group, "fsevent-mutex");
+static LCK_GRP_DECLARE(fsevent_rw_group, "fsevent-rw");
 
-static lck_grp_t *       fsevent_rw_group;
-
-static lck_rw_t  event_handling_lock; // handles locking for event manipulation and recycling
-static lck_mtx_t watch_table_lock;
-static lck_mtx_t event_buf_lock;
-static lck_mtx_t event_writer_lock;
+static LCK_RW_DECLARE_ATTR(event_handling_lock, // handles locking for event manipulation and recycling
+    &fsevent_rw_group, &fsevent_lock_attr);
+static LCK_MTX_DECLARE_ATTR(watch_table_lock,
+    &fsevent_mutex_group, &fsevent_lock_attr);
+static LCK_MTX_DECLARE_ATTR(event_buf_lock,
+    &fsevent_mutex_group, &fsevent_lock_attr);
+static LCK_MTX_DECLARE_ATTR(event_writer_lock,
+    &fsevent_mutex_group, &fsevent_lock_attr);
 
 
 /* Explicitly declare qsort so compiler doesn't complain */
@@ -204,29 +206,16 @@ fsevents_internal_init(void)
 
 	memset(watcher_table, 0, sizeof(watcher_table));
 
-	fsevent_lock_attr    = lck_attr_alloc_init();
-	fsevent_group_attr   = lck_grp_attr_alloc_init();
-	fsevent_mutex_group  = lck_grp_alloc_init("fsevent-mutex", fsevent_group_attr);
-	fsevent_rw_group     = lck_grp_alloc_init("fsevent-rw", fsevent_group_attr);
-
-	lck_mtx_init(&watch_table_lock, fsevent_mutex_group, fsevent_lock_attr);
-	lck_mtx_init(&event_buf_lock, fsevent_mutex_group, fsevent_lock_attr);
-	lck_mtx_init(&event_writer_lock, fsevent_mutex_group, fsevent_lock_attr);
-
-	lck_rw_init(&event_handling_lock, fsevent_rw_group, fsevent_lock_attr);
-
 	PE_get_default("kern.maxkfsevents", &max_kfs_events, sizeof(max_kfs_events));
 
 	event_zone = zone_create_ext("fs-event-buf", sizeof(kfs_event),
 	    ZC_NOGC | ZC_NOCALLOUT, ZONE_ID_ANY, ^(zone_t z) {
 		// mark the zone as exhaustible so that it will not
 		// ever grow beyond what we initially filled it with
-		zone_set_exhaustible(z, max_kfs_events * sizeof(kfs_event));
+		zone_set_exhaustible(z, max_kfs_events);
 	});
 
-	if (zfill(event_zone, max_kfs_events) < max_kfs_events) {
-		printf("fsevents: failed to pre-fill the event zone.\n");
-	}
+	zone_fill_initially(event_zone, max_kfs_events);
 }
 
 static void

@@ -75,9 +75,11 @@ mac_task_get_proc(struct task *task)
 }
 
 int
-mac_task_check_expose_task(struct task *task)
+mac_task_check_expose_task(struct task *task, mach_task_flavor_t flavor)
 {
 	int error;
+
+	assert(flavor <= TASK_FLAVOR_NAME);
 
 	struct proc *p = mac_task_get_proc(task);
 	if (p == NULL) {
@@ -87,7 +89,51 @@ mac_task_check_expose_task(struct task *task)
 
 	struct ucred *cred = kauth_cred_get();
 	proc_rele(p);
-	MAC_CHECK(proc_check_expose_task, cred, &pident);
+
+	/* Also call the old hook for compatability, deprecating in rdar://66356944. */
+	if (flavor == TASK_FLAVOR_CONTROL) {
+		MAC_CHECK(proc_check_expose_task, cred, &pident);
+		if (error) {
+			return error;
+		}
+	}
+
+	MAC_CHECK(proc_check_expose_task_with_flavor, cred, &pident, flavor);
+
+	return error;
+}
+
+int
+mac_task_check_task_id_token_get_task(struct task *task, mach_task_flavor_t flavor)
+{
+	int error;
+
+	assert(flavor <= TASK_FLAVOR_NAME);
+
+	struct proc *p = mac_task_get_proc(task);
+	if (p == NULL) {
+		return ESRCH;
+	}
+	struct proc_ident pident = proc_ident(p);
+
+	proc_rele(p);
+
+	p = current_proc();
+	kauth_cred_t cred = kauth_cred_proc_ref(p);
+	MAC_CHECK(proc_check_task_id_token_get_task, cred, &pident, flavor);
+	kauth_cred_unref(&cred);
+	return error;
+}
+
+int
+mac_task_check_get_movable_control_port(void)
+{
+	int error;
+	struct proc *p = current_proc();
+
+	kauth_cred_t cred = kauth_cred_proc_ref(p);
+	MAC_CHECK(proc_check_get_movable_control_port, cred);
+	kauth_cred_unref(&cred);
 	return error;
 }
 
@@ -122,6 +168,18 @@ mac_task_check_set_host_exception_port(struct task *task, unsigned int exception
 	MAC_CHECK(proc_check_set_host_exception_port, cred, exception);
 	kauth_cred_unref(&cred);
 	proc_rele(p);
+	return error;
+}
+
+int
+mac_task_check_dyld_process_info_notify_register(void)
+{
+	int error;
+	struct proc *p = current_proc();
+
+	kauth_cred_t cred = kauth_cred_proc_ref(p);
+	MAC_CHECK(proc_check_dyld_process_info_notify_register, cred);
+	kauth_cred_unref(&cred);
 	return error;
 }
 

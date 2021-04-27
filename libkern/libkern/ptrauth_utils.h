@@ -58,10 +58,10 @@
  */
 #if __has_feature(ptrauth_calls)
 ptrauth_generic_signature_t
-ptrauth_utils_sign_blob_generic(void * ptr, size_t len_bytes, uint64_t data, int flags);
+ptrauth_utils_sign_blob_generic(const void * ptr, size_t len_bytes, uint64_t data, int flags);
 #else
 static inline ptrauth_generic_signature_t
-ptrauth_utils_sign_blob_generic(__unused void * ptr, __unused size_t len_bytes, __unused uint64_t data, __unused int flags)
+ptrauth_utils_sign_blob_generic(__unused const void * ptr, __unused size_t len_bytes, __unused uint64_t data, __unused int flags)
 {
 	return 0;
 }
@@ -89,10 +89,10 @@ ptrauth_utils_sign_blob_generic(__unused void * ptr, __unused size_t len_bytes, 
  */
 #if __has_feature(ptrauth_calls)
 void
-ptrauth_utils_auth_blob_generic(void * ptr, size_t len_bytes, uint64_t data, int flags, ptrauth_generic_signature_t signature);
+ptrauth_utils_auth_blob_generic(const void * ptr, size_t len_bytes, uint64_t data, int flags, ptrauth_generic_signature_t signature);
 #else
 static inline void
-ptrauth_utils_auth_blob_generic(__unused void * ptr, __unused size_t len_bytes, __unused uint64_t data, __unused int flags, __unused ptrauth_generic_signature_t signature)
+ptrauth_utils_auth_blob_generic(__unused const void * ptr, __unused size_t len_bytes, __unused uint64_t data, __unused int flags, __unused ptrauth_generic_signature_t signature)
 {
 	return;
 }

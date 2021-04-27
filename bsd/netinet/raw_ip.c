@@ -934,6 +934,9 @@ rip_attach(struct socket *so, int proto, struct proc *p)
 	if ((so->so_state & SS_PRIV) == 0) {
 		return EPERM;
 	}
+	if (proto > UINT8_MAX) {
+		return EINVAL;
+	}
 
 	error = soreserve(so, rip_sendspace, rip_recvspace);
 	if (error) {

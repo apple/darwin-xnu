@@ -302,7 +302,7 @@ coredump(proc_t core_proc, uint32_t reserve_mb, int coredump_flags)
 
 	(void) task_suspend_internal(task);
 
-	MALLOC(alloced_name, char *, MAXPATHLEN, M_TEMP, M_NOWAIT | M_ZERO);
+	alloced_name = zalloc_flags(ZV_NAMEI, Z_NOWAIT | Z_ZERO);
 
 	/* create name according to sysctl'able format string */
 	/* if name creation fails, fall back to historical behaviour... */
@@ -562,7 +562,7 @@ out2:
 	audit_proc_coredump(core_proc, name, error);
 #endif
 	if (alloced_name != NULL) {
-		FREE(alloced_name, M_TEMP);
+		zfree(ZV_NAMEI, alloced_name);
 	}
 	if (error == 0) {
 		error = error1;

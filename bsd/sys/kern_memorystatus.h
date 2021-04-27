@@ -364,7 +364,7 @@ int memorystatus_control(uint32_t command, int32_t pid, uint32_t flags, void *bu
 #define MEMORYSTATUS_CMD_INCREASE_JETSAM_TASK_LIMIT   22   /* Used by DYLD to increase the jetsam active and inactive limits, when using roots */
 
 #if PRIVATE
-#define MEMORYSTATUS_CMD_SET_JETSAM_SNAPSHOT_OWNERSHIP 23 /* Used by unit tests in the development kernel only. */
+#define MEMORYSTATUS_CMD_SET_TESTING_PID 23 /* Used by unit tests in the development kernel only. */
 #endif /* PRIVATE */
 
 #define MEMORYSTATUS_CMD_GET_PROCESS_IS_FROZEN 24 /* Check if the process is frozen. */
@@ -402,8 +402,8 @@ typedef struct memorystatus_jetsam_panic_options {
 #define MEMORYSTATUS_FLAGS_GRP_SET_PROBABILITY          0x10    /* Set probability of use for a group of processes */
 
 #if PRIVATE
-#define MEMORYSTATUS_FLAGS_SNAPSHOT_TAKE_OWNERSHIP      0x20 /* Only used by xnu unit tests. */
-#define MEMORYSTATUS_FLAGS_SNAPSHOT_DROP_OWNERSHIP      0x40 /* Only used by xnu unit tests. */
+#define MEMORYSTATUS_FLAGS_SET_TESTING_PID     0x20 /* Only used by xnu unit tests. */
+#define MEMORYSTATUS_FLAGS_UNSET_TESTING_PID   0x40 /* Only used by xnu unit tests. */
 #endif /* PRIVATE */
 
 #define MEMORYSTATUS_FLAGS_SNAPSHOT_FREEZER             0x80    /* A snapshot buffer containing app kills since last consumption */

@@ -51,10 +51,10 @@ messages requesting return of other system service ports.
 <dt> <strong>TASK_KERNEL_PORT</strong>
 <dd>
 [task-self send right] The task's kernel port.  Used by the
-kernel to receive messages to manipulate the task.  This is the 
-port returned by <strong>mach_task_self</strong>.  Setting this special port 
-does not change the identity of the kernel port that names the 
-task; this simply changes the value returned as the kernel
+kernel to receive messages to manipulate the task. This is the movable task 
+port and different from the one returned by <strong>mach_task_self</strong> 
+(immovable). Setting this special port does not change the identity of the 
+kernel port that names the task; this simply changes the value returned as the kernel
 special port.
 <p>
 <dt> <strong>TASK_HOST_NAME_PORT</strong>

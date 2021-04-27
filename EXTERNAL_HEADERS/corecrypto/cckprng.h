@@ -310,7 +310,6 @@ struct cckprng_funcs {
   @param seed_nbytes Length of the seed in bytes
   @param seed Pointer to a high-entropy seed
   @param nonce_nbytes Length of the nonce in bytes
-  @param seed Pointer to a single-use nonce
 
   @discussion @p max_ngens should be set based on an upper bound of CPUs available on the device. The entropy buffer should be managed outside the PRNG and updated continuously (e.g. by an interrupt handler). The count of samples in the entropy buffer needn't be better than a rough estimate.
 */

@@ -42,8 +42,8 @@
 int vmx_use_count = 0;
 boolean_t vmx_exclusive = FALSE;
 
-lck_grp_t *vmx_lck_grp = NULL;
-lck_mtx_t *vmx_lck_mtx = NULL;
+static LCK_GRP_DECLARE(vmx_lck_grp, "vmx");
+static LCK_MTX_DECLARE(vmx_lck_mtx, &vmx_lck_grp);
 
 /* -----------------------------------------------------------------------------
 *  vmx_is_available()
@@ -113,16 +113,6 @@ vmx_enable(void)
 	}
 
 	set_cr4(get_cr4() | CR4_VMXE);
-}
-
-void
-vmx_init()
-{
-	vmx_lck_grp = lck_grp_alloc_init("vmx", LCK_GRP_ATTR_NULL);
-	assert(vmx_lck_grp);
-
-	vmx_lck_mtx = lck_mtx_alloc_init(vmx_lck_grp, LCK_ATTR_NULL);
-	assert(vmx_lck_mtx);
 }
 
 /* -----------------------------------------------------------------------------
@@ -313,7 +303,7 @@ host_vmxon(boolean_t exclusive)
 		return VMX_UNSUPPORTED;
 	}
 
-	lck_mtx_lock(vmx_lck_mtx);
+	lck_mtx_lock(&vmx_lck_mtx);
 
 	if (vmx_exclusive || (exclusive && vmx_use_count)) {
 		error = VMX_INUSE;
@@ -331,7 +321,7 @@ host_vmxon(boolean_t exclusive)
 		error = VMX_OK;
 	}
 
-	lck_mtx_unlock(vmx_lck_mtx);
+	lck_mtx_unlock(&vmx_lck_mtx);
 
 	return error;
 }
@@ -345,7 +335,7 @@ host_vmxoff()
 {
 	assert(0 == get_preemption_level());
 
-	lck_mtx_lock(vmx_lck_mtx);
+	lck_mtx_lock(&vmx_lck_mtx);
 
 	if (1 == vmx_use_count) {
 		vmx_exclusive = FALSE;
@@ -356,7 +346,7 @@ host_vmxoff()
 		vmx_use_count--;
 	}
 
-	lck_mtx_unlock(vmx_lck_mtx);
+	lck_mtx_unlock(&vmx_lck_mtx);
 
 	VMX_KPRINTF("VMX use count: %d\n", vmx_use_count);
 }

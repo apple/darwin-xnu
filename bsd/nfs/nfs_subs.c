@@ -1040,7 +1040,7 @@ nfs_get_xid(uint64_t *xidp)
 {
 	struct timeval tv;
 
-	lck_mtx_lock(nfs_request_mutex);
+	lck_mtx_lock(&nfs_request_mutex);
 	if (!nfs_xid) {
 		/*
 		 * Derive initial xid from system time.
@@ -1059,7 +1059,7 @@ nfs_get_xid(uint64_t *xidp)
 		nfs_xid++;
 	}
 	*xidp = nfs_xid + (nfs_xidwrap << 32);
-	lck_mtx_unlock(nfs_request_mutex);
+	lck_mtx_unlock(&nfs_request_mutex);
 }
 
 /*
@@ -2755,13 +2755,14 @@ nfsrv_hang_addrlist(struct nfs_export *nx, struct user_nfs_export_args *unxa)
 	struct radix_node *rn;
 	struct sockaddr *saddr, *smask;
 	struct domain *dom;
-	size_t i;
+	size_t i, ss_minsize;
 	int error;
 	unsigned int net;
 	user_addr_t uaddr;
 	kauth_cred_t cred;
 
 	uaddr = unxa->nxa_nets;
+	ss_minsize = sizeof(((struct sockaddr_storage *)0)->ss_len) + sizeof(((struct sockaddr_storage *)0)->ss_family);
 	for (net = 0; net < unxa->nxa_netcount; net++, uaddr += sizeof(nxna)) {
 		error = copyin(uaddr, &nxna, sizeof(nxna));
 		if (error) {
@@ -2769,7 +2770,9 @@ nfsrv_hang_addrlist(struct nfs_export *nx, struct user_nfs_export_args *unxa)
 		}
 
 		if (nxna.nxna_addr.ss_len > sizeof(struct sockaddr_storage) ||
+		    (nxna.nxna_addr.ss_len != 0 && nxna.nxna_addr.ss_len < ss_minsize) ||
 		    nxna.nxna_mask.ss_len > sizeof(struct sockaddr_storage) ||
+		    (nxna.nxna_mask.ss_len != 0 && nxna.nxna_mask.ss_len < ss_minsize) ||
 		    nxna.nxna_addr.ss_family > AF_MAX ||
 		    nxna.nxna_mask.ss_family > AF_MAX) {
 			return EINVAL;
@@ -2956,6 +2959,7 @@ nfsrv_free_addrlist(struct nfs_export *nx, struct user_nfs_export_args *unxa)
 	struct radix_node *rn;
 	struct nfsrv_free_netopt_arg fna;
 	struct nfs_netopt *nno;
+	size_t ss_minsize;
 	user_addr_t uaddr;
 	unsigned int net;
 	int i, error;
@@ -2976,6 +2980,7 @@ nfsrv_free_addrlist(struct nfs_export *nx, struct user_nfs_export_args *unxa)
 
 	/* delete only the exports specified */
 	uaddr = unxa->nxa_nets;
+	ss_minsize = sizeof(((struct sockaddr_storage *)0)->ss_len) + sizeof(((struct sockaddr_storage *)0)->ss_family);
 	for (net = 0; net < unxa->nxa_netcount; net++, uaddr += sizeof(nxna)) {
 		error = copyin(uaddr, &nxna, sizeof(nxna));
 		if (error) {
@@ -2991,6 +2996,20 @@ nfsrv_free_addrlist(struct nfs_export *nx, struct user_nfs_export_args *unxa)
 				}
 				nx->nx_expcnt--;
 			}
+			continue;
+		}
+
+		if (nxna.nxna_addr.ss_len > sizeof(struct sockaddr_storage) ||
+		    (nxna.nxna_addr.ss_len != 0 && nxna.nxna_addr.ss_len < ss_minsize) ||
+		    nxna.nxna_addr.ss_family > AF_MAX) {
+			printf("nfsrv_free_addrlist: invalid socket address (%u)\n", net);
+			continue;
+		}
+
+		if (nxna.nxna_mask.ss_len > sizeof(struct sockaddr_storage) ||
+		    (nxna.nxna_mask.ss_len != 0 && nxna.nxna_mask.ss_len < ss_minsize) ||
+		    nxna.nxna_mask.ss_family > AF_MAX) {
+			printf("nfsrv_free_addrlist: invalid socket mask (%u)\n", net);
 			continue;
 		}
 
@@ -3031,21 +3050,24 @@ nfsrv_free_addrlist(struct nfs_export *nx, struct user_nfs_export_args *unxa)
 
 void enablequotas(struct mount *mp, vfs_context_t ctx); // XXX
 
+#define DATA_VOLUME_MP "/System/Volumes/Data" // PLATFORM_DATA_VOLUME_MOUNT_POINT
+
 int
 nfsrv_export(struct user_nfs_export_args *unxa, vfs_context_t ctx)
 {
 	int error = 0;
-	size_t pathlen;
+	size_t pathlen, nxfs_pathlen;
 	struct nfs_exportfs *nxfs, *nxfs2, *nxfs3;
 	struct nfs_export *nx, *nx2, *nx3;
 	struct nfs_filehandle nfh;
 	struct nameidata mnd, xnd;
 	vnode_t mvp = NULL, xvp = NULL;
 	mount_t mp = NULL;
-	char path[MAXPATHLEN];
+	char path[MAXPATHLEN], *nxfs_path;
 	char fl_pathbuff[MAXPATHLEN];
 	int fl_pathbuff_len = MAXPATHLEN;
 	int expisroot;
+	size_t datavol_len = strlen(DATA_VOLUME_MP);
 
 	if (unxa->nxa_flags == NXA_CHECK) {
 		/* just check if the path is an NFS-exportable file system */
@@ -3147,7 +3169,8 @@ nfsrv_export(struct user_nfs_export_args *unxa, vfs_context_t ctx)
 	}
 	if (nxfs) {
 		/* verify exported FS path matches given path */
-		if (strncmp(path, nxfs->nxfs_path, MAXPATHLEN)) {
+		if (strncmp(path, nxfs->nxfs_path, MAXPATHLEN) &&
+		    (strncmp(path, DATA_VOLUME_MP, datavol_len) || strncmp(path + datavol_len, nxfs->nxfs_path, MAXPATHLEN - datavol_len))) {
 			error = EEXIST;
 			goto unlock_out;
 		}
@@ -3239,13 +3262,20 @@ nfsrv_export(struct user_nfs_export_args *unxa, vfs_context_t ctx)
 		}
 		bzero(nxfs, sizeof(struct nfs_exportfs));
 		nxfs->nxfs_id = unxa->nxa_fsid;
-		MALLOC(nxfs->nxfs_path, char*, pathlen, M_TEMP, M_WAITOK);
+		if (mp) {
+			nxfs_path = mp->mnt_vfsstat.f_mntonname;
+			nxfs_pathlen = sizeof(mp->mnt_vfsstat.f_mntonname);
+		} else {
+			nxfs_path = path;
+			nxfs_pathlen = pathlen;
+		}
+		MALLOC(nxfs->nxfs_path, char*, nxfs_pathlen, M_TEMP, M_WAITOK);
 		if (!nxfs->nxfs_path) {
 			FREE(nxfs, M_TEMP);
 			error = ENOMEM;
 			goto out;
 		}
-		bcopy(path, nxfs->nxfs_path, pathlen);
+		bcopy(nxfs_path, nxfs->nxfs_path, nxfs_pathlen);
 		/* insert into list in reverse-sorted order */
 		nxfs3 = NULL;
 		LIST_FOREACH(nxfs2, &nfsrv_exports, nxfs_next) {
@@ -4052,7 +4082,7 @@ nfsrv_init_user_list(struct nfs_active_user_list *ulist)
 	}
 	ulist->node_count = 0;
 
-	lck_mtx_init(&ulist->user_mutex, nfsrv_active_user_mutex_group, LCK_ATTR_NULL);
+	lck_mtx_init(&ulist->user_mutex, &nfsrv_active_user_mutex_group, LCK_ATTR_NULL);
 }
 
 /* Free all nodes in an active user list */
@@ -4076,7 +4106,7 @@ nfsrv_free_user_list(struct nfs_active_user_list *ulist)
 	}
 	ulist->node_count = 0;
 
-	lck_mtx_destroy(&ulist->user_mutex, nfsrv_active_user_mutex_group);
+	lck_mtx_destroy(&ulist->user_mutex, &nfsrv_active_user_mutex_group);
 }
 
 /* Reclaim old expired user nodes from active user lists. */

@@ -2,284 +2,190 @@
  * Test to validate that we can schedule threads on all hw.ncpus cores according to _os_cpu_number
  *
  * <rdar://problem/29545645>
+ * <rdar://problem/30445216>
  *
  *  xcrun -sdk macosx.internal clang -o cpucount cpucount.c -ldarwintest -g -Weverything
  *  xcrun -sdk iphoneos.internal clang -arch arm64 -o cpucount-ios cpucount.c -ldarwintest -g -Weverything
+ *  xcrun -sdk macosx.internal clang -o cpucount cpucount.c -ldarwintest -arch arm64e -Weverything
  */
 
 #include <darwintest.h>
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>
-#include <stdalign.h>
 #include <unistd.h>
-#include <assert.h>
 #include <pthread.h>
-#include <err.h>
-#include <errno.h>
-#include <sysexits.h>
 #include <sys/sysctl.h>
-#include <stdatomic.h>
+#include <sys/proc_info.h>
+#include <libproc.h>
 
 #include <mach/mach.h>
 #include <mach/mach_time.h>
 
 #include <os/tsd.h> /* private header for _os_cpu_number */
 
-T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+T_GLOBAL_META(
+	T_META_RUN_CONCURRENTLY(false),
+	T_META_BOOTARGS_SET("enable_skstb=1"),
+	T_META_CHECK_LEAKS(false),
+	T_META_ASROOT(true),
+	T_META_ALL_VALID_ARCHS(true)
+	);
 
-/* const variables aren't constants, but enums are */
-enum { max_threads = 40 };
+#define KERNEL_BOOTARGS_MAX_SIZE 1024
+static char kernel_bootargs[KERNEL_BOOTARGS_MAX_SIZE];
 
-#define CACHE_ALIGNED __attribute__((aligned(128)))
-
-static _Atomic CACHE_ALIGNED uint64_t g_ready_threads = 0;
-
-static _Atomic CACHE_ALIGNED bool g_cpu_seen[max_threads];
-
-static _Atomic CACHE_ALIGNED bool g_bail = false;
-
-static uint32_t g_threads; /* set by sysctl hw.ncpu */
-
-static uint64_t g_spin_ms = 50; /* it takes ~50ms of spinning for CLPC to deign to give us all cores */
-
-/*
- * sometimes pageout scan can eat all of CPU 0 long enough to fail the test,
- * so we run the test at RT priority
- */
-static uint32_t g_thread_pri = 97;
-
-/*
- * add in some extra low-pri threads to convince the amp scheduler to use E-cores consistently
- * works around <rdar://problem/29636191>
- */
-static uint32_t g_spin_threads = 2;
-static uint32_t g_spin_threads_pri = 20;
-
-static semaphore_t g_readysem, g_go_sem;
+#define KERNEL_VERSION_MAX_SIZE 1024
+static char kernel_version[KERNEL_VERSION_MAX_SIZE];
 
 static mach_timebase_info_data_t timebase_info;
 
 static uint64_t
-nanos_to_abs(uint64_t nanos)
+abs_to_nanos(uint64_t abs)
 {
-	return nanos * timebase_info.denom / timebase_info.numer;
+	return abs * timebase_info.numer / timebase_info.denom;
 }
 
-static void
-set_realtime(pthread_t thread)
+static int32_t
+get_csw_count()
 {
-	kern_return_t kr;
-	thread_time_constraint_policy_data_t pol;
+	struct proc_taskinfo taskinfo;
+	int rv;
 
-	mach_port_t target_thread = pthread_mach_thread_np(thread);
-	T_QUIET; T_ASSERT_NOTNULL(target_thread, "pthread_mach_thread_np");
+	rv = proc_pidinfo(getpid(), PROC_PIDTASKINFO, 0, &taskinfo, sizeof(taskinfo));
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "PROC_PIDTASKINFO");
 
-	/* 1s 100ms 10ms */
-	pol.period      = (uint32_t)nanos_to_abs(1000000000);
-	pol.constraint  = (uint32_t)nanos_to_abs(100000000);
-	pol.computation = (uint32_t)nanos_to_abs(10000000);
-
-	pol.preemptible = 0; /* Ignored by OS */
-	kr = thread_policy_set(target_thread, THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t) &pol,
-	    THREAD_TIME_CONSTRAINT_POLICY_COUNT);
-	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "thread_policy_set(THREAD_TIME_CONSTRAINT_POLICY)");
+	return taskinfo.pti_csw;
 }
 
-static pthread_t
-create_thread(void *(*start_routine)(void *), uint32_t priority)
+// noinline hopefully keeps the optimizer from hoisting it out of the loop
+// until rdar://68253516 is fixed.
+__attribute__((noinline))
+static uint32_t
+fixed_os_cpu_number(void)
+{
+	uint32_t cpu_number = _os_cpu_number();
+
+	return cpu_number;
+}
+
+
+T_DECL(count_cpus, "Tests we can schedule bound threads on all hw.ncpus cores and that _os_cpu_number matches")
 {
 	int rv;
-	pthread_t new_thread;
-	pthread_attr_t attr;
 
-	struct sched_param param = { .sched_priority = (int)priority };
-
-	rv = pthread_attr_init(&attr);
-	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "pthread_attr_init");
-
-	rv = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "pthread_attr_setdetachstate");
-
-	rv = pthread_attr_setschedparam(&attr, &param);
-	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "pthread_attr_setschedparam");
-
-	rv = pthread_create(&new_thread, &attr, start_routine, NULL);
-	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "pthread_create");
-
-	if (priority == 97) {
-		set_realtime(new_thread);
-	}
-
-	rv = pthread_attr_destroy(&attr);
-	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "pthread_attr_destroy");
-
-	return new_thread;
-}
-
-static void *
-thread_fn(__unused void *arg)
-{
-	T_QUIET; T_EXPECT_TRUE(true, "initialize darwintest on this thread");
-
-	kern_return_t kr;
-
-	kr = semaphore_wait_signal(g_go_sem, g_readysem);
-	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "semaphore_wait_signal");
-
-	/* atomic inc to say hello */
-	g_ready_threads++;
-
-	uint64_t timeout = nanos_to_abs(g_spin_ms * NSEC_PER_MSEC) + mach_absolute_time();
-
-	/*
-	 * spin to force the other threads to spread out across the cores
-	 * may take some time if cores are masked and CLPC needs to warm up to unmask them
-	 */
-	while (g_ready_threads < g_threads && mach_absolute_time() < timeout) {
-		;
-	}
-
-	T_QUIET; T_ASSERT_GE(timeout, mach_absolute_time(), "waiting for all threads took too long");
-
-	timeout = nanos_to_abs(g_spin_ms * NSEC_PER_MSEC) + mach_absolute_time();
-
-	int iteration = 0;
-	uint32_t cpunum = 0;
-
-	/* search for new CPUs for the duration */
-	while (mach_absolute_time() < timeout) {
-		cpunum = _os_cpu_number();
-
-		assert(cpunum < max_threads);
-
-		g_cpu_seen[cpunum] = true;
-
-		if (iteration++ % 10000) {
-			uint32_t cpus_seen = 0;
-
-			for (uint32_t i = 0; i < g_threads; i++) {
-				if (g_cpu_seen[i]) {
-					cpus_seen++;
-				}
-			}
-
-			/* bail out early if we saw all CPUs */
-			if (cpus_seen == g_threads) {
-				break;
-			}
-		}
-	}
-
-	g_bail = true;
-
-	printf("thread cpunum: %d\n", cpunum);
-
-	kr = semaphore_wait_signal(g_go_sem, g_readysem);
-	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "semaphore_wait_signal");
-
-	return NULL;
-}
-
-static void *
-spin_fn(__unused void *arg)
-{
-	T_QUIET; T_EXPECT_TRUE(true, "initialize darwintest on this thread");
-
-	kern_return_t kr;
-
-	kr = semaphore_wait_signal(g_go_sem, g_readysem);
-	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "semaphore_wait_signal");
-
-	uint64_t timeout = nanos_to_abs(g_spin_ms * NSEC_PER_MSEC * 2) + mach_absolute_time();
-
-	/*
-	 * run and sleep a bit to force some scheduler churn to get all the cores active
-	 * needed to work around bugs in the amp scheduler
-	 */
-	while (mach_absolute_time() < timeout && g_bail == false) {
-		usleep(500);
-
-		uint64_t inner_timeout = nanos_to_abs(1 * NSEC_PER_MSEC) + mach_absolute_time();
-
-		while (mach_absolute_time() < inner_timeout && g_bail == false) {
-			;
-		}
-	}
-
-	kr = semaphore_wait_signal(g_go_sem, g_readysem);
-	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "semaphore_wait_signal");
-
-	return NULL;
-}
-
-
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wgnu-flexible-array-initializer"
-T_DECL(count_cpus, "Tests we can schedule threads on all hw.ncpus cores according to _os_cpu_number",
-    T_META_CHECK_LEAKS(false), T_META_ENABLED(false))
-#pragma clang diagnostic pop
-{
 	setvbuf(stdout, NULL, _IONBF, 0);
 	setvbuf(stderr, NULL, _IONBF, 0);
 
-	int rv;
+	/* Validate what kind of kernel we're on */
+	size_t kernel_version_size = sizeof(kernel_version);
+	rv = sysctlbyname("kern.version", kernel_version, &kernel_version_size, NULL, 0);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "kern.version");
+
+	T_LOG("kern.version: %s\n", kernel_version);
+
+	/* Double check that darwintest set the boot arg we requested */
+	size_t kernel_bootargs_size = sizeof(kernel_bootargs);
+	rv = sysctlbyname("kern.bootargs", kernel_bootargs, &kernel_bootargs_size, NULL, 0);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "kern.bootargs");
+
+	T_LOG("kern.bootargs: %s\n", kernel_bootargs);
+
+	if (NULL == strstr(kernel_bootargs, "enable_skstb=1")) {
+		T_FAIL("enable_skstb=1 boot-arg is missing");
+	}
+
 	kern_return_t kr;
 	kr = mach_timebase_info(&timebase_info);
 	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "mach_timebase_info");
 
-	kr = semaphore_create(mach_task_self(), &g_readysem, SYNC_POLICY_FIFO, 0);
-	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "semaphore_create");
+	int bound_cpu_out = 0;
+	size_t bound_cpu_out_size = sizeof(bound_cpu_out);
+	rv = sysctlbyname("kern.sched_thread_bind_cpu", &bound_cpu_out, &bound_cpu_out_size, NULL, 0);
 
-	kr = semaphore_create(mach_task_self(), &g_go_sem, SYNC_POLICY_FIFO, 0);
-	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "semaphore_create");
+	if (rv == -1) {
+		if (errno == ENOENT) {
+			T_FAIL("kern.sched_thread_bind_cpu doesn't exist, must set enable_skstb=1 boot-arg on development kernel");
+		}
+		if (errno == EPERM) {
+			T_FAIL("must run as root");
+		}
+	}
 
-	size_t ncpu_size = sizeof(g_threads);
-	rv = sysctlbyname("hw.ncpu", &g_threads, &ncpu_size, NULL, 0);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "read kern.sched_thread_bind_cpu");
+	T_QUIET; T_ASSERT_EQ(bound_cpu_out, -1, "kern.sched_thread_bind_cpu should exist, start unbound");
+
+	struct sched_param param = {.sched_priority = 63};
+
+	rv = pthread_setschedparam(pthread_self(), SCHED_FIFO, &param);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "pthread_setschedparam");
+
+	uint32_t sysctl_ncpu = 0;
+	size_t ncpu_size = sizeof(sysctl_ncpu);
+	rv = sysctlbyname("hw.ncpu", &sysctl_ncpu, &ncpu_size, NULL, 0);
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "sysctlbyname(hw.ncpu)");
 
-	printf("hw.ncpu: %2d\n", g_threads);
+	T_LOG("hw.ncpu: %2d\n", sysctl_ncpu);
 
-	assert(g_threads < max_threads);
+	T_ASSERT_GT(sysctl_ncpu, 0, "at least one CPU exists");
 
-	for (uint32_t i = 0; i < g_threads; i++) {
-		create_thread(&thread_fn, g_thread_pri);
-	}
+	for (uint32_t cpu_to_bind = 0; cpu_to_bind < sysctl_ncpu; cpu_to_bind++) {
+		int32_t before_csw_count = get_csw_count();
+		T_LOG("(csw %4d) attempting to bind to cpu %2d\n", before_csw_count, cpu_to_bind);
 
-	for (uint32_t i = 0; i < g_spin_threads; i++) {
-		create_thread(&spin_fn, g_spin_threads_pri);
-	}
+		uint64_t start =  mach_absolute_time();
 
-	for (uint32_t i = 0; i < g_threads + g_spin_threads; i++) {
-		kr = semaphore_wait(g_readysem);
-		T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "semaphore_wait");
-	}
+		rv = sysctlbyname("kern.sched_thread_bind_cpu", NULL, 0, &cpu_to_bind, sizeof(cpu_to_bind));
 
-	uint64_t timeout = nanos_to_abs(g_spin_ms * NSEC_PER_MSEC) + mach_absolute_time();
+		uint64_t end =  mach_absolute_time();
 
-	/* spin to warm up CLPC :) */
-	while (mach_absolute_time() < timeout) {
-		;
-	}
-
-	kr = semaphore_signal_all(g_go_sem);
-	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "semaphore_signal_all");
-
-	for (uint32_t i = 0; i < g_threads + g_spin_threads; i++) {
-		kr = semaphore_wait(g_readysem);
-		T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "semaphore_wait");
-	}
-
-	uint32_t cpus_seen = 0;
-
-	for (uint32_t i = 0; i < g_threads; i++) {
-		if (g_cpu_seen[i]) {
-			cpus_seen++;
+		if (rv == -1 && errno == ENOTSUP) {
+			T_SKIP("Binding is available, but this process doesn't support binding (e.g. Rosetta on Aruba)");
 		}
 
-		printf("cpu %2d: %d\n", i, g_cpu_seen[i]);
+		T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "kern.sched_thread_bind_cpu(%u)", cpu_to_bind);
+
+		uint32_t os_cpu_number_reported = fixed_os_cpu_number();
+
+		bound_cpu_out = 0;
+		rv = sysctlbyname("kern.sched_thread_bind_cpu", &bound_cpu_out, &bound_cpu_out_size, NULL, 0);
+		T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "read kern.sched_thread_bind_cpu");
+
+		T_QUIET; T_EXPECT_EQ((int)cpu_to_bind, bound_cpu_out,
+		    "should report bound cpu id matching requested bind target");
+
+		uint64_t delta_abs = end - start;
+		uint64_t delta_ns = abs_to_nanos(delta_abs);
+
+		int32_t after_csw_count = get_csw_count();
+
+		T_LOG("(csw %4d) bound to cpu %2d in %f milliseconds\n",
+		    after_csw_count, cpu_to_bind,
+		    ((double)delta_ns / 1000000.0));
+
+		if (cpu_to_bind > 0) {
+			T_QUIET; T_EXPECT_LT(before_csw_count, after_csw_count,
+			    "should have had to context switch to execute the bind");
+		}
+
+		T_LOG("cpu %2d reported id %2d\n",
+		    cpu_to_bind, os_cpu_number_reported);
+
+		T_QUIET;
+		T_EXPECT_EQ(cpu_to_bind, os_cpu_number_reported,
+		    "should report same CPU number as was bound to");
 	}
 
-	T_ASSERT_EQ(cpus_seen, g_threads, "test should have run threads on all CPUS");
+	int unbind = -1; /* pass -1 in order to unbind the thread */
+
+	rv = sysctlbyname("kern.sched_thread_bind_cpu", NULL, 0, &unbind, sizeof(unbind));
+
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "kern.sched_thread_bind_cpu(%u)", unbind);
+
+	rv = sysctlbyname("kern.sched_thread_bind_cpu", &bound_cpu_out, &bound_cpu_out_size, NULL, 0);
+
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "read kern.sched_thread_bind_cpu");
+	T_QUIET; T_ASSERT_EQ(bound_cpu_out, -1, "thread should be unbound at the end");
+
+	T_PASS("test has run threads on all CPUS");
 }

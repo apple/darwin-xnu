@@ -55,6 +55,8 @@ libkern/stdio/scanf.c					standard
 libkern/uuid/uuid.c					standard
 
 libkern/os/log.c					standard
+libkern/os/log_encode.c					standard
+libkern/os/log_mem.c					standard
 libkern/os/object.c					standard
 libkern/os/internal.c					standard
 libkern/os/refcnt.c					standard
@@ -95,6 +97,8 @@ libkern/crypto/corecrypto_aesxts.c		optional crypto
 libkern/crypto/corecrypto_rand.c		optional crypto
 libkern/crypto/corecrypto_rsa.c		    optional crypto
 libkern/crypto/corecrypto_chacha20poly1305.c	optional	crypto
+
+libkern/coretrust/coretrust.c   standard
 
 libkern/img4/interface.c 		standard
 

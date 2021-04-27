@@ -64,7 +64,7 @@ typedef enum {
 
 /*
  * We start 32 bytes after sp since 4 registers are pushed onto the stack
- * in the userspace syscall handler, and the first 4 stack argumnets are moved
+ * in the userspace syscall handler, and the first 4 stack arguments are moved
  * into registers already
  */
 #define ARG_SP_BYTE_OFFSET                         32

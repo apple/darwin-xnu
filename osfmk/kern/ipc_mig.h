@@ -161,6 +161,7 @@ mach_msg_return_t kernel_mach_msg_rpc(
 	mach_msg_size_t                     send_size,
 	mach_msg_size_t                     rcv_size,
 	boolean_t                           legacy,
+	boolean_t                           interruptible,
 	boolean_t                           *message_moved);
 #endif /* XNU_KERNEL_PRIVATE */
 

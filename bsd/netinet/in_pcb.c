@@ -331,8 +331,9 @@ in_pcbinit(void)
 	lck_mtx_init(&inpcb_timeout_lock, inpcb_lock_grp, inpcb_lock_attr);
 	inpcb_thread_call = thread_call_allocate_with_priority(inpcb_timeout,
 	    NULL, THREAD_CALL_PRIORITY_KERNEL);
+	/* Give it an arg so that we know that this is the fast timer */
 	inpcb_fast_thread_call = thread_call_allocate_with_priority(
-		inpcb_timeout, NULL, THREAD_CALL_PRIORITY_KERNEL);
+		inpcb_timeout, &inpcb_timeout, THREAD_CALL_PRIORITY_KERNEL);
 	if (inpcb_thread_call == NULL || inpcb_fast_thread_call == NULL) {
 		panic("unable to alloc the inpcb thread call");
 	}
@@ -353,7 +354,7 @@ in_pcbinit(void)
 static void
 inpcb_timeout(void *arg0, void *arg1)
 {
-#pragma unused(arg0, arg1)
+#pragma unused(arg1)
 	struct inpcbinfo *ipi;
 	boolean_t t, gc;
 	struct intimercount gccnt, tmcnt;
@@ -419,10 +420,14 @@ inpcb_timeout(void *arg0, void *arg1)
 		inpcb_ticking = INPCB_HAVE_TIMER_REQ(tmcnt);
 	}
 
-	/* re-arm the timer if there's work to do */
+	/* arg0 will be set if we are the fast timer */
+	if (arg0 != NULL) {
+		inpcb_fast_timer_on = FALSE;
+	}
 	inpcb_timeout_run--;
 	VERIFY(inpcb_timeout_run >= 0 && inpcb_timeout_run < 2);
 
+	/* re-arm the timer if there's work to do */
 	if (gccnt.intimer_nodelay > 0 || tmcnt.intimer_nodelay > 0) {
 		inpcb_sched_timeout();
 	} else if ((gccnt.intimer_fast + tmcnt.intimer_fast) <= 5) {
@@ -460,7 +465,7 @@ _inpcb_sched_timeout(unsigned int offset)
 		inpcb_timeout_run++;
 		if (offset == 0) {
 			inpcb_fast_timer_on = TRUE;
-			thread_call_enter_delayed(inpcb_thread_call,
+			thread_call_enter_delayed(inpcb_fast_thread_call,
 			    deadline);
 		} else {
 			inpcb_fast_timer_on = FALSE;

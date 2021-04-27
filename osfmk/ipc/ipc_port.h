@@ -141,8 +141,9 @@ struct ipc_port {
 	struct ipc_port *ip_pdrequest;
 	struct ipc_port_request *ip_requests;
 	union {
-		struct ipc_kmsg *premsg;
+		struct ipc_kmsg *XNU_PTRAUTH_SIGNED_PTR("ipc_port.premsg") premsg;
 		struct turnstile *send_turnstile;
+		ipc_port_t XNU_PTRAUTH_SIGNED_PTR("ipc_port.alt_port") alt_port;
 	} kdata2;
 
 	mach_vm_address_t ip_context;
@@ -160,7 +161,8 @@ struct ipc_port {
 	    ip_no_grant:1,              /* Port wont accept complex messages containing (ool) port descriptors */
 	    ip_immovable_send:1,        /* No send(once) rights to this port can be moved out of a space */
 	    ip_tg_block_tracking:1,     /* Track blocking relationship between thread groups during sync IPC */
-	    ip_impcount:17;             /* number of importance donations in nested queue */
+	    ip_pinned: 1,               /* Can't deallocate the last send right from a space while the bit is set */
+	    ip_impcount:16;             /* number of importance donations in nested queue */
 
 	mach_port_mscount_t ip_mscount;
 	mach_port_rights_t ip_srights;
@@ -201,6 +203,7 @@ struct ipc_port {
 
 #define ip_premsg               kdata2.premsg
 #define ip_send_turnstile       kdata2.send_turnstile
+#define ip_alt_port             kdata2.alt_port
 
 #define port_send_turnstile(port)       (IP_PREALLOC(port) ? (port)->ip_premsg->ikm_turnstile : (port)->ip_send_turnstile)
 
@@ -284,10 +287,10 @@ MACRO_END
 
 #define ip_kotype(port)         io_kotype(ip_to_object(port))
 #define ip_is_kobject(port)     io_is_kobject(ip_to_object(port))
+#define ip_is_control(port) \
+	(ip_is_kobject(port) && (ip_kotype(port) == IKOT_TASK_CONTROL || ip_kotype(port) == IKOT_THREAD_CONTROL))
 #define ip_is_kolabeled(port)   io_is_kolabeled(ip_to_object(port))
 #define ip_get_kobject(port)    ipc_kobject_get(port)
-#define ip_label_check(space, port, msgt_name) \
-	(!ip_is_kolabeled(port) || ipc_kobject_label_check((space), (port), (msgt_name)))
 
 #define ip_full_kernel(port)    imq_full_kernel(&(port)->ip_messages)
 #define ip_full(port)           imq_full(&(port)->ip_messages)
@@ -678,11 +681,17 @@ extern mach_port_name_t ipc_port_copyout_send(
 	ipc_port_t      sright,
 	ipc_space_t     space);
 
+extern mach_port_name_t ipc_port_copyout_send_pinned(
+	ipc_port_t      sright,
+	ipc_space_t     space);
+
 extern void ipc_port_thread_group_blocked(
 	ipc_port_t      port);
 
 extern void ipc_port_thread_group_unblocked(void);
 
+extern void ipc_port_release_send_and_unlock(
+	ipc_port_t      port);
 #endif /* MACH_KERNEL_PRIVATE */
 
 #if KERNEL_PRIVATE
@@ -717,9 +726,12 @@ extern void ipc_port_release_sonce(
 extern void ipc_port_release_receive(
 	ipc_port_t      port);
 
-/* finalize the destruction of a port before it gets freed */
+/* Finalize the destruction of a port before it gets freed */
 extern void ipc_port_finalize(
 	ipc_port_t      port);
+
+/* Get receiver task and its pid (if any) for port. */
+extern pid_t ipc_port_get_receiver_task(ipc_port_t port, uintptr_t *task);
 
 /* Allocate a port in a special space */
 extern ipc_port_t ipc_port_alloc_special(

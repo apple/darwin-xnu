@@ -972,6 +972,9 @@ sdt_argdesc_t sdt_args[] = {
 	{"hv", "guest-enter", 1, 1, "uint64_t *", "guest_regs_t *" },
 	{"hv", "guest-exit", 0, 0, "uint32_t", "uint32_t" },
 	{"hv", "guest-exit", 1, 1, "uint64_t *", "guest_regs_t *" },
+	{"hv", "guest-error", 0, 0, "uint32_t", "uint32_t" },
+	{"hv", "guest-error", 1, 1, "uint64_t *", "guest_regs_t *" },
+	{"hv", "guest-error", 2, 2, "uint32_t", "uint32_t" },
 	{ NULL, NULL, 0, 0, NULL, NULL }
 };
 

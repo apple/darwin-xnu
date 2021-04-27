@@ -998,8 +998,7 @@ persona_proc_adopt(proc_t p, struct persona *persona, kauth_cred_t auth_override
 
 	/* Only Multiuser Mode needs to update the session login name to the persona name */
 #if (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
-	volatile uint32_t *multiuser_flag_address = (volatile uint32_t *)(uintptr_t)(_COMM_PAGE_MULTIUSER_CONFIG);
-	uint32_t multiuser_flags = *multiuser_flag_address;
+	uint32_t multiuser_flags = COMM_PAGE_READ(uint32_t, MULTIUSER_CONFIG);
 	/* set the login name of the session */
 	if (multiuser_flags) {
 		struct session * sessp = proc_session(p);

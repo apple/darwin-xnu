@@ -1847,6 +1847,14 @@ rtrequest_common_locked(int req, struct sockaddr *dst0,
 	    int, flags, unsigned int, ifscope);
 
 	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
+
+#if !(DEVELOPMENT || DEBUG)
+	/*
+	 * Setting the global internet flag external is only for testing
+	 */
+	flags &= ~RTF_GLOBAL;
+#endif /* !(DEVELOPMENT || DEBUG) */
+
 	/*
 	 * Find the correct routing tree to use for this Address Family
 	 */
@@ -2342,6 +2350,16 @@ makeroute:
 		 * necp client watchers to re-evaluate
 		 */
 		if (SA_DEFAULT(rt_key(rt))) {
+			/*
+			 * Mark default routes as (potentially) leading to the global internet
+			 * this can be used for policy decisions.
+			 * The clone routes will inherit this flag.
+			 * We check against the host flag as this works for default routes that have
+			 * a gateway and defaults routes when all subnets are local.
+			 */
+			if (req == RTM_ADD && (rt->rt_flags & RTF_HOST) == 0) {
+				rt->rt_flags |= RTF_GLOBAL;
+			}
 			if (rt->rt_ifp != NULL) {
 				ifnet_touch_lastupdown(rt->rt_ifp);
 			}

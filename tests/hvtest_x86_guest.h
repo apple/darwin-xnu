@@ -13,6 +13,8 @@ extern void radar61961809_entry(uint64_t) OS_NORETURN;
 extern void radar61961809_prepare(uint64_t) OS_NORETURN;
 extern void radar61961809_loop64(uint64_t) OS_NORETURN;
 extern void radar60691363_entry(uint64_t) OS_NORETURN;
+extern void pio_entry(uint64_t) OS_NORETURN;
+extern void pio_entry_basic(uint64_t) OS_NORETURN;
 
 #define MSR_IA32_STAR           0xc0000081
 #define MSR_IA32_LSTAR          0xc0000082

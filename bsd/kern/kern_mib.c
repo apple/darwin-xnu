@@ -140,7 +140,7 @@ static int      cputhreadtype, cpu64bit;
 static uint64_t cacheconfig[10], cachesize[10];
 static int      packages;
 
-static char *   osenvironment;
+static char *   osenvironment = NULL;
 static uint32_t osenvironment_size = 0;
 static int      osenvironment_initialized = 0;
 
@@ -152,21 +152,21 @@ static struct {
 	uint32_t use_recovery_securityd:1;
 } property_existence = {0, 0};
 
-SYSCTL_NODE(, 0, sysctl, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
+SYSCTL_EXTENSIBLE_NODE(, 0, sysctl, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
     "Sysctl internal magic");
-SYSCTL_NODE(, CTL_KERN, kern, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
+SYSCTL_EXTENSIBLE_NODE(, CTL_KERN, kern, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
     "High kernel, proc, limits &c");
-SYSCTL_NODE(, CTL_VM, vm, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
+SYSCTL_EXTENSIBLE_NODE(, CTL_VM, vm, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
     "Virtual memory");
-SYSCTL_NODE(, CTL_VFS, vfs, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
+SYSCTL_EXTENSIBLE_NODE(, CTL_VFS, vfs, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
     "File system");
-SYSCTL_NODE(, CTL_NET, net, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
+SYSCTL_EXTENSIBLE_NODE(, CTL_NET, net, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
     "Network, (see socket.h)");
-SYSCTL_NODE(, CTL_DEBUG, debug, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
+SYSCTL_EXTENSIBLE_NODE(, CTL_DEBUG, debug, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
     "Debugging");
 SYSCTL_NODE(, CTL_HW, hw, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
     "hardware");
-SYSCTL_NODE(, CTL_MACHDEP, machdep, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
+SYSCTL_EXTENSIBLE_NODE(, CTL_MACHDEP, machdep, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
     "machine dependent");
 SYSCTL_NODE(, CTL_USER, user, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
     "user-level");
@@ -475,11 +475,14 @@ sysctl_tbfrequency
 	return sysctl_io_number(req, l, sizeof(l), NULL, NULL);
 }
 
+/*
+ * Called by IOKit on Intel, or by sysctl_load_devicetree_entries()
+ */
 void
 sysctl_set_osenvironment(unsigned int size, const void* value)
 {
 	if (osenvironment_size == 0 && size > 0) {
-		MALLOC(osenvironment, char *, size, M_TEMP, M_WAITOK);
+		osenvironment = zalloc_permanent(size, ZALIGN_NONE);
 		if (osenvironment) {
 			memcpy(osenvironment, value, size);
 			osenvironment_size = size;
@@ -501,7 +504,8 @@ sysctl_unblock_osenvironment(void)
  * PE_init_iokit(). Doing this also avoids the extern-C hackery to access these entries
  * from IORegistry (which requires C++).
  */
-void
+__startup_func
+static void
 sysctl_load_devicetree_entries(void)
 {
 	DTEntry chosen;
@@ -514,11 +518,7 @@ sysctl_load_devicetree_entries(void)
 
 	/* load osenvironment */
 	if (kSuccess == SecureDTGetProperty(chosen, "osenvironment", (void const **) &value, &size)) {
-		MALLOC(osenvironment, char *, size, M_TEMP, M_WAITOK);
-		if (osenvironment) {
-			memcpy(osenvironment, value, size);
-			osenvironment_size = size;
-		}
+		sysctl_set_osenvironment(size, value);
 	}
 
 	/* load ephemeral_storage */
@@ -537,6 +537,7 @@ sysctl_load_devicetree_entries(void)
 		}
 	}
 }
+STARTUP(SYSCTL, STARTUP_RANK_MIDDLE, sysctl_load_devicetree_entries);
 
 static int
 sysctl_osenvironment
@@ -745,7 +746,7 @@ SYSCTL_INT(_hw_optional, OID_AUTO, floatingpoint, CTLFLAG_RD | CTLFLAG_KERN | CT
 /*
  * Optional device hardware features can be registered by drivers below hw.features
  */
-SYSCTL_NODE(_hw, OID_AUTO, features, CTLFLAG_RD | CTLFLAG_LOCKED, NULL, "hardware features");
+SYSCTL_EXTENSIBLE_NODE(_hw, OID_AUTO, features, CTLFLAG_RD | CTLFLAG_LOCKED, NULL, "hardware features");
 
 /*
  * Deprecated variables.  These are supported for backwards compatibility
@@ -912,7 +913,6 @@ SYSCTL_INT(_hw_optional, OID_AUTO, arm64, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LO
 void
 sysctl_mib_init(void)
 {
-	cputhreadtype = cpu_threadtype();
 #if defined(__i386__) || defined (__x86_64__)
 	cpu64bit = (_get_cpu_capabilities() & k64Bit) == k64Bit;
 #elif defined(__arm__) || defined (__arm64__)
@@ -920,18 +920,6 @@ sysctl_mib_init(void)
 #else
 #error Unsupported arch
 #endif
-
-	/*
-	 * Populate the optional portion of the hw.* MIB.
-	 *
-	 * XXX This could be broken out into parts of the code
-	 *     that actually directly relate to the functions in
-	 *     question.
-	 */
-
-	if (cputhreadtype != CPU_THREADTYPE_NONE) {
-		sysctl_register_oid(&sysctl__hw_cputhreadtype);
-	}
 
 #if defined (__i386__) || defined (__x86_64__)
 	/* hw.cacheconfig */
@@ -976,8 +964,28 @@ sysctl_mib_init(void)
 	cachesize[4] = 0;
 
 	packages = 1;
-
 #else
 #error unknown architecture
 #endif /* !__i386__ && !__x86_64 && !__arm__ && !__arm64__ */
 }
+
+__startup_func
+static void
+sysctl_mib_startup(void)
+{
+	cputhreadtype = cpu_threadtype();
+
+	/*
+	 * Populate the optional portion of the hw.* MIB.
+	 *
+	 * XXX This could be broken out into parts of the code
+	 *     that actually directly relate to the functions in
+	 *     question.
+	 */
+
+	if (cputhreadtype != CPU_THREADTYPE_NONE) {
+		sysctl_register_oid_early(&sysctl__hw_cputhreadtype);
+	}
+
+}
+STARTUP(SYSCTL, STARTUP_RANK_MIDDLE, sysctl_mib_startup);

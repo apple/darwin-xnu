@@ -632,7 +632,7 @@ extern uint32_t nfsrv_user_stat_enabled;                /* enable/disable active
 extern uint32_t nfsrv_user_stat_node_count;             /* current count of user stat nodes */
 extern uint32_t nfsrv_user_stat_max_idle_sec;   /* idle seconds (node no longer considered active) */
 extern uint32_t nfsrv_user_stat_max_nodes;              /* active user list size limit */
-extern lck_grp_t *nfsrv_active_user_mutex_group;
+extern lck_grp_t nfsrv_active_user_mutex_group;
 
 /* An active user node represented in the kernel */
 struct nfs_user_stat_node {
@@ -718,7 +718,7 @@ struct nfsrv_fmod {
 #define NFSRVFMODHASH(vp) (((uintptr_t) vp) & nfsrv_fmod_hash)
 extern LIST_HEAD(nfsrv_fmod_hashhead, nfsrv_fmod) * nfsrv_fmod_hashtbl;
 extern u_long nfsrv_fmod_hash;
-extern lck_mtx_t *nfsrv_fmod_mutex;
+extern lck_mtx_t nfsrv_fmod_mutex;
 extern int nfsrv_fmod_pending, nfsrv_fsevents_enabled;
 #endif
 
@@ -988,7 +988,7 @@ struct nfsreq {
  */
 TAILQ_HEAD(nfs_reqqhead, nfsreq);
 extern struct nfs_reqqhead nfs_reqq;
-extern lck_grp_t *nfs_request_grp;
+extern lck_grp_t nfs_request_grp;
 
 #define R_XID32(x)      ((x) & 0xffffffff)
 
@@ -1115,8 +1115,8 @@ extern TAILQ_HEAD(nfsrv_sockhead, nfsrv_sock) nfsrv_socklist, nfsrv_sockwg,
 nfsrv_sockwait, nfsrv_sockwork;
 
 /* lock groups for nfsrv_sock's */
-extern lck_grp_t *nfsrv_slp_rwlock_group;
-extern lck_grp_t *nfsrv_slp_mutex_group;
+extern lck_grp_t nfsrv_slp_rwlock_group;
+extern lck_grp_t nfsrv_slp_mutex_group;
 
 /*
  * One of these structures is allocated for each nfsd.
@@ -1169,15 +1169,15 @@ typedef int (*nfsrv_proc_t)(struct nfsrv_descript *, struct nfsrv_sock *,
     vfs_context_t, mbuf_t *);
 
 /* mutex for nfs server */
-extern lck_mtx_t *nfsd_mutex;
+extern lck_mtx_t nfsd_mutex;
 extern int nfsd_thread_count, nfsd_thread_max;
 
 /* request list mutex */
-extern lck_mtx_t *nfs_request_mutex;
+extern lck_mtx_t nfs_request_mutex;
 extern int nfs_request_timer_on;
 
 /* mutex for nfs client globals */
-extern lck_mtx_t *nfs_global_mutex;
+extern lck_mtx_t nfs_global_mutex;
 
 #if CONFIG_NFS4
 /* NFSv4 callback globals */
@@ -1206,7 +1206,6 @@ int     vtonfsv2_mode(enum vtype, mode_t);
 
 void    nfs_mbuf_init(void);
 
-void    nfs_nhinit(void);
 void    nfs_nhinit_finish(void);
 u_long  nfs_hash(u_char *, int);
 

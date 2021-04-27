@@ -623,21 +623,30 @@ machine_trace_thread64(thread_t thread,
 		pc = get_saved_state_pc(state);
 		sp = get_saved_state_sp(state);
 	} else {
-		/* kstackptr may not always be there, so recompute it */
-		struct arm_kernel_saved_state * state = &thread_get_kernel_state(thread)->machine.ss;
+		struct arm_saved_state *state = thread->machine.kpcb;
+		if (state != NULL) {
+			if (fp == 0) {
+				fp = state->ss_64.fp;
+			}
+
+			prevlr = state->ss_64.lr;
+			pc = state->ss_64.pc;
+			sp = state->ss_64.sp;
+		} else {
+			/* kstackptr may not always be there, so recompute it */
+			arm_kernel_saved_state_t *kstate = &thread_get_kernel_state(thread)->machine.ss;
+
+			if (fp == 0) {
+				fp = kstate->fp;
+			}
+			prevlr = kstate->lr;
+			pc = kstate->pc;
+			sp = kstate->sp;
+		}
+
 		stacklimit = VM_MAX_KERNEL_ADDRESS;
 		stacklimit_bottom = VM_MIN_KERNEL_ADDRESS;
 		bt_vm_map = kernel_map;
-
-		/* Get the frame pointer */
-		if (fp == 0) {
-			fp = state->fp;
-		}
-
-		/* Fill in the current link register */
-		prevlr = state->lr;
-		pc = state->pc;
-		sp = state->sp;
 	}
 
 	if (!user_p && !prevlr && !fp && !sp && !pc) {

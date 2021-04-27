@@ -45,39 +45,24 @@
 
 /* XXX these should be in a common header somwhere, but aren't */
 extern int chrtoblk_set(int, int);
-extern vm_offset_t kmem_mb_alloc(vm_map_t, int, int, kern_return_t *);
 
 /* XXX most of these just exist to export; there's no good header for them*/
 void pcb_synch(void);
 
-TAILQ_HEAD(, devsw_lock) devsw_locks;
-lck_mtx_t devsw_lock_list_mtx;
-lck_grp_t * devsw_lock_grp;
+typedef struct devsw_lock {
+	TAILQ_ENTRY(devsw_lock) dl_list;
+	thread_t                dl_thread;
+	dev_t                   dl_dev;
+	int                     dl_mode;
+	int                     dl_waiters;
+} *devsw_lock_t;
+
+static LCK_GRP_DECLARE(devsw_lock_grp, "devsw");
+static LCK_MTX_DECLARE(devsw_lock_list_mtx, &devsw_lock_grp);
+static TAILQ_HEAD(, devsw_lock) devsw_locks = TAILQ_HEAD_INITIALIZER(devsw_locks);
 
 /* Just to satisfy pstat command */
 int dmmin, dmmax, dmtext;
-
-vm_offset_t
-kmem_mb_alloc(vm_map_t mbmap, int size, int physContig, kern_return_t *err)
-{
-	vm_offset_t addr = 0;
-	kern_return_t kr = KERN_SUCCESS;
-
-	if (!physContig) {
-		kr = kernel_memory_allocate(mbmap, &addr, size, 0, KMA_KOBJECT | KMA_LOMEM, VM_KERN_MEMORY_MBUF);
-	} else {
-		kr = kmem_alloc_contig(mbmap, &addr, size, PAGE_MASK, 0xfffff, 0, KMA_KOBJECT | KMA_LOMEM, VM_KERN_MEMORY_MBUF);
-	}
-
-	if (kr != KERN_SUCCESS) {
-		addr = 0;
-	}
-	if (err) {
-		*err = kr;
-	}
-
-	return addr;
-}
 
 /*
  * XXX this function only exists to be exported and do nothing.
@@ -366,72 +351,84 @@ bsd_hostname(char *buf, size_t bufsize, size_t *len)
 	return ret;
 }
 
+static devsw_lock_t
+devsw_lock_find_locked(dev_t dev, int mode)
+{
+	devsw_lock_t lock;
+
+	TAILQ_FOREACH(lock, &devsw_locks, dl_list) {
+		if (lock->dl_dev == dev && lock->dl_mode == mode) {
+			return lock;
+		}
+	}
+
+	return NULL;
+}
+
 void
 devsw_lock(dev_t dev, int mode)
 {
-	devsw_lock_t newlock, tmplock;
-	int res;
+	devsw_lock_t newlock, curlock;
 
 	assert(0 <= major(dev) && major(dev) < nchrdev);
 	assert(mode == S_IFCHR || mode == S_IFBLK);
 
-	MALLOC(newlock, devsw_lock_t, sizeof(struct devsw_lock), M_TEMP, M_WAITOK | M_ZERO);
+	newlock = kalloc_flags(sizeof(struct devsw_lock), Z_WAITOK | Z_ZERO);
 	newlock->dl_dev = dev;
 	newlock->dl_thread = current_thread();
 	newlock->dl_mode = mode;
 
 	lck_mtx_lock_spin(&devsw_lock_list_mtx);
-retry:
-	TAILQ_FOREACH(tmplock, &devsw_locks, dl_list)
-	{
-		if (tmplock->dl_dev == dev && tmplock->dl_mode == mode) {
-			res = msleep(tmplock, &devsw_lock_list_mtx, PVFS, "devsw_lock", NULL);
-			assert(res == 0);
-			goto retry;
-		}
+
+	curlock = devsw_lock_find_locked(dev, mode);
+	if (curlock == NULL) {
+		TAILQ_INSERT_TAIL(&devsw_locks, newlock, dl_list);
+	} else {
+		curlock->dl_waiters++;
+		lck_mtx_sleep_with_inheritor(&devsw_lock_list_mtx,
+		    LCK_SLEEP_SPIN, curlock, curlock->dl_thread,
+		    THREAD_UNINT | THREAD_WAIT_NOREPORT,
+		    TIMEOUT_WAIT_FOREVER);
+		assert(curlock->dl_thread == current_thread());
+		curlock->dl_waiters--;
 	}
 
-	TAILQ_INSERT_TAIL(&devsw_locks, newlock, dl_list);
 	lck_mtx_unlock(&devsw_lock_list_mtx);
+
+	if (curlock != NULL) {
+		kfree(newlock, sizeof(struct devsw_lock));
+	}
 }
+
 void
 devsw_unlock(dev_t dev, int mode)
 {
-	devsw_lock_t tmplock;
+	devsw_lock_t lock;
+	thread_t inheritor_thread = NULL;
 
 	assert(0 <= major(dev) && major(dev) < nchrdev);
 
 	lck_mtx_lock_spin(&devsw_lock_list_mtx);
 
-	TAILQ_FOREACH(tmplock, &devsw_locks, dl_list)
-	{
-		if (tmplock->dl_dev == dev && tmplock->dl_mode == mode) {
-			break;
-		}
+	lock = devsw_lock_find_locked(dev, mode);
+
+	if (lock == NULL || lock->dl_thread != current_thread()) {
+		panic("current thread doesn't own the lock (%p)", lock);
 	}
 
-	if (tmplock == NULL) {
-		panic("Trying to unlock, and couldn't find lock.");
+	if (lock->dl_waiters) {
+		wakeup_one_with_inheritor(lock, THREAD_AWAKENED,
+		    LCK_WAKE_DEFAULT, &lock->dl_thread);
+		inheritor_thread = lock->dl_thread;
+		lock = NULL;
+	} else {
+		TAILQ_REMOVE(&devsw_locks, lock, dl_list);
 	}
-
-	if (tmplock->dl_thread != current_thread()) {
-		panic("Trying to unlock, but I don't hold the lock.");
-	}
-
-	wakeup(tmplock);
-	TAILQ_REMOVE(&devsw_locks, tmplock, dl_list);
 
 	lck_mtx_unlock(&devsw_lock_list_mtx);
 
-	FREE(tmplock, M_TEMP);
-}
-
-void
-devsw_init()
-{
-	devsw_lock_grp = lck_grp_alloc_init("devsw", NULL);
-	assert(devsw_lock_grp != NULL);
-
-	lck_mtx_init(&devsw_lock_list_mtx, devsw_lock_grp, NULL);
-	TAILQ_INIT(&devsw_locks);
+	if (inheritor_thread) {
+		thread_deallocate(inheritor_thread);
+	}
+	kfree(lock, sizeof(struct devsw_lock));
 }

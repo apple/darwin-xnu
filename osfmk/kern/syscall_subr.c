@@ -58,7 +58,7 @@
 #include <mach/thread_switch.h>
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_space.h>
-#include <kern/counters.h>
+#include <kern/counter.h>
 #include <kern/ipc_kobject.h>
 #include <kern/processor.h>
 #include <kern/sched.h>
@@ -131,8 +131,6 @@ swtch(
 	}
 	enable_preemption();
 
-	counter(c_swtch_block++);
-
 	thread_yield_with_continuation((thread_continue_t)swtch_continue, NULL);
 }
 
@@ -169,8 +167,6 @@ swtch_pri(
 		return FALSE;
 	}
 	enable_preemption();
-
-	counter(c_swtch_pri_block++);
 
 	thread_depress_abstime(thread_depress_time);
 

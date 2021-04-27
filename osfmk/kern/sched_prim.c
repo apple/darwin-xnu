@@ -83,7 +83,6 @@
 #include <kern/kern_types.h>
 #include <kern/backtrace.h>
 #include <kern/clock.h>
-#include <kern/counters.h>
 #include <kern/cpu_number.h>
 #include <kern/cpu_data.h>
 #include <kern/smp.h>
@@ -687,6 +686,8 @@ thread_unblock(
 
 		ctime = mach_absolute_time();
 		thread->realtime.deadline = thread->realtime.constraint + ctime;
+		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SET_RT_DEADLINE) | DBG_FUNC_NONE,
+		    (uintptr_t)thread_tid(thread), thread->realtime.deadline, thread->realtime.computation, 0);
 	}
 
 	/*
@@ -2098,6 +2099,10 @@ restart:
 			}
 		}
 
+		bool secondary_forced_idle = ((processor->processor_secondary != PROCESSOR_NULL) &&
+		    (thread_no_smt(thread) || (thread->sched_pri >= BASEPRI_RTQUEUES)) &&
+		    (processor->processor_secondary->state == PROCESSOR_IDLE));
+
 		/* OK, so we're not going to run the current thread. Look at the RT queue. */
 		bool ok_to_run_realtime_thread = sched_ok_to_run_realtime_thread(pset, processor);
 		if ((rt_runq_count(pset) > 0) && ok_to_run_realtime_thread) {
@@ -2174,6 +2179,10 @@ pick_new_rt_thread:
 					ipi_type = sched_ipi_action(sprocessor, NULL, false, SCHED_IPI_EVENT_SMT_REBAL);
 					ast_processor = sprocessor;
 				}
+			} else if (secondary_forced_idle && !thread_no_smt(new_thread) && pset_has_stealable_threads(pset)) {
+				pset_update_processor_state(pset, sprocessor, PROCESSOR_DISPATCHING);
+				ipi_type = sched_ipi_action(sprocessor, NULL, true, SCHED_IPI_EVENT_PREEMPT);
+				ast_processor = sprocessor;
 			}
 			pset_unlock(pset);
 
@@ -2428,8 +2437,6 @@ thread_invoke(
 
 			thread->continuation = thread->parameter = NULL;
 
-			counter(c_thread_invoke_hits++);
-
 			boolean_t enable_interrupts = TRUE;
 
 			/* idle thread needs to stay interrupts-disabled */
@@ -2444,7 +2451,6 @@ thread_invoke(
 		} else if (thread == self) {
 			/* same thread but with continuation */
 			ast_context(self);
-			counter(++c_thread_invoke_same);
 
 			thread_unlock(self);
 
@@ -2484,14 +2490,12 @@ thread_invoke(
 		if (!thread->kernel_stack) {
 need_stack:
 			if (!stack_alloc_try(thread)) {
-				counter(c_thread_invoke_misses++);
 				thread_unlock(thread);
 				thread_stack_enqueue(thread);
 				return FALSE;
 			}
 		} else if (thread == self) {
 			ast_context(self);
-			counter(++c_thread_invoke_same);
 			thread_unlock(self);
 
 			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
@@ -2520,8 +2524,6 @@ need_stack:
 	ast_context(thread);
 
 	thread_unlock(thread);
-
-	counter(c_thread_invoke_csw++);
 
 	self->reason = reason;
 
@@ -2845,6 +2847,8 @@ thread_dispatch(
 				 *	consumed the entire quantum.
 				 */
 				if (thread->quantum_remaining == 0) {
+					KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_CANCEL_RT_DEADLINE) | DBG_FUNC_NONE,
+					    (uintptr_t)thread_tid(thread), thread->realtime.deadline, thread->realtime.computation, 0);
 					thread->realtime.deadline = UINT64_MAX;
 				}
 			} else {
@@ -3103,8 +3107,6 @@ thread_dispatch(
  *	thread resumes, it will execute the continuation function
  *	on a new kernel stack.
  */
-counter(mach_counter_t  c_thread_block_calls = 0; )
-
 wait_result_t
 thread_block_reason(
 	thread_continue_t       continuation,
@@ -3115,8 +3117,6 @@ thread_block_reason(
 	processor_t     processor;
 	thread_t        new_thread;
 	spl_t           s;
-
-	counter(++c_thread_block_calls);
 
 	s = splsched();
 
@@ -6921,3 +6921,61 @@ thread_bind_cluster_type(thread_t thread, char cluster_type, bool soft_bound)
 	(void)soft_bound;
 #endif /* __AMP__ */
 }
+
+#if DEVELOPMENT || DEBUG
+extern int32_t sysctl_get_bound_cpuid(void);
+int32_t
+sysctl_get_bound_cpuid(void)
+{
+	int32_t cpuid = -1;
+	thread_t self = current_thread();
+
+	processor_t processor = self->bound_processor;
+	if (processor == NULL) {
+		cpuid = -1;
+	} else {
+		cpuid = processor->cpu_id;
+	}
+
+	return cpuid;
+}
+
+extern kern_return_t sysctl_thread_bind_cpuid(int32_t cpuid);
+kern_return_t
+sysctl_thread_bind_cpuid(int32_t cpuid)
+{
+	processor_t processor = PROCESSOR_NULL;
+
+	if (cpuid == -1) {
+		goto unbind;
+	}
+
+	if (cpuid < 0 || cpuid >= MAX_SCHED_CPUS) {
+		return KERN_INVALID_VALUE;
+	}
+
+	processor = processor_array[cpuid];
+	if (processor == PROCESSOR_NULL) {
+		return KERN_INVALID_VALUE;
+	}
+
+#if __AMP__
+
+	thread_t thread = current_thread();
+
+	if (thread->sched_flags & (TH_SFLAG_ECORE_ONLY | TH_SFLAG_PCORE_ONLY)) {
+		if ((thread->sched_flags & TH_SFLAG_BOUND_SOFT) == 0) {
+			/* Cannot hard-bind an already hard-cluster-bound thread */
+			return KERN_NOT_SUPPORTED;
+		}
+	}
+
+#endif /* __AMP__ */
+
+unbind:
+	thread_bind(processor);
+
+	thread_block(THREAD_CONTINUE_NULL);
+	return KERN_SUCCESS;
+}
+#endif /* DEVELOPMENT || DEBUG */

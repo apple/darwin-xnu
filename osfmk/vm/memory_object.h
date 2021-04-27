@@ -80,7 +80,7 @@ memory_object_control_t memory_object_control_allocate(
 
 __private_extern__
 void                    memory_object_control_collapse(
-	memory_object_control_t control,
+	memory_object_control_t *control,
 	vm_object_t             object);
 
 __private_extern__
@@ -95,7 +95,7 @@ mach_port_t             convert_mo_control_to_port(
 	memory_object_control_t control);
 
 extern void memory_object_control_disable(
-	memory_object_control_t control);
+	memory_object_control_t *control);
 
 extern
 memory_object_control_t convert_port_to_mo_control(

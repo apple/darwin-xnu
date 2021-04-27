@@ -159,12 +159,6 @@
 #define MAX_CPU_CLUSTERS               2
 
 #define XNU_MONITOR                    1 /* Secure pmap runtime */
-#define XNU_MONITOR_T8020_DART         1 /* T8020 DART plugin for secure pmap runtime */
-#define T8020_DART_ALLOW_BYPASS        (1 << 1) /* DART allows translation bypass in certain cases */
-#define XNU_MONITOR_NVME_PPL           1 /* NVMe PPL plugin for secure pmap runtime */
-#define XNU_MONITOR_ANS2_SART          1 /* ANS2 SART plugin for secure pmap runtime */
-#define PMAP_CS                        1
-#define PMAP_CS_ENABLE                 1
 #endif  /* ARM64_BOARD_CONFIG_T8027 */
 
 #ifdef ARM64_BOARD_CONFIG_T8028
@@ -214,6 +208,7 @@
 #ifdef ARM64_BOARD_CONFIG_T8103
 #include <pexpert/arm64/H13.h>
 #include <pexpert/arm64/spr_locks.h>
+#undef HAS_SIQ
 
 #define MAX_L2_CLINE                   7
 #define MAX_CPUS                       8
@@ -234,6 +229,7 @@
 
 #define CORE_NCTRS                     8 /* Placeholder; KPC is not enabled for this target */
 #endif  /* ARM64_BOARD_CONFIG_BCM2837 */
+
 
 #ifndef HAS_UNCORE_CTRS
 #undef UNCORE_VERSION

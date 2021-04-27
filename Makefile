@@ -318,6 +318,8 @@ xnu_tests_driverkit:
 		SRCROOT=$(SRCROOT)/tests/driverkit
 
 
+include $(MakeInc_cmd)
+
 #
 # The "analyze" target defined below invokes Clang Static Analyzer
 # with a predefined set of checks and options for the project.
@@ -339,16 +341,18 @@ STATIC_ANALYZER_TARGET ?=
 STATIC_ANALYZER_EXTRA_FLAGS ?=
 
 analyze:
-	# This is where the reports are going to be available.
-	# Old reports are deleted on make clean only.
-	mkdir -p $(STATIC_ANALYZER_OUTPUT_DIR)
+# This is where the reports are going to be available.
+# Old reports are deleted on make clean only.
+	$(_v)$(MKDIR) $(STATIC_ANALYZER_OUTPUT_DIR)
 
-	# Recursively build the requested target under scan-build.
-	# Exclude checks that weren't deemed to be security critical,
-	# like null pointer dereferences.
-	xcrun scan-build -o $(STATIC_ANALYZER_OUTPUT_DIR) \
+# Recursively build the requested target under scan-build.
+# Exclude checks that weren't deemed to be security critical,
+# like null pointer dereferences.
+	$(_v)$(XCRUN) $(SCAN_BUILD) -o $(STATIC_ANALYZER_OUTPUT_DIR) \
 		-disable-checker deadcode.DeadStores \
 		-disable-checker core.NullDereference \
 		-disable-checker core.DivideZero \
 		$(STATIC_ANALYZER_EXTRA_FLAGS) \
-		make $(STATIC_ANALYZER_TARGET)
+		$(MAKE) $(STATIC_ANALYZER_TARGET) QUIET=1 2>&1 | $(GREP) "^scan-build:"
+
+.PHONY: analyze

@@ -33,7 +33,6 @@
 #include <mach/thread_status.h>
 #include <mach/vm_param.h>
 
-#include <kern/counters.h>
 #include <kern/cpu_data.h>
 #include <kern/mach_param.h>
 #include <kern/task.h>

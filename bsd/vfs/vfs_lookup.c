@@ -125,7 +125,7 @@ static int              lookup_handle_emptyname(struct nameidata *ndp, struct co
 static int              lookup_handle_rsrc_fork(vnode_t dp, struct nameidata *ndp, struct componentname *cnp, int wantparent, vfs_context_t ctx);
 #endif
 
-extern lck_rw_t * rootvnode_rw_lock;
+extern lck_rw_t rootvnode_rw_lock;
 
 /*
  * Convert a pathname into a pointer to a locked inode.
@@ -356,7 +356,7 @@ retry_copy:
 	 * determine the starting point for the translation.
 	 */
 	proc_dirs_lock_shared(p);
-	lck_rw_lock_shared(rootvnode_rw_lock);
+	lck_rw_lock_shared(&rootvnode_rw_lock);
 
 	if (!(fdp->fd_flags & FD_CHROOT)) {
 		ndp->ni_rootdir = rootvnode;
@@ -371,7 +371,7 @@ retry_copy:
 			/* This should be a panic */
 			printf("fdp->fd_rdir is not set\n");
 		}
-		lck_rw_unlock_shared(rootvnode_rw_lock);
+		lck_rw_unlock_shared(&rootvnode_rw_lock);
 		proc_dirs_unlock_shared(p);
 		error = ENOENT;
 		goto error_out;
@@ -397,7 +397,7 @@ retry_copy:
 
 	if (dp == NULLVP || (dp->v_lflag & VL_DEAD)) {
 		dp = NULLVP;
-		lck_rw_unlock_shared(rootvnode_rw_lock);
+		lck_rw_unlock_shared(&rootvnode_rw_lock);
 		proc_dirs_unlock_shared(p);
 		error = ENOENT;
 		goto error_out;
@@ -440,7 +440,7 @@ retry_copy:
 	}
 
 	/* Now that we have our usecount, release the locks */
-	lck_rw_unlock_shared(rootvnode_rw_lock);
+	lck_rw_unlock_shared(&rootvnode_rw_lock);
 	proc_dirs_unlock_shared(p);
 
 	ndp->ni_dvp = NULLVP;
@@ -477,7 +477,7 @@ retry_copy:
 				startdir_with_usecount = NULLVP;
 			}
 			if (rootdir_with_usecount) {
-				lck_rw_lock_shared(rootvnode_rw_lock);
+				lck_rw_lock_shared(&rootvnode_rw_lock);
 				if (rootdir_with_usecount == rootvnode) {
 					old_count = os_atomic_dec_orig(&rootdir_with_usecount->v_usecount, relaxed);
 					if (old_count < 2) {
@@ -489,7 +489,7 @@ retry_copy:
 					}
 					rootdir_with_usecount = NULLVP;
 				}
-				lck_rw_unlock_shared(rootvnode_rw_lock);
+				lck_rw_unlock_shared(&rootvnode_rw_lock);
 				if (rootdir_with_usecount) {
 					vnode_rele(rootdir_with_usecount);
 					rootdir_with_usecount = NULLVP;
@@ -537,7 +537,7 @@ error_out:
 		startdir_with_usecount = NULLVP;
 	}
 	if (rootdir_with_usecount) {
-		lck_rw_lock_shared(rootvnode_rw_lock);
+		lck_rw_lock_shared(&rootvnode_rw_lock);
 		if (rootdir_with_usecount == rootvnode) {
 			old_count = os_atomic_dec_orig(&rootdir_with_usecount->v_usecount, relaxed);
 			if (old_count < 2) {
@@ -547,9 +547,9 @@ error_out:
 				panic("(4) Unexpected pre-decrement value (%d) of usecount for rootvnode %p",
 				    old_count, rootdir_with_usecount);
 			}
-			lck_rw_unlock_shared(rootvnode_rw_lock);
+			lck_rw_unlock_shared(&rootvnode_rw_lock);
 		} else {
-			lck_rw_unlock_shared(rootvnode_rw_lock);
+			lck_rw_unlock_shared(&rootvnode_rw_lock);
 			vnode_rele(rootdir_with_usecount);
 		}
 		rootdir_with_usecount = NULLVP;

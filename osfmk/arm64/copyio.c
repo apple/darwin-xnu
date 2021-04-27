@@ -49,8 +49,6 @@ extern int _copyout_atomic64(uint64_t u64, const char *dst);
 
 extern int copyoutstr_prevalidate(const void *kaddr, user_addr_t uaddr, size_t len);
 
-extern pmap_t kernel_pmap;
-
 extern const vm_map_address_t physmap_base;
 extern const vm_map_address_t physmap_end;
 
@@ -182,7 +180,7 @@ copy_validate(const user_addr_t user_addr, uintptr_t kernel_addr,
 			 * Size of elements in the permanent zone is not saved as a part of the
 			 * zone's info
 			 */
-			if (__improbable(src_zone && !src_zone->permanent &&
+			if (__improbable(src_zone && !src_zone->z_permanent &&
 			    kernel_buf_size < nbytes)) {
 				panic("copyio_preflight: kernel buffer 0x%lx has size %lu < nbytes %lu",
 				    kernel_addr, kernel_buf_size, nbytes);

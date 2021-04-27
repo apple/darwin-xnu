@@ -27,9 +27,9 @@
  */
 
 #include <sys/sysctl.h>
+#include <pexpert/pexpert.h>
 #include <kern/zalloc.h>
 #include <kern/percpu.h>
-#include <crypto/entropy/entropy_sysctl.h>
 #include <prng/entropy.h>
 #include <libkern/section_keywords.h>
 
@@ -49,7 +49,7 @@ SYSCTL_UINT(_kern_entropy_health_adaptive_proportion_test, OID_AUTO, failure_cou
 SYSCTL_UINT(_kern_entropy_health_adaptive_proportion_test, OID_AUTO, max_observation_count, CTLFLAG_RD, &entropy_health_apt_stats.max_observation_count, 0, NULL);
 
 static int
-sysctl_entropy_collect(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+sysctl_entropy_collect SYSCTL_HANDLER_ARGS
 {
 	if (!req->oldptr || req->oldlen > entropy_analysis_buffer_size) {
 		return EINVAL;
@@ -61,11 +61,21 @@ sysctl_entropy_collect(__unused struct sysctl_oid *oidp, __unused void *arg1, __
 // Get current size of entropy buffer in bytes
 SYSCTL_UINT(_kern_entropy, OID_AUTO, entropy_buffer_size, CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_NOAUTO, &entropy_analysis_buffer_size, 0, NULL);
 // Collect contents from entropy buffer
-SYSCTL_PROC(_kern_entropy, OID_AUTO, entropy_collect, CTLTYPE_OPAQUE | CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_NOAUTO, NULL, 0, sysctl_entropy_collect, "-", NULL);
+SYSCTL_PROC(_kern_entropy, OID_AUTO, entropy_collect,
+    CTLTYPE_OPAQUE | CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_NOAUTO,
+    NULL, 0, sysctl_entropy_collect, "-", NULL);
 
-void
-entropy_analysis_register_sysctls(void)
+__startup_func
+static void
+entropy_analysis_sysctl_startup(void)
 {
-	sysctl_register_oid(&sysctl__kern_entropy_entropy_buffer_size);
-	sysctl_register_oid(&sysctl__kern_entropy_entropy_collect);
+	uint32_t sample_count = 0;
+	if (__improbable(PE_parse_boot_argn("entropy-analysis-sample-count", &sample_count, sizeof(sample_count)))) {
+		sysctl_register_oid_early(&sysctl__kern_entropy_entropy_buffer_size);
+		sysctl_register_oid_early(&sysctl__kern_entropy_entropy_collect);
+	} else if (__improbable(PE_parse_boot_argn("ebsz", &sample_count, sizeof(sample_count)))) {
+		sysctl_register_oid_early(&sysctl__kern_entropy_entropy_buffer_size);
+		sysctl_register_oid_early(&sysctl__kern_entropy_entropy_collect);
+	}
 }
+STARTUP(SYSCTL, STARTUP_RANK_MIDDLE, entropy_analysis_sysctl_startup);

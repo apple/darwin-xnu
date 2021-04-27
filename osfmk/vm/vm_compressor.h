@@ -468,13 +468,13 @@ extern void kdp_compressor_busy_find_owner(event64_t wait_event, thread_waitinfo
 #define VM_PAGE_COMPRESSOR_SWAP_CATCHUP_THRESHOLD       (((AVAILABLE_MEMORY) * 10) / (vm_compressor_catchup_threshold_divisor ? vm_compressor_catchup_threshold_divisor : 10))
 #define VM_PAGE_COMPRESSOR_HARD_THROTTLE_THRESHOLD      (((AVAILABLE_MEMORY) * 9) / (vm_compressor_catchup_threshold_divisor ? vm_compressor_catchup_threshold_divisor : 9))
 
-#ifdef  CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 #define AVAILABLE_NON_COMPRESSED_MIN                    20000
 #define COMPRESSOR_NEEDS_TO_SWAP()              (((AVAILABLE_NON_COMPRESSED_MEMORY < VM_PAGE_COMPRESSOR_SWAP_THRESHOLD) || \
 	                                          (AVAILABLE_NON_COMPRESSED_MEMORY < AVAILABLE_NON_COMPRESSED_MIN)) ? 1 : 0)
-#else
+#else /* !XNU_TARGET_OS_OSX */
 #define COMPRESSOR_NEEDS_TO_SWAP()              ((AVAILABLE_NON_COMPRESSED_MEMORY < VM_PAGE_COMPRESSOR_SWAP_THRESHOLD) ? 1 : 0)
-#endif
+#endif /* !XNU_TARGET_OS_OSX */
 
 #define HARD_THROTTLE_LIMIT_REACHED()           ((AVAILABLE_NON_COMPRESSED_MEMORY < VM_PAGE_COMPRESSOR_HARD_THROTTLE_THRESHOLD) ? 1 : 0)
 #define SWAPPER_NEEDS_TO_UNTHROTTLE()           ((AVAILABLE_NON_COMPRESSED_MEMORY < VM_PAGE_COMPRESSOR_SWAP_UNTHROTTLE_THRESHOLD) ? 1 : 0)
@@ -484,11 +484,11 @@ extern void kdp_compressor_busy_find_owner(event64_t wait_event, thread_waitinfo
 #define COMPRESSOR_NEEDS_TO_MINOR_COMPACT()     ((AVAILABLE_NON_COMPRESSED_MEMORY < VM_PAGE_COMPRESSOR_COMPACT_THRESHOLD) ? 1 : 0)
 
 
-#ifdef  CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 #define COMPRESSOR_FREE_RESERVED_LIMIT          28
-#else
+#else /* !XNU_TARGET_OS_OSX */
 #define COMPRESSOR_FREE_RESERVED_LIMIT          128
-#endif
+#endif /* !XNU_TARGET_OS_OSX */
 
 uint32_t vm_compressor_get_encode_scratch_size(void) __pure2;
 uint32_t vm_compressor_get_decode_scratch_size(void) __pure2;

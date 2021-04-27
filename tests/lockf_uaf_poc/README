@@ -1,0 +1,5 @@
+This Proof-of-Concept (PoC) is based on code from a security researcher
+(see rdar://70587638), and should not be used for any other purpose other
+than this test.  In particular, this should not be used in other shipping
+code or as reference material to create shipping code without first checking
+with Apple Legal.

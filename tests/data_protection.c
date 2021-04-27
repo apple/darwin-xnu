@@ -1040,7 +1040,7 @@ apple_key_store(uint32_t command,
 		input_struct_count, outputs, output_count, NULL, NULL
 		);
 	if (io_result != kIOReturnSuccess) {
-		T_LOG("%s: call to AppleKeyStore method %d failed", __func__);
+		T_LOG("%s: call to AppleKeyStore method %d failed", __func__, command);
 		goto close;
 	}
 

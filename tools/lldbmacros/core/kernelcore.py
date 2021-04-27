@@ -314,6 +314,7 @@ class KernelTarget(object):
         self._thread_groups = []
         self._allproc = []
         self._terminated_tasks_list = []
+        self._terminated_threads_list = []
         self._zones_list = []
         self._zombproc_list = []
         self._kernel_types_cache = {} #this will cache the Type objects as and when requested.
@@ -590,6 +591,17 @@ class KernelTarget(object):
                 self._terminated_tasks_list.append(tsk)
             caching.SaveDynamicCacheData("kern._terminated_tasks_list", self._terminated_tasks_list)
             return self._terminated_tasks_list
+
+        if name == 'terminated_threads' :
+            self._terminated_threads_list = caching.GetDynamicCacheData("kern._terminated_threads_list", [])
+            if len(self._terminated_threads_list) > 0 : return self._terminated_threads_list
+            thread_queue_head = self.GetGlobalVariable('terminated_threads')
+            thread_type = LazyTarget.GetTarget().FindFirstType('thread')
+            thread_ptr_type = thread_type.GetPointerType()
+            for trd in IterateQueue(thread_queue_head, thread_ptr_type, 'threads'):
+                self._terminated_threads_list.append(trd)
+            caching.SaveDynamicCacheData("kern._terminated_threads_list", self._terminated_threads_list)
+            return self._terminated_threads_list
 
         if name == 'procs' :
             self._allproc = caching.GetDynamicCacheData("kern._allproc", [])

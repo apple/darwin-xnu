@@ -106,6 +106,15 @@ public:
 	virtual kern_return_t
 	Stop(IOService * provider) LOCAL;
 
+	/*! @function   ClientCrashed
+	 * @discussion  Notification for kernel objects of a client crash.
+     * @param       client Attached client.
+     * @param       options No options are currently defined.
+	 * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+	 */
+	virtual kern_return_t
+	ClientCrashed(IOService * client, uint64_t options);
+
     /*!
      * @brief       Obtain IOKit IORegistryEntryID.
      * @param       registryEntryID IORegistryEntryID for the IOKit object.

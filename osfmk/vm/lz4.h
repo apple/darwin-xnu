@@ -34,7 +34,11 @@
 #include "lz4_assembly_select.h"
 #include "lz4_constants.h"
 
+#if CONFIG_IO_COMPRESSION_STATS
+#include <string.h>
+#else
 #define memcpy __builtin_memcpy
+#endif
 
 #pragma mark - Building blocks
 

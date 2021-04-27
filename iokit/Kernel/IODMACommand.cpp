@@ -664,7 +664,7 @@ IODMACommand::walkAll(uint32_t op)
 				}
 
 				kr = vm_page_alloc_list(state->fCopyPageCount,
-				    KMA_LOMEM | KMA_NOPAGEWAIT, &mapBase);
+				    (kma_flags_t)(KMA_LOMEM | KMA_NOPAGEWAIT), &mapBase);
 				if (KERN_SUCCESS != kr) {
 					DEBG("vm_page_alloc_list(%d) failed (%d)\n", state->fCopyPageCount, kr);
 					mapBase = NULL;

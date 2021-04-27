@@ -196,9 +196,11 @@ __API_AVAILABLE(macos(10.15), ios(13), tvos(13), watchos(6));
 #define MACH_BRIDGE_OBSV_RATE   0x7     /* out of range observed rates */
 
 /* DBG_SKYWALK has same toplevel code as DBG_DLIL, so don't reuse subcodes */
+#define DBG_SKYWALK_ALWAYSON    0x10
 #define DBG_SKYWALK_FLOWSWITCH  0x11
 #define DBG_SKYWALK_NETIF       0x12
 #define DBG_SKYWALK_CHANNEL     0x13
+#define DBG_SKYWALK_PACKET      0x14
 
 #define PPT_TEST            0x01
 #define PPT_JETSAM_HIWAT    0x02

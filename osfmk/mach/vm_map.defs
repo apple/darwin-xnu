@@ -506,5 +506,21 @@ routine PREFIX(vm_purgable_control) (
 routine vm_map_exec_lockdown(
 		target_task 	: vm_map_t);
 
+routine PREFIX(KERNEL_SERVER_SUFFIX(vm_remap_new)) (
+		target_task	: vm_map_t;
+inout	target_address	: vm_address_t;
+		size		: vm_size_t;
+		mask		: vm_address_t;
+		flags		: int;
+#ifdef KERNEL_SERVER
+		src_tport   : mach_port_t;
+#else
+		src_task	: vm_map_read_t;
+#endif
+		src_address	: vm_address_t;
+		copy		: boolean_t;
+inout	cur_protection	: vm_prot_t;
+inout	max_protection	: vm_prot_t;
+		inheritance	: vm_inherit_t);
 
 /* vim: set ft=c : */

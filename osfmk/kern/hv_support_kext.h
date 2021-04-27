@@ -36,6 +36,7 @@ extern "C" {
 #include <stdint.h>
 #include <kern/kern_types.h>
 #include <mach/kern_return.h>
+#include <kern/hv_io_notifier.h>
 
 typedef enum {
 	HV_DEBUG_STATE
@@ -60,6 +61,8 @@ typedef struct {
 	void (*thread_destroy)(void *vcpu);
 	void (*task_destroy)(void *vm);
 	void (*volatile_state)(void *vcpu, int state);
+#define HV_CALLBACKS_RESUME_DEFINED 1
+	void (*resume)(void);
 	void (*memory_pressure)(void);
 } hv_callbacks_t;
 
@@ -79,13 +82,17 @@ extern void hv_release_traps(hv_trap_type_t trap_type);
 extern kern_return_t hv_set_callbacks(hv_callbacks_t callbacks);
 extern void hv_release_callbacks(void);
 extern void hv_suspend(void);
+extern void hv_resume(void);
 extern kern_return_t hv_task_trap(uint64_t index, uint64_t arg);
 extern kern_return_t hv_thread_trap(uint64_t index, uint64_t arg);
 extern boolean_t hv_ast_pending(void);
 extern void hv_port_notify(mach_msg_header_t *msg);
 
 extern void hv_trace_guest_enter(uint32_t vcpu_id, uint64_t *vcpu_regs);
-extern void hv_trace_guest_exit(uint32_t vcpu_id, uint64_t *vcpu_regs);
+extern void hv_trace_guest_exit(uint32_t vcpu_id, uint64_t *vcpu_regs,
+    uint32_t reason);
+extern void hv_trace_guest_error(uint32_t vcpu_id, uint64_t *vcpu_regs,
+    uint32_t failure, uint32_t error);
 
 #if defined(__cplusplus)
 }

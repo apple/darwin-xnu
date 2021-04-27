@@ -243,8 +243,8 @@ _os_atomic_mo_has_release(OS_ATOMIC_STD memory_order ord)
 
 #define _os_atomic_clang_op(p, v, m, o, op) ({ \
 	__auto_type _v = _os_atomic_value_cast(p, v); \
-	__auto_type _r = _os_atomic_clang_op_orig(p, _v, m, o); \
-	op(_r, _v); \
+	__auto_type _s = _os_atomic_clang_op_orig(p, _v, m, o); \
+	op(_s, _v); \
 })
 
 #if OS_ATOMIC_CONFIG_MEMORY_ORDER_DEPENDENCY

@@ -35,6 +35,9 @@
 #define DYLD_ALL_IMAGE_INFOS_ADDRESS_MINIMUM_VERSION    9
 #define DYLD_ALL_IMAGE_INFOS_TIMESTAMP_MINIMUM_VERSION  15
 
+#define DYLD_MAX_PROCESS_INFO_NOTIFY_COUNT 8
+#define DYLD_PROCESS_INFO_NOTIFY_MAGIC 0x49414E46
+
 /* Re-use dyld format for kext load addresses */
 #if __LP64__
 typedef struct user64_dyld_uuid_info kernel_uuid_info;
@@ -90,7 +93,9 @@ struct user32_dyld_all_image_infos {
 	/* the following field is only in version 15 (Mac OS X 10.12, iOS 10.0) and later */
 	user32_addr_t   sharedCacheBaseAddress;
 	uint64_t        timestamp;
-	user32_addr_t   reserved[14];
+	user32_addr_t   dyldpath;
+	mach_port_name_t notifyMachPorts[DYLD_MAX_PROCESS_INFO_NOTIFY_COUNT];
+	user32_addr_t   reserved[5];
 	/* the following fields are only in version 16 (macOS 10.13, iOS 12.0) and later */
 	user32_addr_t compact_dyld_image_info_addr;
 	user32_size_t compact_dyld_image_info_size;
@@ -128,7 +133,9 @@ struct user64_dyld_all_image_infos {
 	/* the following field is only in version 15 (macOS 10.12, iOS 10.0) and later */
 	user64_addr_t   sharedCacheBaseAddress;
 	uint64_t        timestamp;
-	user64_addr_t   reserved[14];
+	user64_addr_t   dyldPath;
+	mach_port_name_t notifyMachPorts[DYLD_MAX_PROCESS_INFO_NOTIFY_COUNT];
+	user64_addr_t   reserved[9];
 	/* the following fields are only in version 16 (macOS 10.13, iOS 12.0) and later */
 	user64_addr_t compact_dyld_image_info_addr;
 	user64_size_t compact_dyld_image_info_size;

@@ -100,6 +100,10 @@
 #include <sys/kdebug.h>
 #include <libkern/section_keywords.h>
 
+#if CONFIG_IO_COMPRESSION_STATS
+#include <vfs/vfs_io_compression_stats.h>
+#endif /* CONFIG_IO_COMPRESSION_STATS */
+
 /* XXX following three prototypes should be in a header file somewhere */
 extern dev_t    chrtoblk(dev_t dev);
 extern boolean_t        iskmemdev(dev_t dev);
@@ -943,9 +947,7 @@ SYSCTL_INT(_debug, OID_AUTO, lowpri_throttle_tier3_io_period_ssd_msecs, CTLFLAG_
 SYSCTL_INT(_debug, OID_AUTO, lowpri_throttle_enabled, CTLFLAG_RW | CTLFLAG_LOCKED, &lowpri_throttle_enabled, 0, "");
 
 
-static lck_grp_t        *throttle_lock_grp;
-static lck_attr_t       *throttle_lock_attr;
-static lck_grp_attr_t   *throttle_lock_grp_attr;
+static LCK_GRP_DECLARE(throttle_lock_grp, "throttle I/O");
 
 
 /*
@@ -997,7 +999,7 @@ throttle_info_rel(struct _throttle_io_info_t *info)
 	if ((info->throttle_refcnt == 0) && (info->throttle_alloc)) {
 		DEBUG_ALLOC_THROTTLE_INFO("Freeing info = %p\n", info);
 
-		lck_mtx_destroy(&info->throttle_lock, throttle_lock_grp);
+		lck_mtx_destroy(&info->throttle_lock, &throttle_lock_grp);
 		FREE(info, M_TEMP);
 	}
 	return oldValue;
@@ -1412,24 +1414,14 @@ throttle_init(void)
 #if CONFIG_IOSCHED
 	int     iosched;
 #endif
-	/*
-	 * allocate lock group attribute and group
-	 */
-	throttle_lock_grp_attr = lck_grp_attr_alloc_init();
-	throttle_lock_grp = lck_grp_alloc_init("throttle I/O", throttle_lock_grp_attr);
 
 	/* Update throttle parameters based on device tree configuration */
 	throttle_init_throttle_window();
 
-	/*
-	 * allocate the lock attribute
-	 */
-	throttle_lock_attr = lck_attr_alloc_init();
-
 	for (i = 0; i < LOWPRI_MAX_NUM_DEV; i++) {
 		info = &_throttle_io_info[i];
 
-		lck_mtx_init(&info->throttle_lock, throttle_lock_grp, throttle_lock_attr);
+		lck_mtx_init(&info->throttle_lock, &throttle_lock_grp, LCK_ATTR_NULL);
 		info->throttle_timer_call = thread_call_allocate((thread_call_func_t)throttle_timer, (thread_call_param_t)info);
 
 		for (level = 0; level <= THROTTLE_LEVEL_END; level++) {
@@ -1547,7 +1539,7 @@ throttle_info_create(void)
 	DEBUG_ALLOC_THROTTLE_INFO("Creating info = %p\n", info, info );
 	info->throttle_alloc = TRUE;
 
-	lck_mtx_init(&info->throttle_lock, throttle_lock_grp, throttle_lock_attr);
+	lck_mtx_init(&info->throttle_lock, &throttle_lock_grp, LCK_ATTR_NULL);
 	info->throttle_timer_call = thread_call_allocate((thread_call_func_t)throttle_timer, (thread_call_param_t)info);
 
 	for (level = 0; level <= THROTTLE_LEVEL_END; level++) {
@@ -2127,6 +2119,12 @@ throttle_get_thread_effective_io_policy()
 	return proc_get_effective_thread_policy(current_thread(), TASK_POLICY_IO);
 }
 
+int
+throttle_thread_io_tier_above_metadata(void)
+{
+	return throttle_get_thread_effective_io_policy() < IOSCHED_METADATA_TIER;
+}
+
 void
 throttle_info_reset_window(uthread_t ut)
 {
@@ -2515,20 +2513,27 @@ spec_strategy(struct vnop_strategy_args *ap)
 
 #if CONFIG_IOSCHED
 	/*
-	 * For I/O Scheduling, we currently do not have a way to track and expedite metadata I/Os.
-	 * To ensure we dont get into priority inversions due to metadata I/Os, we use the following rules:
-	 * For metadata reads, ceil all I/Os to IOSCHED_METADATA_TIER & mark them passive if the I/O tier was upgraded
-	 * For metadata writes, unconditionally mark them as IOSCHED_METADATA_TIER and passive
+	 * For metadata reads, ceil the I/O tier to IOSCHED_METADATA_EXPEDITED_TIER if they are expedited, otherwise
+	 * ceil it to IOSCHED_METADATA_TIER. Mark them passive if the I/O tier was upgraded.
+	 * For metadata writes, set the I/O tier to IOSCHED_METADATA_EXPEDITED_TIER if they are expedited. Otherwise
+	 * set it to IOSCHED_METADATA_TIER. In addition, mark them as passive.
 	 */
 	if (bap->ba_flags & BA_META) {
 		if ((mp && (mp->mnt_ioflags & MNT_IOFLAGS_IOSCHED_SUPPORTED)) || (bap->ba_flags & BA_IO_SCHEDULED)) {
 			if (bp->b_flags & B_READ) {
-				if (io_tier > IOSCHED_METADATA_TIER) {
+				if ((bap->ba_flags & BA_EXPEDITED_META_IO) && (io_tier > IOSCHED_METADATA_EXPEDITED_TIER)) {
+					io_tier = IOSCHED_METADATA_EXPEDITED_TIER;
+					passive = 1;
+				} else if (io_tier > IOSCHED_METADATA_TIER) {
 					io_tier = IOSCHED_METADATA_TIER;
 					passive = 1;
 				}
 			} else {
-				io_tier = IOSCHED_METADATA_TIER;
+				if (bap->ba_flags & BA_EXPEDITED_META_IO) {
+					io_tier = IOSCHED_METADATA_EXPEDITED_TIER;
+				} else {
+					io_tier = IOSCHED_METADATA_TIER;
+				}
 				passive = 1;
 			}
 		}
@@ -2591,6 +2596,9 @@ spec_strategy(struct vnop_strategy_args *ap)
 		    buf_kernel_addrperm_addr(bp), bdev, buf_blkno(bp), buf_count(bp), 0);
 	}
 
+#if CONFIG_IO_COMPRESSION_STATS
+	io_compression_stats(bp);
+#endif /* CONFIG_IO_COMPRESSION_STATS */
 	thread_update_io_stats(current_thread(), buf_count(bp), code);
 
 	if (mp != NULL) {

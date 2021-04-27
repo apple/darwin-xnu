@@ -509,6 +509,30 @@ routine mach_vm_page_range_query(
 skip;
 #endif
 
+/*
+ *      Map portion of a task's address space, {max, cur}_protection is inout.
+ */
+#if !defined(_MACH_VM_PUBLISH_AS_LOCAL_)
+routine PREFIX(KERNEL_SERVER_SUFFIX(mach_vm_remap_new)) (
+#else
+routine PREFIX(KERNEL_SERVER_SUFFIX(vm_remap_new)) (
+#endif
+		target_task	: vm_map_t;
+  inout	target_address	: mach_vm_address_t;
+		size		: mach_vm_size_t;
+		mask		: mach_vm_offset_t;
+		flags		: int;
+#ifdef KERNEL_SERVER
+		src_tport   : mach_port_t;
+#else
+		src_task	: vm_map_read_t;
+#endif
+		src_address	: mach_vm_address_t;
+		copy		: boolean_t;
+  inout	cur_protection	: vm_prot_t;
+  inout	max_protection	: vm_prot_t;
+		inheritance	: vm_inherit_t);
+
 /****************************** Legacy section ***************************/
 /*  The following definitions are exist to provide compatibility with    */
 /*  the legacy APIs.  They are no different.  We just need to produce    */

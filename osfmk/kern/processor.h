@@ -291,7 +291,7 @@ struct pset_node {
 extern struct pset_node pset_node0;
 
 extern queue_head_t tasks, threads, corpse_tasks;
-extern int tasks_count, terminated_tasks_count, threads_count;
+extern int tasks_count, terminated_tasks_count, threads_count, terminated_threads_count;
 decl_lck_mtx_data(extern, tasks_threads_lock);
 decl_lck_mtx_data(extern, tasks_corpse_lock);
 
@@ -299,6 +299,8 @@ decl_lck_mtx_data(extern, tasks_corpse_lock);
  * The terminated tasks queue should only be inspected elsewhere by stackshot.
  */
 extern queue_head_t terminated_tasks;
+
+extern queue_head_t terminated_threads;
 
 struct processor {
 	processor_state_t       state;                  /* See above */

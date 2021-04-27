@@ -148,6 +148,7 @@ struct icmp6stat icmp6stat;
 
 extern struct inpcbhead ripcb;
 extern int icmp6errppslim;
+extern int icmp6errppslim_random_incr;
 extern int icmp6rappslim;
 static int icmp6errpps_count = 0;
 static int icmp6rapps_count = 0;
@@ -186,6 +187,11 @@ icmp6_init(struct ip6protosw *pp, struct domain *dp)
 	if (!icmp6_initialized) {
 		icmp6_initialized = 1;
 		mld_init();
+		if (icmp6errppslim >= 0 &&
+		    icmp6errppslim_random_incr > 0 &&
+		    icmp6errppslim <= INT32_MAX - (icmp6errppslim_random_incr + 1)) {
+			icmp6errppslim += (random() % icmp6errppslim_random_incr) + 1;
+		}
 	}
 }
 
@@ -3296,8 +3302,17 @@ icmp6_ratelimit(
 		}
 	} else if (!ppsratecheck(&icmp6errppslim_last, &icmp6errpps_count,
 	    icmp6errppslim)) {
-		/* The packet is subject to rate limit */
-		ret++;
+		/*
+		 * We add some randomness here to still generate ICMPv6 error
+		 * post icmp6errppslim limit with a probability that goes down
+		 * with increased value of icmp6errpps_count.
+		 */
+		if (icmp6errpps_count > 0 && icmp6errppslim > 0 &&
+		    icmp6errpps_count > icmp6errppslim &&
+		    (random() % (icmp6errpps_count - icmp6errppslim)) != 0) {
+			/* The packet is subject to rate limit */
+			ret++;
+		}
 	}
 
 	return ret;

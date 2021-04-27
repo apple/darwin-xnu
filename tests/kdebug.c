@@ -19,6 +19,7 @@
 #include <stdint.h>
 
 #include "ktrace_helpers.h"
+#include "test_utils.h"
 
 T_GLOBAL_META(
 	T_META_NAMESPACE("xnu.ktrace"),
@@ -622,25 +623,6 @@ static const uint32_t noprocfilt_evts[EXP_KERNEL_EVENTS] = {
 	BSDDBG_CODE(DBG_BSD_KDEBUG_TEST, 18),
 	BSDDBG_CODE(DBG_BSD_KDEBUG_TEST, 19),
 };
-
-static bool
-is_development_kernel(void)
-{
-	static dispatch_once_t is_development_once;
-	static bool is_development;
-
-	dispatch_once(&is_development_once, ^{
-		int dev;
-		size_t dev_size = sizeof(dev);
-
-		T_QUIET;
-		T_ASSERT_POSIX_SUCCESS(sysctlbyname("kern.development", &dev,
-		&dev_size, NULL, 0), NULL);
-		is_development = (dev != 0);
-	});
-
-	return is_development;
-}
 
 static void
 expect_event(struct trace_point *tp, const char *name, unsigned int *events,

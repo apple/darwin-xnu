@@ -1185,6 +1185,91 @@ vm_map_kernel(
 }
 
 /*
+ * mach_vm_remap_new -
+ * Behaves like mach_vm_remap, except that VM_FLAGS_RETURN_DATA_ADDR is always set
+ * and {cur,max}_protection are in/out.
+ */
+kern_return_t
+mach_vm_remap_new_external(
+	vm_map_t                target_map,
+	mach_vm_offset_t        *address,
+	mach_vm_size_t  size,
+	mach_vm_offset_t        mask,
+	int                     flags,
+	mach_port_t             src_tport,
+	mach_vm_offset_t        memory_address,
+	boolean_t               copy,
+	vm_prot_t               *cur_protection,   /* IN/OUT */
+	vm_prot_t               *max_protection,   /* IN/OUT */
+	vm_inherit_t            inheritance)
+{
+	vm_tag_t tag;
+	vm_map_offset_t         map_addr;
+	kern_return_t           kr;
+	vm_map_t src_map;
+
+	flags |= VM_FLAGS_RETURN_DATA_ADDR;
+	VM_GET_FLAGS_ALIAS(flags, tag);
+
+	/* filter out any kernel-only flags */
+	if (flags & ~VM_FLAGS_USER_REMAP) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	if (target_map == VM_MAP_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	if ((*cur_protection & ~VM_PROT_ALL) ||
+	    (*max_protection & ~VM_PROT_ALL) ||
+	    (*cur_protection & *max_protection) != *cur_protection) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	if ((*max_protection & (VM_PROT_WRITE | VM_PROT_EXECUTE)) ==
+	    (VM_PROT_WRITE | VM_PROT_EXECUTE)) {
+		/*
+		 * XXX FBDP TODO
+		 * enforce target's "wx" policies
+		 */
+		return KERN_PROTECTION_FAILURE;
+	}
+
+	if (copy || *max_protection == VM_PROT_READ || *max_protection == VM_PROT_NONE) {
+		src_map = convert_port_to_map_read(src_tport);
+	} else {
+		src_map = convert_port_to_map(src_tport);
+	}
+
+	if (src_map == VM_MAP_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	map_addr = (vm_map_offset_t)*address;
+
+	kr = vm_map_remap(target_map,
+	    &map_addr,
+	    size,
+	    mask,
+	    flags,
+	    VM_MAP_KERNEL_FLAGS_NONE,
+	    tag,
+	    src_map,
+	    memory_address,
+	    copy,
+	    cur_protection,    /* IN/OUT */
+	    max_protection,    /* IN/OUT */
+	    inheritance);
+
+	*address = map_addr;
+	vm_map_deallocate(src_map);
+
+	if (kr == KERN_SUCCESS) {
+		ipc_port_release_send(src_tport);  /* consume on success */
+	}
+	return kr;
+}
+
+/*
  * mach_vm_remap -
  * Remap a range of memory from one task into another,
  * to another address range within the same task, or
@@ -1201,8 +1286,8 @@ mach_vm_remap_external(
 	vm_map_t                src_map,
 	mach_vm_offset_t        memory_address,
 	boolean_t               copy,
-	vm_prot_t               *cur_protection,
-	vm_prot_t               *max_protection,
+	vm_prot_t               *cur_protection,    /* OUT */
+	vm_prot_t               *max_protection,    /* OUT */
 	vm_inherit_t            inheritance)
 {
 	vm_tag_t tag;
@@ -1223,8 +1308,8 @@ mach_vm_remap_kernel(
 	vm_map_t                src_map,
 	mach_vm_offset_t        memory_address,
 	boolean_t               copy,
-	vm_prot_t               *cur_protection,
-	vm_prot_t               *max_protection,
+	vm_prot_t               *cur_protection,   /* OUT */
+	vm_prot_t               *max_protection,   /* OUT */
 	vm_inherit_t            inheritance)
 {
 	vm_map_offset_t         map_addr;
@@ -1241,6 +1326,9 @@ mach_vm_remap_kernel(
 
 	map_addr = (vm_map_offset_t)*address;
 
+	*cur_protection = VM_PROT_NONE;
+	*max_protection = VM_PROT_NONE;
+
 	kr = vm_map_remap(target_map,
 	    &map_addr,
 	    size,
@@ -1251,10 +1339,95 @@ mach_vm_remap_kernel(
 	    src_map,
 	    memory_address,
 	    copy,
-	    cur_protection,
-	    max_protection,
+	    cur_protection,    /* IN/OUT */
+	    max_protection,    /* IN/OUT */
 	    inheritance);
 	*address = map_addr;
+	return kr;
+}
+
+/*
+ * vm_remap_new -
+ * Behaves like vm_remap, except that VM_FLAGS_RETURN_DATA_ADDR is always set
+ * and {cur,max}_protection are in/out.
+ */
+kern_return_t
+vm_remap_new_external(
+	vm_map_t                target_map,
+	vm_offset_t             *address,
+	vm_size_t               size,
+	vm_offset_t             mask,
+	int                     flags,
+	mach_port_t             src_tport,
+	vm_offset_t             memory_address,
+	boolean_t               copy,
+	vm_prot_t               *cur_protection,       /* IN/OUT */
+	vm_prot_t               *max_protection,       /* IN/OUT */
+	vm_inherit_t            inheritance)
+{
+	vm_tag_t tag;
+	vm_map_offset_t         map_addr;
+	kern_return_t           kr;
+	vm_map_t src_map;
+
+	flags |= VM_FLAGS_RETURN_DATA_ADDR;
+	VM_GET_FLAGS_ALIAS(flags, tag);
+
+	/* filter out any kernel-only flags */
+	if (flags & ~VM_FLAGS_USER_REMAP) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	if (target_map == VM_MAP_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	if ((*cur_protection & ~VM_PROT_ALL) ||
+	    (*max_protection & ~VM_PROT_ALL) ||
+	    (*cur_protection & *max_protection) != *cur_protection) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	if ((*max_protection & (VM_PROT_WRITE | VM_PROT_EXECUTE)) ==
+	    (VM_PROT_WRITE | VM_PROT_EXECUTE)) {
+		/*
+		 * XXX FBDP TODO
+		 * enforce target's "wx" policies
+		 */
+		return KERN_PROTECTION_FAILURE;
+	}
+
+	if (copy || *max_protection == VM_PROT_READ || *max_protection == VM_PROT_NONE) {
+		src_map = convert_port_to_map_read(src_tport);
+	} else {
+		src_map = convert_port_to_map(src_tport);
+	}
+
+	if (src_map == VM_MAP_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	map_addr = (vm_map_offset_t)*address;
+
+	kr = vm_map_remap(target_map,
+	    &map_addr,
+	    size,
+	    mask,
+	    flags,
+	    VM_MAP_KERNEL_FLAGS_NONE,
+	    tag,
+	    src_map,
+	    memory_address,
+	    copy,
+	    cur_protection,   /* IN/OUT */
+	    max_protection,   /* IN/OUT */
+	    inheritance);
+
+	*address = CAST_DOWN(vm_offset_t, map_addr);
+	vm_map_deallocate(src_map);
+
+	if (kr == KERN_SUCCESS) {
+		ipc_port_release_send(src_tport); /* consume on success */
+	}
 	return kr;
 }
 
@@ -1279,8 +1452,8 @@ vm_remap_external(
 	vm_map_t                src_map,
 	vm_offset_t             memory_address,
 	boolean_t               copy,
-	vm_prot_t               *cur_protection,
-	vm_prot_t               *max_protection,
+	vm_prot_t               *cur_protection,    /* OUT */
+	vm_prot_t               *max_protection,    /* OUT */
 	vm_inherit_t            inheritance)
 {
 	vm_tag_t tag;
@@ -1301,8 +1474,8 @@ vm_remap_kernel(
 	vm_map_t                src_map,
 	vm_offset_t             memory_address,
 	boolean_t               copy,
-	vm_prot_t               *cur_protection,
-	vm_prot_t               *max_protection,
+	vm_prot_t               *cur_protection,    /* OUT */
+	vm_prot_t               *max_protection,    /* OUT */
 	vm_inherit_t            inheritance)
 {
 	vm_map_offset_t         map_addr;
@@ -1319,6 +1492,9 @@ vm_remap_kernel(
 
 	map_addr = (vm_map_offset_t)*address;
 
+	*cur_protection = VM_PROT_NONE;
+	*max_protection = VM_PROT_NONE;
+
 	kr = vm_map_remap(target_map,
 	    &map_addr,
 	    size,
@@ -1329,8 +1505,8 @@ vm_remap_kernel(
 	    src_map,
 	    memory_address,
 	    copy,
-	    cur_protection,
-	    max_protection,
+	    cur_protection,   /* IN/OUT */
+	    max_protection,   /* IN/OUT */
 	    inheritance);
 	*address = CAST_DOWN(vm_offset_t, map_addr);
 	return kr;
@@ -1374,8 +1550,6 @@ mach_vm_wire_kernel(
 	if (host_priv == HOST_PRIV_NULL) {
 		return KERN_INVALID_HOST;
 	}
-
-	assert(host_priv == &realhost);
 
 	if (map == VM_MAP_NULL) {
 		return KERN_INVALID_TASK;
@@ -1425,8 +1599,6 @@ vm_wire(
 	if (host_priv == HOST_PRIV_NULL) {
 		return KERN_INVALID_HOST;
 	}
-
-	assert(host_priv == &realhost);
 
 	if (map == VM_MAP_NULL) {
 		return KERN_INVALID_TASK;
@@ -2099,7 +2271,10 @@ mach_vm_page_range_query(
 	effective_page_size = (1 << effective_page_shift);
 	effective_page_mask = effective_page_size - 1;
 
-	disp_buf_req_size = (*dispositions_count * sizeof(int));
+	if (os_mul_overflow(*dispositions_count, sizeof(int), &disp_buf_req_size)) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
 	start = vm_map_trunc_page(address, effective_page_mask);
 	end = vm_map_round_page(address + size, effective_page_mask);
 
@@ -2296,7 +2471,7 @@ kern_return_t
 mach_make_memory_entry_64(
 	vm_map_t                target_map,
 	memory_object_size_t    *size,
-	memory_object_offset_t offset,
+	memory_object_offset_t  offset,
 	vm_prot_t               permission,
 	ipc_port_t              *object_handle,
 	ipc_port_t              parent_handle)
@@ -2674,7 +2849,6 @@ mach_make_memory_entry_internal(
 		vm_prot_t       cur_prot, max_prot;
 		vm_map_kernel_flags_t vmk_flags;
 		vm_map_entry_t parent_copy_entry;
-		vm_prot_t required_protection;
 
 		if (target_map == VM_MAP_NULL) {
 			DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x -> entry %p kr 0x%x\n", target_map, offset, *size, permission, user_entry, KERN_INVALID_TASK);
@@ -2685,6 +2859,42 @@ mach_make_memory_entry_internal(
 		vmk_flags = VM_MAP_KERNEL_FLAGS_NONE;
 		parent_copy_entry = VM_MAP_ENTRY_NULL;
 		if (!(permission & MAP_MEM_VM_SHARE)) {
+			vm_map_t tmp_map, real_map;
+			vm_map_version_t version;
+			vm_object_t tmp_object;
+			vm_object_offset_t obj_off;
+			vm_prot_t prot;
+			boolean_t wired;
+			bool contended;
+
+			/* resolve any pending submap copy-on-write... */
+			if (protections & VM_PROT_WRITE) {
+				tmp_map = target_map;
+				vm_map_lock_read(tmp_map);
+				kr = vm_map_lookup_locked(&tmp_map,
+				    map_start,
+				    protections | mask_protections,
+				    OBJECT_LOCK_EXCLUSIVE,
+				    &version,
+				    &tmp_object,
+				    &obj_off,
+				    &prot,
+				    &wired,
+				    NULL,                       /* fault_info */
+				    &real_map,
+				    &contended);
+				if (kr != KERN_SUCCESS) {
+					vm_map_unlock_read(tmp_map);
+				} else {
+					vm_object_unlock(tmp_object);
+					vm_map_unlock_read(tmp_map);
+					if (real_map != tmp_map) {
+						vm_map_unlock_read(real_map);
+					}
+				}
+			}
+			/* ... and carry on */
+
 			/* stop extracting if VM object changes */
 			vmk_flags.vmkf_copy_single_object = TRUE;
 			if ((permission & MAP_MEM_NAMED_REUSE) &&
@@ -2718,15 +2928,16 @@ mach_make_memory_entry_internal(
 			 * caller is asking for whichever proctections are
 			 * available: no required protections.
 			 */
-			required_protection = VM_PROT_NONE;
+			cur_prot = VM_PROT_NONE;
+			max_prot = VM_PROT_NONE;
 		} else {
 			/*
 			 * Caller wants a memory entry with "protections".
 			 * Make sure we extract only memory that matches that.
 			 */
-			required_protection = protections;
+			cur_prot = protections;
+			max_prot = protections;
 		}
-		cur_prot = VM_PROT_ALL;
 		if (target_map->pmap == kernel_pmap) {
 			/*
 			 * Get "reserved" map entries to avoid deadlocking
@@ -2743,7 +2954,6 @@ mach_make_memory_entry_internal(
 		kr = vm_map_copy_extract(target_map,
 		    map_start,
 		    map_size,
-		    required_protection,
 		    FALSE,                      /* copy */
 		    &copy,
 		    &cur_prot,
@@ -2758,7 +2968,6 @@ mach_make_memory_entry_internal(
 			return kr;
 		}
 		assert(copy != VM_MAP_COPY_NULL);
-		assert((cur_prot & required_protection) == required_protection);
 
 		if (mask_protections) {
 			/*
@@ -2780,6 +2989,9 @@ mach_make_memory_entry_internal(
 			 * We want exactly "original_protections"
 			 * out of "cur_prot".
 			 */
+			assert((cur_prot & protections) == protections);
+			assert((max_prot & protections) == protections);
+			/* XXX FBDP TODO: no longer needed? */
 			if ((cur_prot & protections) != protections) {
 				if (VM_MAP_PAGE_SHIFT(target_map) < PAGE_SHIFT) {
 //					panic("DEBUG4K %s:%d kr 0x%x\n", __FUNCTION__, __LINE__, KERN_PROTECTION_FAILURE);
@@ -2948,10 +3160,8 @@ mach_make_memory_entry_internal(
 
 	if (parent_entry->is_sub_map) {
 		vm_map_t map = parent_entry->backing.map;
+		vm_map_reference(map);
 		user_entry->backing.map = map;
-		lck_mtx_lock(&map->s_lock);
-		os_ref_retain_locked(&map->map_refcnt);
-		lck_mtx_unlock(&map->s_lock);
 	} else {
 		object = vm_named_entry_to_vm_object(parent_entry);
 		assert(object != VM_OBJECT_NULL);
@@ -3516,7 +3726,7 @@ mach_memory_entry_phys_page_offset(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	mem_entry = (vm_named_entry_t) entry_port->ip_kobject;
+	mem_entry = (vm_named_entry_t) ipc_kobject_get(entry_port);
 
 	named_entry_lock(mem_entry);
 
@@ -3562,7 +3772,7 @@ mach_memory_entry_map_size(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	mem_entry = (vm_named_entry_t) entry_port->ip_kobject;
+	mem_entry = (vm_named_entry_t) ipc_kobject_get(entry_port);
 	named_entry_lock(mem_entry);
 
 	if (mem_entry->is_sub_map) {
@@ -4234,8 +4444,8 @@ mach_vm_remap(
 	vm_map_t                src_map,
 	mach_vm_offset_t        memory_address,
 	boolean_t               copy,
-	vm_prot_t               *cur_protection,
-	vm_prot_t               *max_protection,
+	vm_prot_t               *cur_protection,   /* OUT */
+	vm_prot_t               *max_protection,   /* OUT */
 	vm_inherit_t            inheritance)
 {
 	return mach_vm_remap_external(target_map, address, size, mask, flags, src_map, memory_address,

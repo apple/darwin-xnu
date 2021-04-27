@@ -3252,7 +3252,6 @@ postsig_locked(int signum)
 		 * Default catcher, where the default is to kill
 		 * the process.  (Other cases were ignored above.)
 		 */
-		sig_lock_to_exit(p);
 
 		/*
 		 * exit_with_reason() below will consume a reference to the thread's exit reason, so we take another

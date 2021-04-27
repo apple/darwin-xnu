@@ -78,7 +78,7 @@
 #define MPRINTF(a)
 #endif
 
-#define M_SYSVSEM       M_TEMP
+#define KM_SYSVSEM       KHEAP_DEFAULT
 
 
 /* Hard system limits to avoid resource starvation / DOS attacks.
@@ -133,26 +133,11 @@ static int              semu_list_idx = -1;     /* active undo structures */
 struct sem_undo         *semu = NULL;           /* semaphore undo pool */
 
 
-void sysv_sem_lock_init(void);
-static lck_grp_t       *sysv_sem_subsys_lck_grp;
-static lck_grp_attr_t  *sysv_sem_subsys_lck_grp_attr;
-static lck_attr_t      *sysv_sem_subsys_lck_attr;
-static lck_mtx_t        sysv_sem_subsys_mutex;
+static LCK_GRP_DECLARE(sysv_sem_subsys_lck_grp, "sysv_sem_subsys_lock");
+static LCK_MTX_DECLARE(sysv_sem_subsys_mutex, &sysv_sem_subsys_lck_grp);
 
 #define SYSV_SEM_SUBSYS_LOCK() lck_mtx_lock(&sysv_sem_subsys_mutex)
 #define SYSV_SEM_SUBSYS_UNLOCK() lck_mtx_unlock(&sysv_sem_subsys_mutex)
-
-
-__private_extern__ void
-sysv_sem_lock_init( void )
-{
-	sysv_sem_subsys_lck_grp_attr = lck_grp_attr_alloc_init();
-
-	sysv_sem_subsys_lck_grp = lck_grp_alloc_init("sysv_sem_subsys_lock", sysv_sem_subsys_lck_grp_attr);
-
-	sysv_sem_subsys_lck_attr = lck_attr_alloc_init();
-	lck_mtx_init(&sysv_sem_subsys_mutex, sysv_sem_subsys_lck_grp, sysv_sem_subsys_lck_attr);
-}
 
 static __inline__ user_time_t
 sysv_semtime(void)
@@ -283,8 +268,8 @@ grow_semu_array(int newSize)
 #ifdef SEM_DEBUG
 	printf("growing semu[] from %d to %d\n", seminfo.semmnu, newSize);
 #endif
-	MALLOC(newSemu, struct sem_undo *, sizeof(struct sem_undo) * newSize,
-	    M_SYSVSEM, M_WAITOK | M_ZERO);
+	newSemu = kheap_alloc(KM_SYSVSEM, sizeof(struct sem_undo) * newSize,
+	    Z_WAITOK | Z_ZERO);
 	if (NULL == newSemu) {
 #ifdef SEM_DEBUG
 		printf("allocation failed.  no changes made.\n");
@@ -298,14 +283,12 @@ grow_semu_array(int newSize)
 	}
 	/*
 	 * The new elements (from newSemu[i] to newSemu[newSize-1]) have their
-	 * "un_proc" set to 0 (i.e. NULL) by the M_ZERO flag to MALLOC() above,
-	 * so they're already marked as "not in use".
+	 * "un_proc" set to 0 (i.e. NULL) by the Z_ZERO flag to kheap_alloc
+	 * above, so they're already marked as "not in use".
 	 */
 
 	/* Clean up the old array */
-	if (semu) {
-		FREE(semu, M_SYSVSEM);
-	}
+	kheap_free(KM_SYSVSEM, semu, sizeof(struct sem_undo) * seminfo.semmnu);
 
 	semu = newSemu;
 	seminfo.semmnu = newSize;
@@ -343,9 +326,8 @@ grow_sema_array(int newSize)
 #ifdef SEM_DEBUG
 	printf("growing sema[] from %d to %d\n", seminfo.semmni, newSize);
 #endif
-	MALLOC(newSema, struct semid_kernel *,
-	    sizeof(struct semid_kernel) * newSize,
-	    M_SYSVSEM, M_WAITOK | M_ZERO);
+	newSema = kheap_alloc(KM_SYSVSEM, sizeof(struct semid_kernel) * newSize,
+	    Z_WAITOK | Z_ZERO);
 	if (NULL == newSema) {
 #ifdef SEM_DEBUG
 		printf("allocation failed.  no changes made.\n");
@@ -377,14 +359,13 @@ grow_sema_array(int newSize)
 
 	/*
 	 * The new elements (from newSema[i] to newSema[newSize-1]) have their
-	 * "sem_base" and "sem_perm.mode" set to 0 (i.e. NULL) by the M_ZERO
-	 * flag to MALLOC() above, so they're already marked as "not in use".
+	 * "sem_base" and "sem_perm.mode" set to 0 (i.e. NULL) by the Z_ZERO
+	 * flag to kheap_alloc above, so they're already marked as "not in use".
 	 */
 
 	/* Clean up the old array */
-	if (sema) {
-		FREE(sema, M_SYSVSEM);
-	}
+	kheap_free(KM_SYSVSEM, sema,
+	    sizeof(struct semid_kernel) * seminfo.semmni);
 
 	sema = newSema;
 	seminfo.semmni = newSize;
@@ -425,8 +406,8 @@ grow_sem_pool(int new_pool_size)
 #ifdef SEM_DEBUG
 	printf("growing sem_pool array from %d to %d\n", seminfo.semmns, new_pool_size);
 #endif
-	MALLOC(new_sem_pool, struct sem *, sizeof(struct sem) * new_pool_size,
-	    M_SYSVSEM, M_WAITOK | M_ZERO | M_NULL);
+	new_sem_pool = kheap_alloc(KM_SYSVSEM, sizeof(struct sem) * new_pool_size,
+	    Z_WAITOK | Z_ZERO);
 	if (NULL == new_sem_pool) {
 #ifdef SEM_DEBUG
 		printf("allocation failed.  no changes made.\n");
@@ -453,9 +434,7 @@ grow_sem_pool(int new_pool_size)
 	sem_pool = new_sem_pool;
 
 	/* clean up the old array */
-	if (sem_free != NULL) {
-		FREE(sem_free, M_SYSVSEM);
-	}
+	kheap_free(KM_SYSVSEM, sem_free, sizeof(struct sem) * seminfo.semmns);
 
 	seminfo.semmns = new_pool_size;
 #ifdef SEM_DEBUG
@@ -606,8 +585,7 @@ semundo_adjust(struct proc *p, int *supidx, int semid,
 		if (sueptr->une_adjval == 0) {
 			suptr->un_cnt--;
 			*suepptr = sueptr->une_next;
-			FREE(sueptr, M_SYSVSEM);
-			sueptr = NULL;
+			kheap_free(KM_SYSVSEM, sueptr, sizeof(struct undo));
 		}
 		return 0;
 	}
@@ -624,8 +602,7 @@ semundo_adjust(struct proc *p, int *supidx, int semid,
 	}
 
 	/* allocate a new semaphore undo entry */
-	MALLOC(new_sueptr, struct undo *, sizeof(struct undo),
-	    M_SYSVSEM, M_WAITOK);
+	new_sueptr = kheap_alloc(KM_SYSVSEM, sizeof(struct undo), Z_WAITOK);
 	if (new_sueptr == NULL) {
 		return ENOMEM;
 	}
@@ -662,7 +639,7 @@ semundo_clear(int semid, int semnum)
 				if (semnum == -1 || sueptr->une_num == semnum) {
 					suptr->un_cnt--;
 					*suepptr = sueptr->une_next;
-					FREE(sueptr, M_SYSVSEM);
+					kheap_free(KM_SYSVSEM, sueptr, sizeof(struct undo));
 					sueptr = *suepptr;
 					continue;
 				}
@@ -1533,8 +1510,7 @@ semexit(struct proc *p)
 #endif
 			suptr->un_cnt--;
 			suptr->un_ent = sueptr->une_next;
-			FREE(sueptr, M_SYSVSEM);
-			sueptr = NULL;
+			kheap_free(KM_SYSVSEM, sueptr, sizeof(struct undo));
 		}
 	}
 

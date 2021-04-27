@@ -73,6 +73,7 @@ OSSharedPtr<const OSSymbol> gIOClassKey;
 OSSharedPtr<const OSSymbol> gIOProbeScoreKey;
 OSSharedPtr<const OSSymbol> gIOModuleIdentifierKey;
 OSSharedPtr<const OSSymbol> gIOModuleIdentifierKernelKey;
+OSSharedPtr<const OSSymbol> gIOHIDInterfaceClassName;
 IORWLock       * gIOCatalogLock;
 
 #if PRAGMA_MARK
@@ -113,6 +114,7 @@ IOCatalogue::initialize(void)
 	gIOProbeScoreKey             = OSSymbol::withCStringNoCopy( kIOProbeScoreKey );
 	gIOModuleIdentifierKey       = OSSymbol::withCStringNoCopy( kCFBundleIdentifierKey );
 	gIOModuleIdentifierKernelKey = OSSymbol::withCStringNoCopy( kCFBundleIdentifierKernelKey );
+	gIOHIDInterfaceClassName     = OSSymbol::withCStringNoCopy( "IOHIDInterface" );
 
 
 	assert( array && gIOClassKey && gIOProbeScoreKey
@@ -808,7 +810,9 @@ IOCatalogue::terminateDriversForModule(
 {
 	IOReturn ret;
 	OSSharedPtr<OSDictionary> dict;
+	OSSharedPtr<OSKext> kext;
 	bool isLoaded = false;
+	bool isDext = false;
 
 	/* Check first if the kext currently has any linkage dependents;
 	 * in such a case the unload would fail so let's not terminate any
@@ -829,6 +833,11 @@ IOCatalogue::terminateDriversForModule(
 			goto finish;
 		}
 	}
+	kext = OSKext::lookupKextWithIdentifier(moduleName->getCStringNoCopy());
+	if (kext) {
+		isDext = kext->isDriverKit();
+	}
+
 	dict = OSDictionary::withCapacity(1);
 	if (!dict) {
 		ret = kIOReturnNoMemory;
@@ -839,19 +848,24 @@ IOCatalogue::terminateDriversForModule(
 
 	ret = terminateDrivers(dict.get(), NULL);
 
-	/* No goto between IOLock calls!
-	 */
-	IORWLockWrite(lock);
-	if (kIOReturnSuccess == ret) {
-		ret = _removeDrivers(dict.get());
-	}
+	if (isDext) {
+		/* Force rematching after removing personalities. Dexts are never considered to be "loaded" (from OSKext),
+		 * so we can't call unloadModule() to remove personalities and start rematching. */
+		removeDrivers(dict.get(), true);
+	} else {
+		/* No goto between IOLock calls!
+		 */
+		IORWLockWrite(lock);
+		if (kIOReturnSuccess == ret) {
+			ret = _removeDrivers(dict.get());
+		}
 
-	// Unload the module itself.
-	if (unload && isLoaded && ret == kIOReturnSuccess) {
-		ret = unloadModule(moduleName);
+		// Unload the module itself.
+		if (unload && isLoaded && ret == kIOReturnSuccess) {
+			ret = unloadModule(moduleName);
+		}
+		IORWLockUnlock(lock);
 	}
-
-	IORWLockUnlock(lock);
 
 finish:
 	return ret;
@@ -926,6 +940,8 @@ bool
 IOCatalogue::startMatching( const OSSymbol * moduleName )
 {
 	OSSharedPtr<OSOrderedSet> set;
+	OSSharedPtr<OSKext>       kext;
+	OSSharedPtr<OSArray>      servicesToTerminate;
 
 	if (!moduleName) {
 		return false;
@@ -938,6 +954,53 @@ IOCatalogue::startMatching( const OSSymbol * moduleName )
 	}
 
 	IORWLockRead(lock);
+
+	kext = OSKext::lookupKextWithIdentifier(moduleName->getCStringNoCopy());
+	if (kext && kext->isDriverKit()) {
+		/* We're here because kernelmanagerd called IOCatalogueModuleLoaded after launching a dext.
+		 * Determine what providers the dext would match against. If there's something already attached
+		 * to the provider, terminate it.
+		 *
+		 * This is only safe to do for HID dexts.
+		 */
+		OSSharedPtr<OSArray> dextPersonalities = kext->copyPersonalitiesArray();
+
+		if (!dextPersonalities) {
+			return false;
+		}
+
+		servicesToTerminate = OSArray::withCapacity(1);
+		if (!servicesToTerminate) {
+			return false;
+		}
+
+		dextPersonalities->iterateObjects(^bool (OSObject * obj) {
+			OSDictionary * personality = OSDynamicCast(OSDictionary, obj);
+			OSSharedPtr<OSIterator> iter;
+			IOService * provider;
+			OSSharedPtr<IOService> service;
+			const OSSymbol * category;
+
+			if (personality) {
+			        category = OSDynamicCast(OSSymbol, personality->getObject(gIOMatchCategoryKey));
+			        if (!category) {
+			                category = gIODefaultMatchCategoryKey;
+				}
+			        iter = IOService::getMatchingServices(personality);
+
+			        while (iter && (provider = OSDynamicCast(IOService, iter->getNextObject()))) {
+			                if (provider->metaCast(gIOHIDInterfaceClassName.get()) != NULL) {
+			                        service.reset(provider->copyClientWithCategory(category), OSNoRetain);
+			                        if (service) {
+			                                servicesToTerminate->setObject(service);
+						}
+					}
+				}
+			}
+
+			return false;
+		});
+	}
 
 	personalities->iterateObjects(^bool (const OSSymbol * key, OSObject * value) {
 		OSArray      * array;
@@ -957,6 +1020,22 @@ IOCatalogue::startMatching( const OSSymbol * moduleName )
 		}
 		return false;
 	});
+
+	if (servicesToTerminate) {
+		servicesToTerminate->iterateObjects(^bool (OSObject * obj) {
+			IOService * service = OSDynamicCast(IOService, obj);
+			if (service) {
+			        IOOptionBits terminateOptions = kIOServiceRequired;
+			        if (service->hasUserServer()) {
+			                terminateOptions |= kIOServiceTerminateNeedWillTerminate;
+				}
+			        if (!service->terminate(terminateOptions)) {
+			                IOLog("%s: failed to terminate service %s-0x%qx with options %08llx for new dext %s\n", __FUNCTION__, service->getName(), service->getRegistryEntryID(), (long long)terminateOptions, moduleName->getCStringNoCopy());
+				}
+			}
+			return false;
+		});
+	}
 
 	// Start device matching.
 	if (set->getCount() > 0) {

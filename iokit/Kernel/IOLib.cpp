@@ -451,7 +451,7 @@ IOMallocAligned_internal(struct kalloc_heap *kheap, vm_size_t size,
 		address = 0; /* overflow detected */
 	} else if (adjustedSize >= page_size) {
 		kr = kernel_memory_allocate(kernel_map, &address,
-		    size, alignMask, 0, IOMemoryTag(kernel_map));
+		    size, alignMask, KMA_NONE, IOMemoryTag(kernel_map));
 		if (KERN_SUCCESS != kr) {
 			address = 0;
 		}
@@ -465,7 +465,7 @@ IOMallocAligned_internal(struct kalloc_heap *kheap, vm_size_t size,
 
 		if (adjustedSize >= page_size) {
 			kr = kernel_memory_allocate(kernel_map, &allocationAddress,
-			    adjustedSize, 0, 0, IOMemoryTag(kernel_map));
+			    adjustedSize, 0, KMA_NONE, IOMemoryTag(kernel_map));
 			if (KERN_SUCCESS != kr) {
 				allocationAddress = 0;
 			}
@@ -628,7 +628,7 @@ IOKernelAllocateWithPhysicalRestrict(mach_vm_size_t size, mach_vm_address_t maxP
 	    || (alignment > page_size);
 
 	if (contiguous || maxPhys) {
-		int options = 0;
+		kma_flags_t options = KMA_NONE;
 		vm_offset_t virt;
 
 		adjustedSize = size;
@@ -643,14 +643,15 @@ IOKernelAllocateWithPhysicalRestrict(mach_vm_size_t size, mach_vm_address_t maxP
 #endif
 			if (maxPhys <= 0xFFFFFFFF) {
 				maxPhys = 0;
-				options |= KMA_LOMEM;
+				options = (kma_flags_t)(options | KMA_LOMEM);
 			} else if (gIOLastPage && (atop_64(maxPhys) > gIOLastPage)) {
 				maxPhys = 0;
 			}
 		}
 		if (contiguous || maxPhys) {
 			kr = kmem_alloc_contig(kernel_map, &virt, size,
-			    alignMask, (ppnum_t) atop(maxPhys), (ppnum_t) atop(alignMask), 0, IOMemoryTag(kernel_map));
+			    alignMask, (ppnum_t) atop(maxPhys), (ppnum_t) atop(alignMask),
+			    KMA_NONE, IOMemoryTag(kernel_map));
 		} else {
 			kr = kernel_memory_allocate(kernel_map, &virt,
 			    size, alignMask, options, IOMemoryTag(kernel_map));

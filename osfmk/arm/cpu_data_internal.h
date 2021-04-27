@@ -72,7 +72,7 @@ static_assert(sizeof(cpumap_t) * CHAR_BIT >= MAX_CPUS, "cpumap_t bitvector is to
 #define CPUWINDOWS_BASE                 (VM_MAX_KERNEL_ADDRESS & CPUWINDOWS_BASE_MASK)
 #define CPUWINDOWS_TOP                  (CPUWINDOWS_BASE + (MAX_CPUS * CPUWINDOWS_MAX * ARM_PGBYTES))
 
-static_assert((CPUWINDOWS_BASE >= VM_MIN_KERNEL_ADDRESS) && (CPUWINDOWS_TOP <= VM_MAX_KERNEL_ADDRESS),
+static_assert((CPUWINDOWS_BASE >= VM_MIN_KERNEL_ADDRESS) && ((CPUWINDOWS_TOP - 1) <= VM_MAX_KERNEL_ADDRESS),
     "CPU copy windows too large for CPUWINDOWS_BASE_MASK value");
 
 typedef struct cpu_data_entry {

@@ -1614,6 +1614,10 @@ static int
 iopolicysys_vfs_trigger_resolve(struct proc *p, int cmd, int scope, int policy, struct _iopol_param_t *iop_param);
 static int
 iopolicysys_vfs_ignore_content_protection(struct proc *p, int cmd, int scope, int policy, struct _iopol_param_t *iop_param);
+static int
+iopolicysys_vfs_ignore_node_permissions(struct proc *p, int cmd, int scope, int policy, struct _iopol_param_t *ipo_param);
+static int
+iopolicysys_vfs_skip_mtime_update(struct proc *p, int cmd, int scope, int policy, struct _iopol_param_t *iop_param);
 
 /*
  * iopolicysys
@@ -1680,6 +1684,18 @@ iopolicysys(struct proc *p, struct iopolicysys_args *uap, int32_t *retval)
 		break;
 	case IOPOL_TYPE_VFS_IGNORE_CONTENT_PROTECTION:
 		error = iopolicysys_vfs_ignore_content_protection(p, uap->cmd, iop_param.iop_scope, iop_param.iop_policy, &iop_param);
+		if (error) {
+			goto out;
+		}
+		break;
+	case IOPOL_TYPE_VFS_IGNORE_PERMISSIONS:
+		error = iopolicysys_vfs_ignore_node_permissions(p, uap->cmd, iop_param.iop_scope, iop_param.iop_policy, &iop_param);
+		if (error) {
+			goto out;
+		}
+		break;
+	case IOPOL_TYPE_VFS_SKIP_MTIME_UPDATE:
+		error = iopolicysys_vfs_skip_mtime_update(p, uap->cmd, iop_param.iop_scope, iop_param.iop_policy, &iop_param);
 		if (error) {
 			goto out;
 		}
@@ -2289,6 +2305,104 @@ out:
 	return error;
 }
 
+#define AUTHORIZED_ACCESS_ENTITLEMENT \
+	"com.apple.private.vfs.authorized-access"
+int
+iopolicysys_vfs_ignore_node_permissions(struct proc *p, int cmd, int scope,
+    int policy, __unused struct _iopol_param_t *iop_param)
+{
+	int error = EINVAL;
+
+	switch (scope) {
+	case IOPOL_SCOPE_PROCESS:
+		break;
+	default:
+		goto out;
+	}
+
+	switch (cmd) {
+	case IOPOL_CMD_GET:
+		policy = os_atomic_load(&p->p_vfs_iopolicy, relaxed) & P_VFS_IOPOLICY_IGNORE_NODE_PERMISSIONS ?
+		    IOPOL_VFS_IGNORE_PERMISSIONS_ON : IOPOL_VFS_IGNORE_PERMISSIONS_OFF;
+		iop_param->iop_policy = policy;
+		goto out_ok;
+	case IOPOL_CMD_SET:
+		/* SET is handled after the switch */
+		break;
+	default:
+		goto out;
+	}
+
+	if (!IOTaskHasEntitlement(current_task(), AUTHORIZED_ACCESS_ENTITLEMENT)) {
+		error = EPERM;
+		goto out;
+	}
+
+	switch (policy) {
+	case IOPOL_VFS_IGNORE_PERMISSIONS_OFF:
+		os_atomic_andnot(&p->p_vfs_iopolicy, P_VFS_IOPOLICY_IGNORE_NODE_PERMISSIONS, relaxed);
+		break;
+	case IOPOL_VFS_IGNORE_PERMISSIONS_ON:
+		os_atomic_or(&p->p_vfs_iopolicy, P_VFS_IOPOLICY_IGNORE_NODE_PERMISSIONS, relaxed);
+		break;
+	default:
+		break;
+	}
+
+out_ok:
+	error = 0;
+out:
+	return error;
+}
+
+#define SKIP_MTIME_UPDATE_ENTITLEMENT \
+	"com.apple.private.vfs.skip-mtime-updates"
+int
+iopolicysys_vfs_skip_mtime_update(struct proc *p, int cmd, int scope,
+    int policy, __unused struct _iopol_param_t *iop_param)
+{
+	int error = EINVAL;
+
+	switch (scope) {
+	case IOPOL_SCOPE_PROCESS:
+		break;
+	default:
+		goto out;
+	}
+
+	switch (cmd) {
+	case IOPOL_CMD_GET:
+		policy = os_atomic_load(&p->p_vfs_iopolicy, relaxed) & P_VFS_IOPOLICY_SKIP_MTIME_UPDATE ?
+		    IOPOL_VFS_SKIP_MTIME_UPDATE_ON : IOPOL_VFS_SKIP_MTIME_UPDATE_OFF;
+		iop_param->iop_policy = policy;
+		goto out_ok;
+	case IOPOL_CMD_SET:
+		break;
+	default:
+		break;
+	}
+
+	if (!IOTaskHasEntitlement(current_task(), SKIP_MTIME_UPDATE_ENTITLEMENT)) {
+		error = EPERM;
+		goto out;
+	}
+
+	switch (policy) {
+	case IOPOL_VFS_SKIP_MTIME_UPDATE_OFF:
+		os_atomic_andnot(&p->p_vfs_iopolicy, P_VFS_IOPOLICY_SKIP_MTIME_UPDATE, relaxed);
+		break;
+	case IOPOL_VFS_SKIP_MTIME_UPDATE_ON:
+		os_atomic_or(&p->p_vfs_iopolicy, P_VFS_IOPOLICY_SKIP_MTIME_UPDATE, relaxed);
+		break;
+	default:
+		break;
+	}
+
+out_ok:
+	error = 0;
+out:
+	return error;
+}
 /* BSD call back function for task_policy networking changes */
 void
 proc_apply_task_networkbg(void * bsd_info, thread_t thread)

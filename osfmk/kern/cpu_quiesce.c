@@ -90,16 +90,17 @@ static uint64_t cpu_checkin_min_interval;
 static uint32_t cpu_checkin_min_interval_us;
 
 #if __LP64__
-static_assert(MAX_CPUS <= 32);
-#define CPU_CHECKIN_MASK        0x5555555555555555UL
-#define CPU_EXPECTED_MASK       (~CPU_CHECKIN_MASK)
+#define CPU_CHECKIN_MASK_MAX_CPUS 32
+#define CPU_CHECKIN_MASK          0x5555555555555555UL
+#define CPU_EXPECTED_MASK         (~CPU_CHECKIN_MASK)
 #else
 /* Avoid double-wide CAS on 32-bit platforms by using a 32-bit state and mask */
-static_assert(MAX_CPUS <= 16);
-#define CPU_CHECKIN_MASK        0x55555555UL
-#define CPU_EXPECTED_MASK       (~CPU_CHECKIN_MASK)
+#define CPU_CHECKIN_MASK_MAX_CPUS 16
+#define CPU_CHECKIN_MASK          0x55555555UL
+#define CPU_EXPECTED_MASK         (~CPU_CHECKIN_MASK)
 #endif
 
+static_assert(MAX_CPUS <= CPU_CHECKIN_MASK_MAX_CPUS);
 static_assert(CPU_CHECKIN_MASK == CPU_EXPECTED_MASK >> 1);
 
 static inline checkin_mask_t
@@ -117,10 +118,10 @@ cpu_expected_bit(int cpuid)
 void
 cpu_quiescent_counter_init(void)
 {
-	assert(CPU_CHECKIN_MASK & cpu_checked_in_bit(MAX_CPUS));
-	assert(CPU_EXPECTED_MASK & cpu_expected_bit(MAX_CPUS));
-	assert((CPU_CHECKIN_MASK & cpu_expected_bit(MAX_CPUS)) == 0);
-	assert((CPU_EXPECTED_MASK & cpu_checked_in_bit(MAX_CPUS)) == 0);
+	assert(CPU_CHECKIN_MASK & cpu_checked_in_bit(MAX_CPUS - 1));
+	assert(CPU_EXPECTED_MASK & cpu_expected_bit(MAX_CPUS - 1));
+	assert((CPU_CHECKIN_MASK & cpu_expected_bit(MAX_CPUS - 1)) == 0);
+	assert((CPU_EXPECTED_MASK & cpu_checked_in_bit(MAX_CPUS - 1)) == 0);
 
 	cpu_quiescent_counter_set_min_interval_us(CPU_CHECKIN_MIN_INTERVAL_US);
 }
@@ -192,6 +193,7 @@ cpu_quiescent_counter_join(__unused uint64_t ctime)
 	struct cpu_quiesce *st = PERCPU_GET(cpu_quiesce);
 	__assert_only int cpuid = cpu_number();
 
+	assert(cpuid < MAX_CPUS);
 	assert(st->state == CPU_QUIESCE_COUNTER_NONE ||
 	    st->state == CPU_QUIESCE_COUNTER_LEFT);
 

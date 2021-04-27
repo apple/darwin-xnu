@@ -52,9 +52,6 @@ extern struct arm_saved_state *find_kern_regs(thread_t);
 extern dtrace_id_t      dtrace_probeid_error;   /* special ERROR probe */
 typedef arm_saved_state_t savearea_t;
 
-extern lck_attr_t       *dtrace_lck_attr;
-extern lck_grp_t        *dtrace_lck_grp;
-
 #if XNU_MONITOR
 extern void * pmap_stacks_start;
 extern void * pmap_stacks_end;
@@ -99,7 +96,7 @@ dtrace_getipl(void)
  * MP coordination
  */
 
-decl_lck_mtx_data(static, dt_xc_lock);
+static LCK_MTX_DECLARE_ATTR(dt_xc_lock, &dtrace_lck_grp, &dtrace_lck_attr);
 static uint32_t dt_xc_sync;
 
 typedef struct xcArg {
@@ -140,16 +137,6 @@ dtrace_xcall(processorid_t cpu, dtrace_xcall_t f, void *arg)
 	cpu_broadcast_xcall(&dt_xc_sync, TRUE, xcRemote, (void*) &xcArg);
 
 	lck_mtx_unlock(&dt_xc_lock);
-	return;
-}
-
-/*
- * Initialization
- */
-void
-dtrace_isa_init(void)
-{
-	lck_mtx_init(&dt_xc_lock, dtrace_lck_grp, dtrace_lck_attr);
 	return;
 }
 

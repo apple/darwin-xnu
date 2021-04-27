@@ -118,7 +118,11 @@ typedef struct vnode_pager {
 	struct memory_object vn_pgr_hdr;
 
 	/*  pager-specific */
-	struct os_refcnt        ref_count;
+#if MEMORY_OBJECT_HAS_REFCOUNT
+#define vn_pgr_hdr_ref      vn_pgr_hdr.mo_ref
+#else
+	os_ref_atomic_t         vn_pgr_hdr_ref;
+#endif
 	struct vnode            *vnode_handle;  /* vnode handle              */
 } *vnode_pager_t;
 
@@ -650,7 +654,7 @@ vnode_pager_reference(
 	vnode_pager_t   vnode_object;
 
 	vnode_object = vnode_pager_lookup(mem_obj);
-	os_ref_retain(&vnode_object->ref_count);
+	os_ref_retain_raw(&vnode_object->vn_pgr_hdr_ref, NULL);
 }
 
 /*
@@ -666,7 +670,7 @@ vnode_pager_deallocate(
 
 	vnode_object = vnode_pager_lookup(mem_obj);
 
-	if (os_ref_release(&vnode_object->ref_count) == 0) {
+	if (os_ref_release_raw(&vnode_object->vn_pgr_hdr_ref, NULL) == 0) {
 		if (vnode_object->vnode_handle != NULL) {
 			vnode_pager_vrele(vnode_object->vnode_handle);
 		}
@@ -920,7 +924,7 @@ vnode_object_create(
 	vnode_object->vn_pgr_hdr.mo_pager_ops = &vnode_pager_ops;
 	vnode_object->vn_pgr_hdr.mo_control = MEMORY_OBJECT_CONTROL_NULL;
 
-	os_ref_init(&vnode_object->ref_count, NULL);
+	os_ref_init_raw(&vnode_object->vn_pgr_hdr_ref, NULL);
 	vnode_object->vnode_handle = vp;
 
 	return vnode_object;

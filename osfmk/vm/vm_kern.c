@@ -111,7 +111,7 @@ kmem_alloc_contig(
 	vm_offset_t             mask,
 	ppnum_t                 max_pnum,
 	ppnum_t                 pnum_mask,
-	int                     flags,
+	kma_flags_t             flags,
 	vm_tag_t                tag)
 {
 	vm_object_t             object;
@@ -252,8 +252,8 @@ kernel_memory_allocate(
 	vm_offset_t     *addrp,
 	vm_size_t       size,
 	vm_offset_t     mask,
-	int                     flags,
-	vm_tag_t                tag)
+	kma_flags_t     flags,
+	vm_tag_t        tag)
 {
 	vm_object_t             object;
 	vm_object_offset_t      offset;
@@ -268,14 +268,9 @@ kernel_memory_allocate(
 	vm_page_t               wired_page_list = NULL;
 	int                     guard_page_count = 0;
 	int                     wired_page_count = 0;
-	int                     page_grab_count = 0;
-	int                     i;
 	int                     vm_alloc_flags;
 	vm_map_kernel_flags_t   vmk_flags;
 	vm_prot_t               kma_prot;
-#if DEVELOPMENT || DEBUG
-	task_t                                  task = current_task();
-#endif /* DEVELOPMENT || DEBUG */
 
 	if (startup_phase < STARTUP_SUB_KMEM) {
 		panic("kernel_memory_allocate: VM is not ready");
@@ -349,64 +344,25 @@ kernel_memory_allocate(
 	assert(wired_page_count * PAGE_SIZE_64 == fill_size);
 
 #if DEBUG || DEVELOPMENT
-	VM_DEBUG_CONSTANT_EVENT(vm_kern_request, VM_KERN_REQUEST, DBG_FUNC_START, size, 0, 0, 0);
+	VM_DEBUG_CONSTANT_EVENT(vm_kern_request, VM_KERN_REQUEST, DBG_FUNC_START,
+	    size, 0, 0, 0);
 #endif
 
-	for (i = 0; i < guard_page_count; i++) {
-		for (;;) {
-			mem = vm_page_grab_guard();
-
-			if (mem != VM_PAGE_NULL) {
-				break;
-			}
-			if (flags & KMA_NOPAGEWAIT) {
-				kr = KERN_RESOURCE_SHORTAGE;
-				goto out;
-			}
-			vm_page_more_fictitious();
+	for (int i = 0; i < guard_page_count; i++) {
+		mem = vm_page_grab_guard((flags & KMA_NOPAGEWAIT) == 0);
+		if (mem == VM_PAGE_NULL) {
+			kr = KERN_RESOURCE_SHORTAGE;
+			goto out;
 		}
 		mem->vmp_snext = guard_page_list;
 		guard_page_list = mem;
 	}
 
 	if (!(flags & (KMA_VAONLY | KMA_PAGEABLE))) {
-		for (i = 0; i < wired_page_count; i++) {
-			for (;;) {
-				if (flags & KMA_LOMEM) {
-					mem = vm_page_grablo();
-				} else {
-					mem = vm_page_grab();
-				}
-
-				if (mem != VM_PAGE_NULL) {
-					break;
-				}
-
-				if (flags & KMA_NOPAGEWAIT) {
-					kr = KERN_RESOURCE_SHORTAGE;
-					goto out;
-				}
-				if ((flags & KMA_LOMEM) && (vm_lopage_needed == TRUE)) {
-					kr = KERN_RESOURCE_SHORTAGE;
-					goto out;
-				}
-
-				/* VM privileged threads should have waited in vm_page_grab() and not get here. */
-				assert(!(current_thread()->options & TH_OPT_VMPRIV));
-
-				uint64_t unavailable = (vm_page_wire_count + vm_page_free_target) * PAGE_SIZE;
-				if (unavailable > max_mem || map_size > (max_mem - unavailable)) {
-					kr = KERN_RESOURCE_SHORTAGE;
-					goto out;
-				}
-				VM_PAGE_WAIT();
-			}
-			page_grab_count++;
-			if (KMA_ZERO & flags) {
-				vm_page_zero_fill(mem);
-			}
-			mem->vmp_snext = wired_page_list;
-			wired_page_list = mem;
+		kr = vm_page_alloc_list(wired_page_count, flags,
+		    &wired_page_list);
+		if (kr != KERN_SUCCESS) {
+			goto out;
 		}
 	}
 
@@ -580,12 +536,9 @@ kernel_memory_allocate(
 	}
 
 #if DEBUG || DEVELOPMENT
-	VM_DEBUG_CONSTANT_EVENT(vm_kern_request, VM_KERN_REQUEST, DBG_FUNC_END, page_grab_count, 0, 0, 0);
-	if (task != NULL) {
-		ledger_credit(task->ledger, task_ledgers.pages_grabbed_kern, page_grab_count);
-	}
+	VM_DEBUG_CONSTANT_EVENT(vm_kern_request, VM_KERN_REQUEST, DBG_FUNC_END,
+	    wired_page_count, 0, 0, 0);
 #endif
-
 	/*
 	 *	Return the memory, not zeroed.
 	 */
@@ -602,13 +555,114 @@ out:
 	}
 
 #if DEBUG || DEVELOPMENT
-	VM_DEBUG_CONSTANT_EVENT(vm_kern_request, VM_KERN_REQUEST, DBG_FUNC_END, page_grab_count, 0, 0, 0);
-	if (task != NULL && kr == KERN_SUCCESS) {
-		ledger_credit(task->ledger, task_ledgers.pages_grabbed_kern, page_grab_count);
+	VM_DEBUG_CONSTANT_EVENT(vm_kern_request, VM_KERN_REQUEST, DBG_FUNC_END,
+	    wired_page_count, 0, 0, 0);
+#endif
+	return kr;
+}
+
+void
+kernel_memory_populate_with_pages(
+	vm_map_t        map,
+	vm_offset_t     addr,
+	vm_size_t       size,
+	vm_page_t       page_list,
+	kma_flags_t     flags,
+	vm_tag_t        tag)
+{
+	vm_object_t     object;
+	kern_return_t   pe_result;
+	vm_page_t       mem;
+	int             page_count = atop_64(size);
+
+	if (flags & KMA_COMPRESSOR) {
+		panic("%s(%p,0x%llx,0x%llx,0x%x): KMA_COMPRESSOR", __func__,
+		    map, (uint64_t) addr, (uint64_t) size, flags);
+	}
+
+	if (flags & KMA_KOBJECT) {
+		object = kernel_object;
+
+		vm_object_lock(object);
+	} else {
+		/*
+		 * If it's not the kernel object, we need to:
+		 *      lock map;
+		 *      lookup entry;
+		 *      lock object;
+		 *	take reference on object;
+		 *      unlock map;
+		 */
+		panic("%s(%p,0x%llx,0x%llx,0x%x): !KMA_KOBJECT", __func__,
+		    map, (uint64_t) addr, (uint64_t) size, flags);
+	}
+
+	for (vm_object_offset_t pg_offset = 0;
+	    pg_offset < size;
+	    pg_offset += PAGE_SIZE_64) {
+		if (page_list == NULL) {
+			panic("%s: page_list too short", __func__);
+		}
+
+		mem = page_list;
+		page_list = mem->vmp_snext;
+		mem->vmp_snext = NULL;
+
+		assert(mem->vmp_q_state == VM_PAGE_NOT_ON_Q);
+		mem->vmp_q_state = VM_PAGE_IS_WIRED;
+		mem->vmp_wire_count++;
+		if (mem->vmp_wire_count == 0) {
+			panic("%s(%p): wire_count overflow", __func__, mem);
+		}
+
+		vm_page_insert_wired(mem, object, addr + pg_offset, tag);
+
+		mem->vmp_busy = FALSE;
+		mem->vmp_pmapped = TRUE;
+		mem->vmp_wpmapped = TRUE;
+
+		PMAP_ENTER_OPTIONS(kernel_pmap, addr + pg_offset,
+		    0, /* fault_phys_offset */
+		    mem,
+		    VM_PROT_READ | VM_PROT_WRITE, VM_PROT_NONE,
+		    ((flags & KMA_KSTACK) ? VM_MEM_STACK : 0), TRUE,
+		    PMAP_OPTIONS_NOWAIT, pe_result);
+
+		if (pe_result == KERN_RESOURCE_SHORTAGE) {
+			vm_object_unlock(object);
+
+			PMAP_ENTER(kernel_pmap, addr + pg_offset, mem,
+			    VM_PROT_READ | VM_PROT_WRITE, VM_PROT_NONE,
+			    ((flags & KMA_KSTACK) ? VM_MEM_STACK : 0), TRUE,
+			    pe_result);
+
+			vm_object_lock(object);
+		}
+
+		assert(pe_result == KERN_SUCCESS);
+
+		if (flags & KMA_NOENCRYPT) {
+			__nosan_bzero(CAST_DOWN(void *, (addr + pg_offset)), PAGE_SIZE);
+			pmap_set_noencrypt(VM_PAGE_GET_PHYS_PAGE(mem));
+		}
+	}
+	if (page_list) {
+		panic("%s: page_list too long", __func__);
+	}
+	vm_object_unlock(object);
+
+	vm_page_lockspin_queues();
+	vm_page_wire_count += page_count;
+	vm_page_unlock_queues();
+	vm_tag_update_size(tag, size);
+
+#if KASAN
+	if (map == compressor_map) {
+		kasan_notify_address_nopoison(addr, size);
+	} else {
+		kasan_notify_address(addr, size);
 	}
 #endif
-
-	return kr;
 }
 
 kern_return_t
@@ -616,24 +670,20 @@ kernel_memory_populate(
 	vm_map_t        map,
 	vm_offset_t     addr,
 	vm_size_t       size,
-	int             flags,
+	kma_flags_t     flags,
 	vm_tag_t        tag)
 {
 	vm_object_t             object;
 	vm_object_offset_t      offset, pg_offset;
-	kern_return_t           kr, pe_result;
+	kern_return_t           kr = KERN_SUCCESS;
 	vm_page_t               mem;
 	vm_page_t               page_list = NULL;
-	int                     page_count = 0;
-	int                     page_grab_count = 0;
-	int                     i;
+	int                     page_count = atop_64(size);
 
 #if DEBUG || DEVELOPMENT
-	task_t                                  task = current_task();
-	VM_DEBUG_CONSTANT_EVENT(vm_kern_request, VM_KERN_REQUEST, DBG_FUNC_START, size, 0, 0, 0);
+	VM_DEBUG_CONSTANT_EVENT(vm_kern_request, VM_KERN_REQUEST, DBG_FUNC_START,
+	    size, 0, 0, 0);
 #endif
-
-	page_count = (int) (size / PAGE_SIZE_64);
 
 	assert((flags & (KMA_COMPRESSOR | KMA_KOBJECT)) != (KMA_COMPRESSOR | KMA_KOBJECT));
 
@@ -650,7 +700,6 @@ kernel_memory_populate(
 
 				VM_PAGE_WAIT();
 			}
-			page_grab_count++;
 			if (KMA_ZERO & flags) {
 				vm_page_zero_fill(mem);
 			}
@@ -697,147 +746,23 @@ kernel_memory_populate(
 #endif
 
 #if DEBUG || DEVELOPMENT
-		VM_DEBUG_CONSTANT_EVENT(vm_kern_request, VM_KERN_REQUEST, DBG_FUNC_END, page_grab_count, 0, 0, 0);
+		task_t task = current_task();
 		if (task != NULL) {
-			ledger_credit(task->ledger, task_ledgers.pages_grabbed_kern, page_grab_count);
+			ledger_credit(task->ledger, task_ledgers.pages_grabbed_kern, page_count);
 		}
 #endif
-		return KERN_SUCCESS;
-	}
-
-	for (i = 0; i < page_count; i++) {
-		for (;;) {
-			if (flags & KMA_LOMEM) {
-				mem = vm_page_grablo();
-			} else {
-				mem = vm_page_grab();
-			}
-
-			if (mem != VM_PAGE_NULL) {
-				break;
-			}
-
-			if (flags & KMA_NOPAGEWAIT) {
-				kr = KERN_RESOURCE_SHORTAGE;
-				goto out;
-			}
-			if ((flags & KMA_LOMEM) &&
-			    (vm_lopage_needed == TRUE)) {
-				kr = KERN_RESOURCE_SHORTAGE;
-				goto out;
-			}
-			VM_PAGE_WAIT();
-		}
-		page_grab_count++;
-		if (KMA_ZERO & flags) {
-			vm_page_zero_fill(mem);
-		}
-		mem->vmp_snext = page_list;
-		page_list = mem;
-	}
-	if (flags & KMA_KOBJECT) {
-		offset = addr;
-		object = kernel_object;
-
-		vm_object_lock(object);
 	} else {
-		/*
-		 * If it's not the kernel object, we need to:
-		 *      lock map;
-		 *      lookup entry;
-		 *      lock object;
-		 *	take reference on object;
-		 *      unlock map;
-		 */
-		panic("kernel_memory_populate(%p,0x%llx,0x%llx,0x%x): "
-		    "!KMA_KOBJECT",
-		    map, (uint64_t) addr, (uint64_t) size, flags);
-	}
-
-	for (pg_offset = 0;
-	    pg_offset < size;
-	    pg_offset += PAGE_SIZE_64) {
-		if (page_list == NULL) {
-			panic("kernel_memory_populate: page_list == NULL");
+		kr = vm_page_alloc_list(page_count, flags, &page_list);
+		if (kr == KERN_SUCCESS) {
+			kernel_memory_populate_with_pages(map, addr, size,
+			    page_list, flags, tag);
 		}
-
-		mem = page_list;
-		page_list = mem->vmp_snext;
-		mem->vmp_snext = NULL;
-
-		assert(mem->vmp_q_state == VM_PAGE_NOT_ON_Q);
-		mem->vmp_q_state = VM_PAGE_IS_WIRED;
-		mem->vmp_wire_count++;
-		if (__improbable(mem->vmp_wire_count == 0)) {
-			panic("kernel_memory_populate(%p): wire_count overflow", mem);
-		}
-
-		vm_page_insert_wired(mem, object, offset + pg_offset, tag);
-
-		mem->vmp_busy = FALSE;
-		mem->vmp_pmapped = TRUE;
-		mem->vmp_wpmapped = TRUE;
-
-		PMAP_ENTER_OPTIONS(kernel_pmap, addr + pg_offset,
-		    0, /* fault_phys_offset */
-		    mem,
-		    VM_PROT_READ | VM_PROT_WRITE, VM_PROT_NONE,
-		    ((flags & KMA_KSTACK) ? VM_MEM_STACK : 0), TRUE,
-		    PMAP_OPTIONS_NOWAIT, pe_result);
-
-		if (pe_result == KERN_RESOURCE_SHORTAGE) {
-			vm_object_unlock(object);
-
-			PMAP_ENTER(kernel_pmap, addr + pg_offset, mem,
-			    VM_PROT_READ | VM_PROT_WRITE, VM_PROT_NONE,
-			    ((flags & KMA_KSTACK) ? VM_MEM_STACK : 0), TRUE,
-			    pe_result);
-
-			vm_object_lock(object);
-		}
-
-		assert(pe_result == KERN_SUCCESS);
-
-		if (flags & KMA_NOENCRYPT) {
-			bzero(CAST_DOWN(void *, (addr + pg_offset)), PAGE_SIZE);
-			pmap_set_noencrypt(VM_PAGE_GET_PHYS_PAGE(mem));
-		}
-	}
-	vm_object_unlock(object);
-
-	vm_page_lockspin_queues();
-	vm_page_wire_count += page_count;
-	vm_page_unlock_queues();
-	vm_tag_update_size(tag, ptoa_64(page_count));
-
-#if DEBUG || DEVELOPMENT
-	VM_DEBUG_CONSTANT_EVENT(vm_kern_request, VM_KERN_REQUEST, DBG_FUNC_END, page_grab_count, 0, 0, 0);
-	if (task != NULL) {
-		ledger_credit(task->ledger, task_ledgers.pages_grabbed_kern, page_grab_count);
-	}
-#endif
-
-#if KASAN
-	if (map == compressor_map) {
-		kasan_notify_address_nopoison(addr, size);
-	} else {
-		kasan_notify_address(addr, size);
-	}
-#endif
-	return KERN_SUCCESS;
-
-out:
-	if (page_list) {
-		vm_page_free_list(page_list, FALSE);
 	}
 
 #if DEBUG || DEVELOPMENT
-	VM_DEBUG_CONSTANT_EVENT(vm_kern_request, VM_KERN_REQUEST, DBG_FUNC_END, page_grab_count, 0, 0, 0);
-	if (task != NULL && kr == KERN_SUCCESS) {
-		ledger_credit(task->ledger, task_ledgers.pages_grabbed_kern, page_grab_count);
-	}
+	VM_DEBUG_CONSTANT_EVENT(vm_kern_request, VM_KERN_REQUEST, DBG_FUNC_END,
+	    page_count, 0, 0, 0);
 #endif
-
 	return kr;
 }
 
@@ -847,7 +772,7 @@ kernel_memory_depopulate(
 	vm_map_t           map,
 	vm_offset_t        addr,
 	vm_size_t          size,
-	int                flags,
+	kma_flags_t        flags,
 	vm_tag_t           tag)
 {
 	vm_object_t        object;
@@ -956,7 +881,7 @@ kmem_alloc_flags(
 	vm_offset_t     *addrp,
 	vm_size_t       size,
 	vm_tag_t        tag,
-	int             flags)
+	kma_flags_t     flags)
 {
 	kern_return_t kr = kernel_memory_allocate(map, addrp, size, 0, flags, tag);
 	if (kr == KERN_SUCCESS) {
@@ -1588,6 +1513,68 @@ copyoutmap(
 		vm_map_reference(map);
 		oldmap = vm_map_switch(map);
 		if (copyout(fromdata, toaddr, length) != 0) {
+			kr = KERN_INVALID_ADDRESS;
+		}
+		vm_map_switch(oldmap);
+		vm_map_deallocate(map);
+	}
+	return kr;
+}
+
+/*
+ *	Routine:	copyoutmap_atomic{32, 64}
+ *	Purpose:
+ *		Like copyoutmap, except that the operation is atomic.
+ *      Takes in value rather than *fromdata pointer.
+ */
+kern_return_t
+copyoutmap_atomic32(
+	vm_map_t                map,
+	uint32_t                value,
+	vm_map_address_t        toaddr)
+{
+	kern_return_t   kr = KERN_SUCCESS;
+	vm_map_t        oldmap;
+
+	if (vm_map_pmap(map) == pmap_kernel()) {
+		/* assume a correct toaddr */
+		*(uint32_t *)toaddr = value;
+	} else if (current_map() == map) {
+		if (copyout_atomic32(value, toaddr) != 0) {
+			kr = KERN_INVALID_ADDRESS;
+		}
+	} else {
+		vm_map_reference(map);
+		oldmap = vm_map_switch(map);
+		if (copyout_atomic32(value, toaddr) != 0) {
+			kr = KERN_INVALID_ADDRESS;
+		}
+		vm_map_switch(oldmap);
+		vm_map_deallocate(map);
+	}
+	return kr;
+}
+
+kern_return_t
+copyoutmap_atomic64(
+	vm_map_t                map,
+	uint64_t                value,
+	vm_map_address_t        toaddr)
+{
+	kern_return_t   kr = KERN_SUCCESS;
+	vm_map_t        oldmap;
+
+	if (vm_map_pmap(map) == pmap_kernel()) {
+		/* assume a correct toaddr */
+		*(uint64_t *)toaddr = value;
+	} else if (current_map() == map) {
+		if (copyout_atomic64(value, toaddr) != 0) {
+			kr = KERN_INVALID_ADDRESS;
+		}
+	} else {
+		vm_map_reference(map);
+		oldmap = vm_map_switch(map);
+		if (copyout_atomic64(value, toaddr) != 0) {
 			kr = KERN_INVALID_ADDRESS;
 		}
 		vm_map_switch(oldmap);

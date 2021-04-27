@@ -56,7 +56,7 @@ For all `kalloc` or `kheap_alloc` variants, these advices apply:
 
 - If your allocation size is of fixed size, of a sub-page size, and done with
   the `Z_WAITOK` semantics (allocation can block), consider adding `Z_NOFAIL`,
-- If you `bzero` the memory on allocation, prefer passing `Z_ZERO` which can be
+- If you `bzero` the memory on allocation, instead pass `Z_ZERO` which can be
   optimized away more often than not.
 
 ### Considerations for zones
@@ -83,7 +83,7 @@ Security wise, the following questions need answering:
 
 There are several allocation wrappers in XNU, present for various reasons
 ranging from additional accounting features (IOKit's `IONew`), conformance to
-langauge requirements (C++ various `new` operators) or organical historical
+language requirements (C++ various `new` operators) or organic historical
 reasons.
 
 `zalloc` and `kalloc` are considered the primitive allocation interfaces which

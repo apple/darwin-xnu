@@ -1238,11 +1238,6 @@ ml_cpu_can_exit(__unused int cpu_id)
 }
 
 void
-ml_cpu_init_state(void)
-{
-}
-
-void
 ml_cpu_begin_state_transition(__unused int cpu_id)
 {
 }

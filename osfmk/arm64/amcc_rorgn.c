@@ -70,6 +70,7 @@ extern vm_offset_t   segTEXTEXECB;
 extern unsigned long segSizeLAST;
 extern unsigned long segSizeLASTDATACONST;
 extern unsigned long segSizeTEXTEXEC;
+extern unsigned long segSizeKLD;
 
 typedef struct lock_reg {
 	uint32_t        reg_offset;                             // Register offset
@@ -111,12 +112,6 @@ static uint64_t lock_group_va[MAX_LOCK_GROUPS][MAX_APERTURES];
 
 #if CONFIG_CSR_FROM_DT
 SECURITY_READ_ONLY_LATE(bool) csr_unsafe_kernel_text = false;
-#endif
-
-#if defined(KERNEL_INTEGRITY_KTRR)
-#define CTRR_LOCK_MSR ARM64_REG_KTRR_LOCK_EL1
-#elif defined(KERNEL_INTEGRITY_CTRR)
-#define CTRR_LOCK_MSR ARM64_REG_CTRR_LOCK_EL1
 #endif
 
 /*
@@ -411,7 +406,8 @@ rorgn_stash_range(void)
 	 * +------------------+-----------+-----------------------------------+
 	 * | Largest Address  |    LAST   | <- AMCC RO Region End (rorgn_end) |
 	 * +------------------+-----------+-----------------------------------+
-	 * |                  | TEXT_EXEC | <- KTRR RO Region End (ctrr_end)  |
+	 * |                  |    KLD    | <- KTRR RO Region End (ctrr_end)  |
+	 * |                  | TEXT_EXEC |                                   |
 	 * +------------------+-----------+-----------------------------------+
 	 * |                  |    ...    |                                   |
 	 * +------------------+-----------+-----------------------------------+
@@ -430,7 +426,7 @@ rorgn_stash_range(void)
 	assert(segSizeLAST == PAGE_SIZE);
 
 	/* assert that segLAST is contiguous and just after/above/numerically higher than KTRR end */
-	assert((ctrr_end + 1) == kvtophys(segTEXTEXECB) + segSizeTEXTEXEC);
+	assert((ctrr_end + 1) == kvtophys(segTEXTEXECB) + segSizeTEXTEXEC + segSizeKLD);
 
 	/* ensure that iboot and xnu agree on the amcc rorgn range */
 	assert((rorgn_begin == ctrr_begin) && (rorgn_end == (ctrr_end + segSizeLASTDATACONST + segSizeLAST)));
@@ -443,6 +439,9 @@ rorgn_stash_range(void)
 	 * | Largest Address  |    LAST   |  <- CTRR/AMCC RO Region End  |
 	 * |                  |           |     (ctrr_end/rorgn_end)     |
 	 * +------------------+-----------+------------------------------+
+	 * |                  | PPLDATA_CONST                            |
+	 * |                  |  PPLTEXT  |                              |
+	 * |                  |    KLD    |                              |
 	 * |                  | TEXT_EXEC |                              |
 	 * +------------------+-----------+------------------------------+
 	 * |                  |    ...    |                              |
@@ -467,49 +466,6 @@ rorgn_stash_range(void)
 	assert((rorgn_begin == ctrr_begin) && (rorgn_end == ctrr_end));
 #endif
 }
-
-#if DEVELOPMENT || DEBUG
-static void
-assert_all_lock_groups_unlocked(lock_group_t const *lock_groups)
-{
-	uint64_t reg_addr;
-	uint64_t ctrr_lock = 0;
-	bool locked = false;
-	bool write_disabled = false;;
-
-	assert(lock_groups);
-
-	for (unsigned int lg = 0; lg < MAX_LOCK_GROUPS; lg++) {
-		for (unsigned int aperture = 0; aperture < lock_groups[lg].aperture_count; aperture++) {
-#if HAS_IOA
-			// Does the lock group define a master lock register?
-			if (lock_groups[lg].master_lock_reg.reg_mask != 0) {
-				reg_addr = lock_group_va[lg][aperture] + lock_groups[lg].master_lock_reg.reg_offset;
-				locked |= ((*(volatile uint32_t *)reg_addr & lock_groups[lg].master_lock_reg.reg_mask) == lock_groups[lg].master_lock_reg.reg_value);
-			}
-#endif
-			for (unsigned int plane = 0; plane < lock_groups[lg].plane_count; plane++) {
-				// Does the lock group define a write disable register?
-				if (lock_groups[lg].ctrr_a.write_disable_reg.reg_mask != 0) {
-					reg_addr = lock_group_va[lg][aperture] + (plane * lock_groups[lg].plane_stride) + lock_groups[lg].ctrr_a.write_disable_reg.reg_offset;
-					write_disabled |= ((*(volatile uint32_t *)reg_addr & lock_groups[lg].ctrr_a.write_disable_reg.reg_mask) == lock_groups[lg].ctrr_a.write_disable_reg.reg_value);
-				}
-
-				// Does the lock group define a lock register?
-				if (lock_groups[lg].ctrr_a.lock_reg.reg_mask != 0) {
-					reg_addr = lock_group_va[lg][aperture] + (plane * lock_groups[lg].plane_stride) + lock_groups[lg].ctrr_a.lock_reg.reg_offset;
-					locked |= ((*(volatile uint32_t *)reg_addr & lock_groups[lg].ctrr_a.lock_reg.reg_mask) == lock_groups[lg].ctrr_a.lock_reg.reg_value);
-				}
-			}
-		}
-	}
-
-	ctrr_lock = __builtin_arm_rsr64(CTRR_LOCK_MSR);
-
-	assert(!ctrr_lock);
-	assert(!write_disabled && !locked);
-}
-#endif
 
 static void
 lock_all_lock_groups(lock_group_t const *lock_group, vm_offset_t begin, vm_offset_t end)
@@ -562,56 +518,6 @@ lock_all_lock_groups(lock_group_t const *lock_group, vm_offset_t begin, vm_offse
 	}
 }
 
-static void
-lock_mmu(uint64_t begin, uint64_t end)
-{
-#if defined(KERNEL_INTEGRITY_KTRR)
-
-	__builtin_arm_wsr64(ARM64_REG_KTRR_LOWER_EL1, begin);
-	__builtin_arm_wsr64(ARM64_REG_KTRR_UPPER_EL1, end);
-	__builtin_arm_wsr64(ARM64_REG_KTRR_LOCK_EL1, 1ULL);
-
-	/* flush TLB */
-
-	__builtin_arm_isb(ISB_SY);
-	flush_mmu_tlb();
-
-#elif defined (KERNEL_INTEGRITY_CTRR)
-	/* this will lock the entire bootstrap cluster. non bootstrap clusters
-	 * will be locked by respective cluster master in start.s */
-
-	__builtin_arm_wsr64(ARM64_REG_CTRR_A_LWR_EL1, begin);
-	__builtin_arm_wsr64(ARM64_REG_CTRR_A_UPR_EL1, end);
-
-#if !defined(APPLEVORTEX)
-	/* H12+ changed sequence, must invalidate TLB immediately after setting CTRR bounds */
-	__builtin_arm_isb(ISB_SY); /* ensure all prior MSRs are complete */
-	flush_mmu_tlb();
-#endif /* !defined(APPLEVORTEX) */
-
-	__builtin_arm_wsr64(ARM64_REG_CTRR_CTL_EL1, CTRR_CTL_EL1_A_PXN | CTRR_CTL_EL1_A_MMUON_WRPROTECT);
-	__builtin_arm_wsr64(ARM64_REG_CTRR_LOCK_EL1, 1ULL);
-
-	uint64_t current_el = __builtin_arm_rsr64("CurrentEL");
-	if (current_el == PSR64_MODE_EL2) {
-		// CTRR v2 has explicit registers for cluster config. they can only be written in EL2
-
-		__builtin_arm_wsr64(ACC_CTRR_A_LWR_EL2, begin);
-		__builtin_arm_wsr64(ACC_CTRR_A_UPR_EL2, end);
-		__builtin_arm_wsr64(ACC_CTRR_CTL_EL2, CTRR_CTL_EL1_A_PXN | CTRR_CTL_EL1_A_MMUON_WRPROTECT);
-		__builtin_arm_wsr64(ACC_CTRR_LOCK_EL2, 1ULL);
-	}
-
-	__builtin_arm_isb(ISB_SY); /* ensure all prior MSRs are complete */
-#if defined(APPLEVORTEX)
-	flush_mmu_tlb();
-#endif /* defined(APPLEVORTEX) */
-
-#else /* defined(KERNEL_INTEGRITY_KTRR) */
-#error KERNEL_INTEGRITY config error
-#endif /* defined(KERNEL_INTEGRITY_KTRR) */
-}
-
 #if DEVELOPMENT || DEBUG
 static void
 assert_amcc_cache_disabled(lock_group_t const *lock_group)
@@ -662,8 +568,6 @@ rorgn_lockdown(void)
 		lock_group_t const * const lock_group = find_lock_group_data();
 
 #if DEVELOPMENT || DEBUG
-		assert_all_lock_groups_unlocked(lock_group);
-
 		printf("RO Region Begin: %p End: %p\n", (void *)rorgn_begin, (void *)rorgn_end);
 		printf("CTRR (MMU) Begin: %p End: %p, setting lockdown\n", (void *)ctrr_begin, (void *)ctrr_end);
 
@@ -672,14 +576,6 @@ rorgn_lockdown(void)
 
 		// Lock the AMCC/IOA PIO lock registers.
 		lock_all_lock_groups(lock_group, phystokv(rorgn_begin), phystokv(rorgn_end));
-
-		/*
-		 * KTRR/CTRR registers are inclusive of the smallest page size granule supported by processor MMU
-		 * rather than the actual page size in use. Load the last byte of the end page, and let the HW
-		 * truncate per the smallest page granule supported. Must use same treament in start.s for warm
-		 * start of APs.
-		 */
-		lock_mmu(ctrr_begin, ctrr_end);
 
 		// Unmap and free PIO VA space needed to lockdown the lock groups.
 		for (unsigned int lg = 0; lg < MAX_LOCK_GROUPS; lg++) {

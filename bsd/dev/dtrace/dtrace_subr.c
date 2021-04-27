@@ -108,7 +108,7 @@ dtrace_fasttrap_fork(proc_t *p, proc_t *cp)
  * duty to resume the task.
  */
 
-lck_mtx_t dtrace_procwaitfor_lock;
+LCK_MTX_DECLARE_ATTR(dtrace_procwaitfor_lock, &dtrace_lck_grp, &dtrace_lck_attr);
 
 typedef struct dtrace_proc_awaited_entry {
 	struct dtrace_procdesc			*pdesc;

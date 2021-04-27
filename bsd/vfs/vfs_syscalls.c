@@ -253,11 +253,14 @@ int sync_internal(void);
 __private_extern__
 int unlink1(vfs_context_t, vnode_t, user_addr_t, enum uio_seg, int);
 
-extern lck_grp_t *fd_vn_lck_grp;
-extern lck_grp_attr_t *fd_vn_lck_grp_attr;
-extern lck_attr_t *fd_vn_lck_attr;
+static LCK_GRP_DECLARE(fd_vn_lck_grp, "fd_vnode_data");
+static LCK_ATTR_DECLARE(fd_vn_lck_attr, 0, 0);
 
-extern lck_rw_t * rootvnode_rw_lock;
+/* vars for sync mutex */
+static LCK_GRP_DECLARE(sync_mtx_lck_grp, "sync thread");
+static LCK_MTX_DECLARE(sync_mtx_lck, &sync_mtx_lck_grp);
+
+extern lck_rw_t rootvnode_rw_lock;
 
 /*
  * incremented each time a mount or unmount operation occurs
@@ -858,6 +861,11 @@ mount_common(char *fstypename, vnode_t pvp, vnode_t vp,
 		mp->mnt_kern_flag |= MNTK_PERMIT_UNMOUNT;
 	}
 #endif /* CONFIG_NFS_CLIENT || DEVFS */
+
+	if (KERNEL_MOUNT_DEVFS & internal_flags) {
+		// kernel mounted devfs
+		mp->mnt_kern_flag |= MNTK_SYSTEM;
+	}
 
 update:
 
@@ -2198,10 +2206,10 @@ checkdirs(vnode_t olddp, vfs_context_t ctx)
 
 	if (rootvnode == olddp) {
 		vnode_ref(newdp);
-		lck_rw_lock_exclusive(rootvnode_rw_lock);
+		lck_rw_lock_exclusive(&rootvnode_rw_lock);
 		tvp = rootvnode;
 		rootvnode = newdp;
-		lck_rw_unlock_exclusive(rootvnode_rw_lock);
+		lck_rw_unlock_exclusive(&rootvnode_rw_lock);
 		vnode_rele(tvp);
 	}
 
@@ -2317,6 +2325,10 @@ safedounmount(struct mount *mp, int flags, vfs_context_t ctx)
 	 * associated with it (for example, the associated VM or DATA mounts) .
 	 */
 	if ((mp->mnt_flag & MNT_ROOTFS) || (mp->mnt_kern_flag & MNTK_SYSTEM)) {
+		if (!(mp->mnt_flag & MNT_ROOTFS)) {
+			printf("attempt to unmount a system mount (%s), will return EBUSY\n",
+			    mp->mnt_vfsstat.f_mntonname);
+		}
 		error = EBUSY; /* the root (or associated volumes) is always busy */
 		goto out;
 	}
@@ -2833,17 +2845,17 @@ sync_thread(__unused void *arg, __unused wait_result_t wr)
 	pm_sync_thread = current_thread();
 #endif /* CONFIG_PHYS_WRITE_ACCT */
 
-	lck_mtx_lock(sync_mtx_lck);
+	lck_mtx_lock(&sync_mtx_lck);
 	while (sync_thread_state & SYNC_THREAD_RUN) {
 		sync_thread_state &= ~SYNC_THREAD_RUN;
-		lck_mtx_unlock(sync_mtx_lck);
+		lck_mtx_unlock(&sync_mtx_lck);
 
 		sync_type = SYNC_ONLY_RELIABLE_MEDIA;
 		vfs_iterate(LK_NOWAIT, sync_internal_callback, &sync_type);
 		sync_type = SYNC_ONLY_UNRELIABLE_MEDIA;
 		vfs_iterate(LK_NOWAIT, sync_internal_callback, &sync_type);
 
-		lck_mtx_lock(sync_mtx_lck);
+		lck_mtx_lock(&sync_mtx_lck);
 	}
 	/*
 	 * This wakeup _has_ to be issued before the lock is released otherwise
@@ -2856,7 +2868,7 @@ sync_thread(__unused void *arg, __unused wait_result_t wr)
 #if CONFIG_PHYS_WRITE_ACCT
 	pm_sync_thread = NULL;
 #endif /* CONFIG_PHYS_WRITE_ACCT */
-	lck_mtx_unlock(sync_mtx_lck);
+	lck_mtx_unlock(&sync_mtx_lck);
 
 	if (print_vmpage_stat) {
 		vm_countdirtypages();
@@ -2883,7 +2895,7 @@ sync_internal(void)
 	int thread_created = FALSE;
 	struct timespec ts = {.tv_sec = sync_timeout_seconds, .tv_nsec = 0};
 
-	lck_mtx_lock(sync_mtx_lck);
+	lck_mtx_lock(&sync_mtx_lck);
 	sync_thread_state |= SYNC_THREAD_RUN;
 	if (!(sync_thread_state & SYNC_THREAD_RUNNING)) {
 		int kr;
@@ -2892,14 +2904,14 @@ sync_internal(void)
 		kr = kernel_thread_start(sync_thread, NULL, &thd);
 		if (kr != KERN_SUCCESS) {
 			sync_thread_state &= ~SYNC_THREAD_RUNNING;
-			lck_mtx_unlock(sync_mtx_lck);
+			lck_mtx_unlock(&sync_mtx_lck);
 			printf("sync_thread failed\n");
 			return 0;
 		}
 		thread_created = TRUE;
 	}
 
-	error = msleep((caddr_t)&sync_thread_state, sync_mtx_lck,
+	error = msleep((caddr_t)&sync_thread_state, &sync_mtx_lck,
 	    (PVFS | PDROP | PCATCH), "sync_thread", &ts);
 	if (error) {
 		struct timeval now;
@@ -4119,7 +4131,7 @@ fg_vn_data_alloc(void)
 	/* Allocate per fd vnode data */
 	fvdata = kheap_alloc(KM_FD_VN_DATA, sizeof(struct fd_vn_data),
 	    Z_WAITOK | Z_ZERO);
-	lck_mtx_init(&fvdata->fv_lock, fd_vn_lck_grp, fd_vn_lck_attr);
+	lck_mtx_init(&fvdata->fv_lock, &fd_vn_lck_grp, &fd_vn_lck_attr);
 	return fvdata;
 }
 
@@ -4132,7 +4144,7 @@ fg_vn_data_free(void *fgvndata)
 	struct fd_vn_data *fvdata = (struct fd_vn_data *)fgvndata;
 
 	kheap_free(KHEAP_DATA_BUFFERS, fvdata->fv_buf, fvdata->fv_bufallocsiz);
-	lck_mtx_destroy(&fvdata->fv_lock, fd_vn_lck_grp);
+	lck_mtx_destroy(&fvdata->fv_lock, &fd_vn_lck_grp);
 	kheap_free(KM_FD_VN_DATA, fvdata, sizeof(struct fd_vn_data));
 }
 
@@ -7990,14 +8002,14 @@ clonefile_internal(vnode_t fvp, boolean_t data_read_authorised, int dst_dirfd,
 
 	/*
 	 * certain attributes may need to be changed from the source, we ask for
-	 * those here.
+	 * those here with the exception of source file's ACL. The clone file
+	 * will inherit the target directory's ACL.
 	 */
 	VATTR_INIT(&va);
 	VATTR_WANTED(&va, va_uid);
 	VATTR_WANTED(&va, va_gid);
 	VATTR_WANTED(&va, va_mode);
 	VATTR_WANTED(&va, va_flags);
-	VATTR_WANTED(&va, va_acl);
 
 	if ((error = vnode_getattr(fvp, &va, ctx)) != 0) {
 		goto out;
@@ -8061,7 +8073,7 @@ clonefile_internal(vnode_t fvp, boolean_t data_read_authorised, int dst_dirfd,
 		 * If some of the requested attributes weren't handled by the
 		 * VNOP, use our fallback code.
 		 */
-		if (!VATTR_ALL_SUPPORTED(&va)) {
+		if (!VATTR_ALL_SUPPORTED(&nva)) {
 			(void)vnode_setattr_fallback(tvp, &nva, ctx);
 		}
 
@@ -10577,8 +10589,9 @@ static LIST_HEAD(nspace_resolver_requesthead,
 static u_long nspace_resolver_request_hashmask;
 static u_int nspace_resolver_request_count;
 static bool nspace_resolver_request_wait_slot;
-static lck_grp_t *nspace_resolver_request_lck_grp;
-static lck_mtx_t nspace_resolver_request_hash_mutex;
+static LCK_GRP_DECLARE(nspace_resolver_request_lck_grp, "file namespace resolver");
+static LCK_MTX_DECLARE(nspace_resolver_request_hash_mutex,
+    &nspace_resolver_request_lck_grp);
 
 #define NSPACE_REQ_LOCK() \
 	lck_mtx_lock(&nspace_resolver_request_hash_mutex)
@@ -10886,60 +10899,6 @@ nspace_materialization_set_thread_state(int is_prevented)
 	return 0;
 }
 
-static int
-nspace_materialization_is_prevented(void)
-{
-	proc_t p = current_proc();
-	uthread_t ut = (uthread_t)get_bsdthread_info(current_thread());
-	vfs_context_t ctx = vfs_context_current();
-
-	/*
-	 * Kernel context ==> return EDEADLK, as we would with any random
-	 * process decorated as no-materialize.
-	 */
-	if (ctx == vfs_context_kernel()) {
-		return EDEADLK;
-	}
-
-	/*
-	 * If the process has the dataless-manipulation entitlement,
-	 * materialization is prevented, and depending on the kind
-	 * of file system operation, things get to proceed as if the
-	 * object is not dataless.
-	 */
-	if (vfs_context_is_dataless_manipulator(ctx)) {
-		return EJUSTRETURN;
-	}
-
-	/*
-	 * Per-thread decorations override any process-wide decorations.
-	 * (Foundation uses this, and this overrides even the dataless-
-	 * manipulation entitlement so as to make API contracts consistent.)
-	 */
-	if (ut != NULL) {
-		if (ut->uu_flag & UT_NSPACE_NODATALESSFAULTS) {
-			return EDEADLK;
-		}
-		if (ut->uu_flag & UT_NSPACE_FORCEDATALESSFAULTS) {
-			return 0;
-		}
-	}
-
-	/*
-	 * If the process's iopolicy specifies that dataless files
-	 * can be materialized, then we let it go ahead.
-	 */
-	if (p->p_vfs_iopolicy & P_VFS_IOPOLICY_MATERIALIZE_DATALESS_FILES) {
-		return 0;
-	}
-
-	/*
-	 * The default behavior is to not materialize dataless files;
-	 * return to the caller that deadlock was detected.
-	 */
-	return EDEADLK;
-}
-
 /* the vfs.nspace branch */
 SYSCTL_NODE(_vfs, OID_AUTO, nspace, CTLFLAG_RW | CTLFLAG_LOCKED, NULL, "vfs nspace hinge");
 
@@ -11078,16 +11037,67 @@ SYSCTL_PROC(_vfs_nspace, OID_AUTO, complete,
 #define __no_dataless_unused    __unused
 #endif
 
+int
+vfs_context_dataless_materialization_is_prevented(
+	vfs_context_t const ctx __no_dataless_unused)
+{
+#if CONFIG_DATALESS_FILES
+	proc_t const p = vfs_context_proc(ctx);
+	thread_t const t = vfs_context_thread(ctx);
+	uthread_t const ut = t ? get_bsdthread_info(t) : NULL;
+
+	/*
+	 * Kernel context ==> return EDEADLK, as we would with any random
+	 * process decorated as no-materialize.
+	 */
+	if (ctx == vfs_context_kernel()) {
+		return EDEADLK;
+	}
+
+	/*
+	 * If the process has the dataless-manipulation entitlement,
+	 * materialization is prevented, and depending on the kind
+	 * of file system operation, things get to proceed as if the
+	 * object is not dataless.
+	 */
+	if (vfs_context_is_dataless_manipulator(ctx)) {
+		return EJUSTRETURN;
+	}
+
+	/*
+	 * Per-thread decorations override any process-wide decorations.
+	 * (Foundation uses this, and this overrides even the dataless-
+	 * manipulation entitlement so as to make API contracts consistent.)
+	 */
+	if (ut != NULL) {
+		if (ut->uu_flag & UT_NSPACE_NODATALESSFAULTS) {
+			return EDEADLK;
+		}
+		if (ut->uu_flag & UT_NSPACE_FORCEDATALESSFAULTS) {
+			return 0;
+		}
+	}
+
+	/*
+	 * If the process's iopolicy specifies that dataless files
+	 * can be materialized, then we let it go ahead.
+	 */
+	if (p->p_vfs_iopolicy & P_VFS_IOPOLICY_MATERIALIZE_DATALESS_FILES) {
+		return 0;
+	}
+#endif /* CONFIG_DATALESS_FILES */
+
+	/*
+	 * The default behavior is to not materialize dataless files;
+	 * return to the caller that deadlock was detected.
+	 */
+	return EDEADLK;
+}
+
 void
 nspace_resolver_init(void)
 {
 #if CONFIG_DATALESS_FILES
-	nspace_resolver_request_lck_grp =
-	    lck_grp_alloc_init("file namespace resolver", NULL);
-
-	lck_mtx_init(&nspace_resolver_request_hash_mutex,
-	    nspace_resolver_request_lck_grp, NULL);
-
 	nspace_resolver_request_hashtbl =
 	    hashinit(NSPACE_RESOLVER_REQ_HASHSIZE,
 	    M_VNODE /* XXX */, &nspace_resolver_request_hashmask);
@@ -11186,7 +11196,8 @@ resolve_nspace_item_ext(
 		return ENOTSUP;
 	}
 
-	error = nspace_materialization_is_prevented();
+	error = vfs_context_dataless_materialization_is_prevented(
+		vfs_context_current());
 	if (error) {
 		os_log_debug(OS_LOG_DEFAULT,
 		    "NSPACE process/thread is decorated as no-materialization");

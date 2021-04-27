@@ -127,7 +127,7 @@ extern int vnode_getwithref(struct vnode* vp);
 
 boolean_t vm_swap_force_defrag = FALSE, vm_swap_force_reclaim = FALSE;
 
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 
 /*
  * For CONFIG_FREEZE, we scale the c_segments_limit based on the
@@ -145,7 +145,7 @@ boolean_t vm_swap_force_defrag = FALSE, vm_swap_force_reclaim = FALSE;
 	                                 ((cur_ts - vm_swapfile_last_failed_to_create_ts) > VM_SWAPFILE_DELAYED_CREATE) ? 1 : 0)
 #define VM_SWAP_SHOULD_TRIM(swf)        ((swf->swp_delayed_trim_count >= VM_SWAPFILE_DELAYED_TRIM_MAX) ? 1 : 0)
 
-#else /* CONFIG_EMBEDDED */
+#else /* !XNU_TARGET_OS_OSX */
 
 #define VM_MAX_SWAP_FILE_NUM            100
 #define VM_SWAPFILE_DELAYED_TRIM_MAX    128
@@ -156,7 +156,7 @@ boolean_t vm_swap_force_defrag = FALSE, vm_swap_force_reclaim = FALSE;
 	                                 ((cur_ts - vm_swapfile_last_failed_to_create_ts) > VM_SWAPFILE_DELAYED_CREATE) ? 1 : 0)
 #define VM_SWAP_SHOULD_TRIM(swf)        ((swf->swp_delayed_trim_count >= VM_SWAPFILE_DELAYED_TRIM_MAX) ? 1 : 0)
 
-#endif /* CONFIG_EMBEDDED */
+#endif /* !XNU_TARGET_OS_OSX */
 
 #define VM_SWAP_SHOULD_RECLAIM()        (((vm_swap_force_reclaim == TRUE) || ((vm_swapfile_total_segs_alloced - vm_swapfile_total_segs_used) >= SWAPFILE_RECLAIM_THRESHOLD_SEGS)) ? 1 : 0)
 #define VM_SWAP_SHOULD_ABORT_RECLAIM()  (((vm_swap_force_reclaim == FALSE) && ((vm_swapfile_total_segs_alloced - vm_swapfile_total_segs_used) <= SWAPFILE_RECLAIM_MINIMUM_SEGS)) ? 1 : 0)
@@ -446,7 +446,7 @@ vm_compressor_swap_init()
 	proc_set_thread_policy_with_tid(kernel_task, thread->thread_id,
 	    TASK_POLICY_INTERNAL, TASK_POLICY_PASSIVE_IO, TASK_POLICY_ENABLE);
 
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 	/*
 	 * dummy value until the swap file gets created
 	 * when we drive the first c_segment_t to the
@@ -454,9 +454,20 @@ vm_compressor_swap_init()
 	 * know the true size we have to work with
 	 */
 	c_overage_swapped_limit = 16;
-#endif
+#endif /* !XNU_TARGET_OS_OSX */
 
 	vm_num_swap_files_config = VM_MAX_SWAP_FILE_NUM;
+#if DEVELOPMENT || DEBUG
+	typeof(vm_num_swap_files_config) parsed_vm_max_num_swap_files = 0;
+	if (PE_parse_boot_argn("vm_max_num_swap_files", &parsed_vm_max_num_swap_files, sizeof(parsed_vm_max_num_swap_files))) {
+		if (parsed_vm_max_num_swap_files > 0) {
+			vm_num_swap_files_config = parsed_vm_max_num_swap_files;
+		} else {
+			printf("WARNING: Ignoring vm_max_num_swap_files=%d boot-arg. Value must be > 0\n", parsed_vm_max_num_swap_files);
+		}
+	}
+#endif
+	printf("Maximum number of VM swap files: %d\n", vm_num_swap_files_config);
 
 	printf("VM Swap Subsystem is ON\n");
 }
@@ -534,14 +545,14 @@ vm_compaction_swapper_do_init(void)
 					vm_compressor_catchup_threshold_divisor = 30;
 				}
 			}
-#if !CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX
 			vnode_setswapmount(vp);
 			vm_swappin_avail = vnode_getswappin_avail(vp);
 
 			if (vm_swappin_avail) {
 				vm_swappin_enabled = TRUE;
 			}
-#endif
+#endif /* XNU_TARGET_OS_OSX */
 			vm_swapfile_close((uint64_t)pathname, vp);
 		}
 		kheap_free(KHEAP_TEMP, pathname, namelen);
@@ -1261,7 +1272,7 @@ vm_swapout_finish(c_segment_t c_seg, uint64_t f_offset, uint32_t size, kern_retu
 
 		c_seg->c_store.c_swap_handle = f_offset;
 
-		VM_STAT_INCR_BY(swapouts, size >> PAGE_SHIFT);
+		counter_add(&vm_statistics_swapouts, size >> PAGE_SHIFT);
 
 		if (c_seg->c_bytes_used) {
 			OSAddAtomic64(-c_seg->c_bytes_used, &compressor_bytes_used);
@@ -1421,7 +1432,7 @@ vm_swap_create_file()
 			lck_mtx_unlock(&vm_swap_data_lock);
 
 			thread_wakeup((event_t) &vm_num_swap_files);
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 			if (vm_num_swap_files == 1) {
 				c_overage_swapped_limit = (uint32_t)size / C_SEG_BUFSIZE;
 
@@ -1429,7 +1440,7 @@ vm_swap_create_file()
 					c_overage_swapped_limit /= 2;
 				}
 			}
-#endif
+#endif /* !XNU_TARGET_OS_OSX */
 			break;
 		} else {
 			size = size / 2;
@@ -1487,7 +1498,7 @@ vm_swap_get(c_segment_t c_seg, uint64_t f_offset, uint64_t size)
 	C_SEG_WRITE_PROTECT(c_seg);
 #endif
 	if (retval == 0) {
-		VM_STAT_INCR_BY(swapins, size >> PAGE_SHIFT);
+		counter_add(&vm_statistics_swapins, size >> PAGE_SHIFT);
 	} else {
 		vm_swap_get_failures++;
 	}
@@ -2078,7 +2089,7 @@ ReTry_for_cseg:
 			vnode_put(swf->swp_vp);
 		}
 
-		VM_STAT_INCR_BY(swapins, c_size >> PAGE_SHIFT);
+		counter_add(&vm_statistics_swapins, c_size >> PAGE_SHIFT);
 
 		if (vm_swap_put(addr, &f_offset, c_size, c_seg, NULL)) {
 			vm_offset_t     c_buffer;
@@ -2105,7 +2116,7 @@ ReTry_for_cseg:
 
 			goto swap_io_failed;
 		}
-		VM_STAT_INCR_BY(swapouts, c_size >> PAGE_SHIFT);
+		counter_add(&vm_statistics_swapouts, c_size >> PAGE_SHIFT);
 
 		lck_mtx_lock_spin_always(&c_seg->c_lock);
 

@@ -80,7 +80,6 @@
 #include <mach/vm_prot.h>
 #include <mach/vm_map.h>
 #include <kern/task.h>
-#include <kern/counters.h>
 #include <kern/thread.h>
 #include <kern/exc_guard.h>
 #include <mach/mach_port_server.h>
@@ -1844,7 +1843,8 @@ mach_port_extract_right(
 	}
 
 	kr = ipc_object_copyin(space, name, msgt_name, (ipc_object_t *) poly, 0, NULL,
-	    IPC_KMSG_FLAGS_ALLOW_IMMOVABLE_SEND);
+	    (space == current_space() && msgt_name == MACH_MSG_TYPE_COPY_SEND) ?
+	    IPC_OBJECT_COPYIN_FLAGS_ALLOW_IMMOVABLE_SEND : IPC_OBJECT_COPYIN_FLAGS_SOFT_FAIL_IMMOVABLE_SEND);
 
 	if (kr == KERN_SUCCESS) {
 		*polyPoly = ipc_object_copyin_type(msgt_name);
@@ -2471,6 +2471,30 @@ mach_port_guard_exception(
 		fatal = TRUE;
 	}
 	thread_guard_violation(t, code, subcode, fatal);
+}
+
+/*
+ * Temporary wrapper for immovable mach port guard exception.
+ *
+ * Condition: !(ip_is_control(port) && !immovable_control_port_enabled)
+ */
+void
+mach_port_guard_exception_immovable(
+	mach_port_name_t        name,
+	mach_port_t             port,
+	uint64_t                portguard)
+{
+	if (ip_is_control(port) && immovable_control_port_enabled) {
+		mach_port_guard_exception(name, 0, portguard,
+		    ipc_control_port_options & IPC_CONTROL_PORT_OPTIONS_IMMOVABLE_HARD ?
+		    kGUARD_EXC_IMMOVABLE : kGUARD_EXC_IMMOVABLE_NON_FATAL);
+	} else if (!ip_is_control(port)) {
+		/* always fatal exception for non-control port violation */
+		mach_port_guard_exception(name, 0, portguard, kGUARD_EXC_IMMOVABLE);
+	} else {
+		/* ip_is_control(port) && !immovable_control_port_enabled */
+		panic("mach_port_guard_exception_immovable: condition does not hold.");
+	}
 }
 
 

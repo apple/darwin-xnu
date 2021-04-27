@@ -67,6 +67,7 @@
  */
 
 
+#include <kern/counter.h>
 #include <sys/param.h>
 #include <sys/buf.h>
 #include <sys/kernel.h>
@@ -77,8 +78,12 @@
 #include <sys/systm.h>
 #include <sys/sysproto.h>
 
+#include <os/atomic_private.h>
+
 #include <security/audit/audit.h>
 #include <pexpert/pexpert.h>
+
+#include <IOKit/IOBSD.h>
 
 #if CONFIG_MACF
 #include <security/mac_framework.h>
@@ -89,9 +94,9 @@
 #include <ptrauth.h>
 #endif /* defined(HAS_APPLE_PAC) */
 
-lck_grp_t * sysctl_lock_group = NULL;
-lck_rw_t * sysctl_geometry_lock = NULL;
-lck_mtx_t * sysctl_unlocked_node_lock = NULL;
+static LCK_GRP_DECLARE(sysctl_lock_group, "sysctl");
+static LCK_RW_DECLARE(sysctl_geometry_lock, &sysctl_lock_group);
+static LCK_MTX_DECLARE(sysctl_unlocked_node_lock, &sysctl_lock_group);
 
 /*
  * Conditionally allow dtrace to see these functions for debugging purposes.
@@ -135,7 +140,8 @@ int     userland_sysctl(boolean_t string_is_canonical,
     int *name, u_int namelen, struct sysctl_req *req,
     size_t *retval);
 
-struct sysctl_oid_list sysctl__children; /* root list */
+SECURITY_READ_ONLY_LATE(struct sysctl_oid_list) sysctl__children; /* root list */
+__SYSCTL_EXTENSION_NODE();
 
 /*
  * Initialization of the MIB tree.
@@ -143,77 +149,69 @@ struct sysctl_oid_list sysctl__children; /* root list */
  * Order by number in each list.
  */
 
-void
-sysctl_register_oid(struct sysctl_oid *new_oidp)
+static void
+sysctl_register_oid_locked(struct sysctl_oid *new_oidp,
+    struct sysctl_oid *oidp)
 {
-	struct sysctl_oid *oidp = NULL;
 	struct sysctl_oid_list *parent = new_oidp->oid_parent;
-	struct sysctl_oid *p;
-	struct sysctl_oid *q;
-	int n;
+	struct sysctl_oid_list *parent_rw = NULL;
+	struct sysctl_oid *p, **prevp;
 
-	/*
-	 * The OID can be old-style (needs copy), new style without an earlier
-	 * version (also needs copy), or new style with a matching version (no
-	 * copy needed).  Later versions are rejected (presumably, the OID
-	 * structure was changed for a necessary reason).
-	 */
-	if (!(new_oidp->oid_kind & CTLFLAG_OID2)) {
-#if __x86_64__
-		/*
-		 * XXX:	M_TEMP is perhaps not the most apropriate zone, as it
-		 * XXX:	will subject us to use-after-free by other consumers.
-		 */
-		MALLOC(oidp, struct sysctl_oid *, sizeof(*oidp), M_TEMP, M_WAITOK | M_ZERO);
-		if (oidp == NULL) {
-			return;         /* reject: no memory */
-		}
-		/*
-		 * Copy the structure only through the oid_fmt field, which
-		 * is the last field in a non-OID2 OID structure.
-		 *
-		 * Note:	We may want to set the oid_descr to the
-		 *		oid_name (or "") at some future date.
-		 */
-		*oidp = *new_oidp;
-#else
-		panic("Old style sysctl without a version number isn't supported");
-#endif
-	} else {
-		/* It's a later version; handle the versions we know about */
-		switch (new_oidp->oid_version) {
-		case SYSCTL_OID_VERSION:
-			/* current version */
-			oidp = new_oidp;
-			break;
-		default:
-			return;                 /* rejects unknown version */
-		}
+	p = SLIST_FIRST(parent);
+	if (p && p->oid_number == OID_MUTABLE_ANCHOR) {
+		parent_rw = p->oid_arg1;
 	}
 
-	/* Get the write lock to modify the geometry */
-	lck_rw_lock_exclusive(sysctl_geometry_lock);
-
-	/*
-	 * If this oid has a number OID_AUTO, give it a number which
-	 * is greater than any current oid.  Make sure it is at least
-	 * OID_AUTO_START to leave space for pre-assigned oid numbers.
-	 */
 	if (oidp->oid_number == OID_AUTO) {
-		/* First, find the highest oid in the parent list >OID_AUTO_START-1 */
-		n = OID_AUTO_START;
-		SLIST_FOREACH(p, parent, oid_link) {
-			if (p->oid_number > n) {
-				n = p->oid_number;
+		int n = OID_AUTO_START;
+
+		/*
+		 * If this oid has a number OID_AUTO, give it a number which
+		 * is greater than any current oid.  Make sure it is at least
+		 * OID_AUTO_START to leave space for pre-assigned oid numbers.
+		 */
+
+		SLIST_FOREACH_PREVPTR(p, prevp, parent, oid_link) {
+			if (p->oid_number >= n) {
+				n = p->oid_number + 1;
 			}
 		}
-		oidp->oid_number = n + 1;
+
+		if (parent_rw) {
+			SLIST_FOREACH_PREVPTR(p, prevp, parent_rw, oid_link) {
+				if (p->oid_number >= n) {
+					n = p->oid_number + 1;
+				}
+			}
+		}
+
 		/*
-		 * Reflect the number in an llocated OID into the template
+		 * Reflect the number in an allocated OID into the template
 		 * of the caller for sysctl_unregister_oid() compares.
 		 */
-		if (oidp != new_oidp) {
-			new_oidp->oid_number = oidp->oid_number;
+		oidp->oid_number = new_oidp->oid_number = n;
+	} else {
+		/*
+		 * Insert the oid into the parent's list in order.
+		 */
+		SLIST_FOREACH_PREVPTR(p, prevp, parent, oid_link) {
+			if (oidp->oid_number == p->oid_number) {
+				panic("attempting to register a sysctl at previously registered slot : %d",
+				    oidp->oid_number);
+			} else if (oidp->oid_number < p->oid_number) {
+				break;
+			}
+		}
+
+		if (parent_rw) {
+			SLIST_FOREACH_PREVPTR(p, prevp, parent_rw, oid_link) {
+				if (oidp->oid_number == p->oid_number) {
+					panic("attempting to register a sysctl at previously registered slot : %d",
+					    oidp->oid_number);
+				} else if (oidp->oid_number < p->oid_number) {
+					break;
+				}
+			}
 		}
 	}
 
@@ -233,26 +231,87 @@ sysctl_register_oid(struct sysctl_oid *new_oidp)
 	}
 #endif /* defined(HAS_APPLE_PAC) */
 
-	/*
-	 * Insert the oid into the parent's list in order.
-	 */
-	q = NULL;
-	SLIST_FOREACH(p, parent, oid_link) {
-		if (oidp->oid_number == p->oid_number) {
-			panic("attempting to register a sysctl at previously registered slot : %d", oidp->oid_number);
-		} else if (oidp->oid_number < p->oid_number) {
-			break;
-		}
-		q = p;
+	SLIST_NEXT(oidp, oid_link) = *prevp;
+	*prevp = oidp;
+}
+
+void
+sysctl_register_oid(struct sysctl_oid *new_oidp)
+{
+	struct sysctl_oid *oidp;
+
+	if (new_oidp->oid_number < OID_AUTO) {
+		panic("trying to register a node %p with an invalid oid_number: %d",
+		    new_oidp, new_oidp->oid_number);
 	}
-	if (q) {
-		SLIST_INSERT_AFTER(q, oidp, oid_link);
-	} else {
-		SLIST_INSERT_HEAD(parent, oidp, oid_link);
+	if (new_oidp->oid_kind & CTLFLAG_PERMANENT) {
+		panic("Use sysctl_register_oid_early to register permanent nodes");
 	}
 
-	/* Release the write lock */
-	lck_rw_unlock_exclusive(sysctl_geometry_lock);
+	/*
+	 * The OID can be old-style (needs copy), new style without an earlier
+	 * version (also needs copy), or new style with a matching version (no
+	 * copy needed).  Later versions are rejected (presumably, the OID
+	 * structure was changed for a necessary reason).
+	 */
+	if (!(new_oidp->oid_kind & CTLFLAG_OID2)) {
+#if __x86_64__
+		/*
+		 * XXX:	KHEAP_DEFAULT is perhaps not the most apropriate zone, as it
+		 * XXX:	will subject us to use-after-free by other consumers.
+		 */
+		oidp = kheap_alloc(KHEAP_DEFAULT, sizeof(struct sysctl_oid),
+		    Z_WAITOK | Z_ZERO);
+		if (oidp == NULL) {
+			return;         /* reject: no memory */
+		}
+		/*
+		 * Copy the structure only through the oid_fmt field, which
+		 * is the last field in a non-OID2 OID structure.
+		 *
+		 * Note:	We may want to set the oid_descr to the
+		 *		oid_name (or "") at some future date.
+		 */
+		memcpy(oidp, new_oidp, offsetof(struct sysctl_oid, oid_descr));
+#else
+		panic("Old style sysctl without a version number isn't supported");
+#endif
+	} else {
+		/* It's a later version; handle the versions we know about */
+		switch (new_oidp->oid_version) {
+		case SYSCTL_OID_VERSION:
+			/* current version */
+			oidp = new_oidp;
+			break;
+		default:
+			return;                 /* rejects unknown version */
+		}
+	}
+
+	lck_rw_lock_exclusive(&sysctl_geometry_lock);
+	sysctl_register_oid_locked(new_oidp, oidp);
+	lck_rw_unlock_exclusive(&sysctl_geometry_lock);
+}
+
+__startup_func
+void
+sysctl_register_oid_early(struct sysctl_oid *oidp)
+{
+	assert((oidp->oid_kind & CTLFLAG_OID2) &&
+	    (oidp->oid_kind & CTLFLAG_PERMANENT) &&
+	    oidp->oid_version == SYSCTL_OID_VERSION);
+	assert(startup_phase < STARTUP_SUB_SYSCTL);
+
+	/*
+	 * Clear the flag so that callers can use sysctl_register_oid_early
+	 * again if they wish to register their node.
+	 */
+	if (oidp->oid_kind & CTLFLAG_NOAUTO) {
+		oidp->oid_kind &= ~CTLFLAG_NOAUTO;
+		return;
+	}
+
+	sysctl_register_oid_locked(oidp, oidp);
 }
 
 void
@@ -261,12 +320,20 @@ sysctl_unregister_oid(struct sysctl_oid *oidp)
 	struct sysctl_oid *removed_oidp = NULL; /* OID removed from tree */
 #if __x86_64__
 	struct sysctl_oid *old_oidp = NULL;     /* OID compatibility copy */
-#else
-	struct sysctl_oid *const old_oidp = NULL;
 #endif
+	struct sysctl_oid_list *lsp;
 
 	/* Get the write lock to modify the geometry */
-	lck_rw_lock_exclusive(sysctl_geometry_lock);
+	lck_rw_lock_exclusive(&sysctl_geometry_lock);
+
+	lsp = oidp->oid_parent;
+	if (SLIST_FIRST(lsp) && SLIST_FIRST(lsp)->oid_number == OID_MUTABLE_ANCHOR) {
+		lsp = SLIST_FIRST(lsp)->oid_arg1;
+	}
+
+	if (oidp->oid_kind & CTLFLAG_PERMANENT) {
+		panic("Trying to unregister permanent sysctl %p", oidp);
+	}
 
 	if (!(oidp->oid_kind & CTLFLAG_OID2)) {
 #if __x86_64__
@@ -276,13 +343,13 @@ sysctl_unregister_oid(struct sysctl_oid *oidp)
 		 * partial structure; when we find a match, we remove it
 		 * normally and free the memory.
 		 */
-		SLIST_FOREACH(old_oidp, oidp->oid_parent, oid_link) {
+		SLIST_FOREACH(old_oidp, lsp, oid_link) {
 			if (!memcmp(&oidp->oid_number, &old_oidp->oid_number, (offsetof(struct sysctl_oid, oid_descr) - offsetof(struct sysctl_oid, oid_number)))) {
 				break;
 			}
 		}
 		if (old_oidp != NULL) {
-			SLIST_REMOVE(old_oidp->oid_parent, old_oidp, sysctl_oid, oid_link);
+			SLIST_REMOVE(lsp, old_oidp, sysctl_oid, oid_link);
 			removed_oidp = old_oidp;
 		}
 #else
@@ -293,7 +360,7 @@ sysctl_unregister_oid(struct sysctl_oid *oidp)
 		switch (oidp->oid_version) {
 		case SYSCTL_OID_VERSION:
 			/* We can just remove the OID directly... */
-			SLIST_REMOVE(oidp->oid_parent, oidp, sysctl_oid, oid_link);
+			SLIST_REMOVE(lsp, oidp, sysctl_oid, oid_link);
 			removed_oidp = oidp;
 			break;
 		default:
@@ -303,7 +370,7 @@ sysctl_unregister_oid(struct sysctl_oid *oidp)
 	}
 
 #if defined(HAS_APPLE_PAC)
-	if (removed_oidp && removed_oidp->oid_handler && old_oidp == NULL) {
+	if (removed_oidp && removed_oidp->oid_handler) {
 		/*
 		 * Revert address-discriminated signing performed by
 		 * sysctl_register_oid() (in case this oid is registered again).
@@ -326,47 +393,17 @@ sysctl_unregister_oid(struct sysctl_oid *oidp)
 	 * Note:	oidp could be NULL if it wasn't found.
 	 */
 	while (removed_oidp && removed_oidp->oid_refcnt) {
-		lck_rw_sleep(sysctl_geometry_lock, LCK_SLEEP_EXCLUSIVE, &removed_oidp->oid_refcnt, THREAD_UNINT);
+		lck_rw_sleep(&sysctl_geometry_lock, LCK_SLEEP_EXCLUSIVE,
+		    &removed_oidp->oid_refcnt, THREAD_UNINT);
 	}
 
 	/* Release the write lock */
-	lck_rw_unlock_exclusive(sysctl_geometry_lock);
+	lck_rw_unlock_exclusive(&sysctl_geometry_lock);
 
-	if (old_oidp != NULL) {
 #if __x86_64__
-		/* If it was allocated, free it after dropping the lock */
-		FREE(old_oidp, M_TEMP);
+	/* If it was allocated, free it after dropping the lock */
+	kheap_free(KHEAP_DEFAULT, old_oidp, sizeof(struct sysctl_oid));
 #endif
-	}
-}
-
-/*
- * Bulk-register all the oids in a linker_set.
- */
-void
-sysctl_register_set(const char *set)
-{
-	struct sysctl_oid **oidpp, *oidp;
-
-	LINKER_SET_FOREACH(oidpp, struct sysctl_oid **, set) {
-		oidp = *oidpp;
-		if (!(oidp->oid_kind & CTLFLAG_NOAUTO)) {
-			sysctl_register_oid(oidp);
-		}
-	}
-}
-
-void
-sysctl_unregister_set(const char *set)
-{
-	struct sysctl_oid **oidpp, *oidp;
-
-	LINKER_SET_FOREACH(oidpp, struct sysctl_oid **, set) {
-		oidp = *oidpp;
-		if (!(oidp->oid_kind & CTLFLAG_NOAUTO)) {
-			sysctl_unregister_oid(oidp);
-		}
-	}
 }
 
 /*
@@ -378,28 +415,6 @@ sysctl_register_fixed(void)
 {
 }
 #endif
-
-/*
- * Register the kernel's oids on startup.
- */
-
-void
-sysctl_early_init(void)
-{
-	/*
-	 * Initialize the geometry lock for reading/modifying the
-	 * sysctl tree. This is done here because IOKit registers
-	 * some sysctl's before bsd_init() would otherwise perform
-	 * subsystem initialization.
-	 */
-
-	sysctl_lock_group  = lck_grp_alloc_init("sysctl", NULL);
-	sysctl_geometry_lock = lck_rw_alloc_init(sysctl_lock_group, NULL);
-	sysctl_unlocked_node_lock = lck_mtx_alloc_init(sysctl_lock_group, NULL);
-
-	sysctl_register_set("__sysctl_set");
-	sysctl_load_devicetree_entries();
-}
 
 /*
  * New handler interface
@@ -554,6 +569,94 @@ sysctl_io_opaque(struct sysctl_req *req, void *pValue, size_t valueSize, int *ch
 }
 
 /*
+ * SYSCTL_OID enumerators
+ *
+ * Because system OIDs are immutable, they are composed of 2 lists hanging from
+ * a first dummy OID_MUTABLE_ANCHOR node that has an immutable list hanging from
+ * its `oid_parent` field and a mutable list hanging from its oid_arg1 one.
+ *
+ * Those enumerators abstract away the implicit merging of those two lists in
+ * two possible order:
+ * - oid_number order (which will interleave both sorted lists)
+ * - system order which will list the immutable list first,
+ *   and the mutable list second.
+ */
+struct sysctl_oid_iterator {
+	struct sysctl_oid *a;
+	struct sysctl_oid *b;
+};
+
+static struct sysctl_oid_iterator
+sysctl_oid_iterator_begin(struct sysctl_oid_list *l)
+{
+	struct sysctl_oid_iterator it = { };
+	struct sysctl_oid *a = SLIST_FIRST(l);
+
+	if (a == NULL) {
+		return it;
+	}
+
+	if (a->oid_number == OID_MUTABLE_ANCHOR) {
+		it.a = SLIST_NEXT(a, oid_link);
+		it.b = SLIST_FIRST((struct sysctl_oid_list *)a->oid_arg1);
+	} else {
+		it.a = a;
+	}
+	return it;
+}
+
+static struct sysctl_oid *
+sysctl_oid_iterator_next_num_order(struct sysctl_oid_iterator *it)
+{
+	struct sysctl_oid *a = it->a;
+	struct sysctl_oid *b = it->b;
+
+	if (a == NULL && b == NULL) {
+		return NULL;
+	}
+
+	if (a == NULL) {
+		it->b = SLIST_NEXT(b, oid_link);
+		return b;
+	}
+
+	if (b == NULL || a->oid_number <= b->oid_number) {
+		it->a = SLIST_NEXT(a, oid_link);
+		return a;
+	}
+
+	it->b = SLIST_NEXT(b, oid_link);
+	return b;
+}
+
+#define SYSCTL_OID_FOREACH_NUM_ORDER(oidp, l) \
+	for (struct sysctl_oid_iterator it = sysctl_oid_iterator_begin(l); \
+	        ((oidp) = sysctl_oid_iterator_next_num_order(&it)); )
+
+static struct sysctl_oid *
+sysctl_oid_iterator_next_system_order(struct sysctl_oid_iterator *it)
+{
+	struct sysctl_oid *a = it->a;
+	struct sysctl_oid *b = it->b;
+
+	if (a) {
+		it->a = SLIST_NEXT(a, oid_link);
+		return a;
+	}
+
+	if (b) {
+		it->b = SLIST_NEXT(b, oid_link);
+		return b;
+	}
+
+	return NULL;
+}
+
+#define SYSCTL_OID_FOREACH_SYS_ORDER(oidp, l) \
+	for (struct sysctl_oid_iterator it = sysctl_oid_iterator_begin(l); \
+	        ((oidp) = sysctl_oid_iterator_next_system_order(&it)); )
+
+/*
  * "Staff-functions"
  *
  * These functions implement a presently undocumented interface
@@ -599,38 +702,50 @@ sysctl_io_opaque(struct sysctl_req *req, void *pValue, size_t valueSize, int *ch
 STATIC void
 sysctl_sysctl_debug_dump_node(struct sysctl_oid_list *l, int i)
 {
-	int k;
 	struct sysctl_oid *oidp;
+	struct sysctl_oid_list *lp;
+	const char *what;
 
-	SLIST_FOREACH(oidp, l, oid_link) {
-		for (k = 0; k < i; k++) {
-			printf(" ");
-		}
-
-		printf("%d %s ", oidp->oid_number, oidp->oid_name);
-
-		printf("%c%c%c",
-		    oidp->oid_kind & CTLFLAG_LOCKED ? 'L':' ',
-		    oidp->oid_kind & CTLFLAG_RD ? 'R':' ',
-		    oidp->oid_kind & CTLFLAG_WR ? 'W':' ');
-
-		if (oidp->oid_handler) {
-			printf(" *Handler");
-		}
-
+	SYSCTL_OID_FOREACH_SYS_ORDER(oidp, l) {
 		switch (oidp->oid_kind & CTLTYPE) {
 		case CTLTYPE_NODE:
-			printf(" Node\n");
-			if (!oidp->oid_handler) {
-				sysctl_sysctl_debug_dump_node(
-					oidp->oid_arg1, i + 2);
+			lp = oidp->oid_arg1;
+			what = "Node   ";
+			if (lp && SLIST_FIRST(lp) &&
+			    SLIST_FIRST(lp)->oid_number == OID_MUTABLE_ANCHOR) {
+				what = "NodeExt";
+			} else {
 			}
 			break;
-		case CTLTYPE_INT:    printf(" Int\n"); break;
-		case CTLTYPE_STRING: printf(" String\n"); break;
-		case CTLTYPE_QUAD:   printf(" Quad\n"); break;
-		case CTLTYPE_OPAQUE: printf(" Opaque/struct\n"); break;
-		default:             printf("\n");
+		case CTLTYPE_INT:
+			what = "Int    ";
+			break;
+		case CTLTYPE_STRING:
+			what = "String ";
+			break;
+		case CTLTYPE_QUAD:
+			what = "Quad   ";
+			break;
+		case CTLTYPE_OPAQUE:
+			what = "Opaque ";
+			break;
+		default:
+			what = "Unknown";
+			break;
+		}
+
+		printf("%*s%-3d[%c%c%c%c%c] %s %s\n", i, "", oidp->oid_number,
+		    oidp->oid_kind & CTLFLAG_LOCKED ? 'L':' ',
+		    oidp->oid_kind & CTLFLAG_RD ? 'R':' ',
+		    oidp->oid_kind & CTLFLAG_WR ? 'W':' ',
+		    oidp->oid_kind & CTLFLAG_PERMANENT ? ' ':'*',
+		    oidp->oid_handler ? 'h' : ' ',
+		    what, oidp->oid_name);
+
+		if ((oidp->oid_kind & CTLTYPE) == CTLTYPE_NODE) {
+			if (!oidp->oid_handler) {
+				sysctl_sysctl_debug_dump_node(lp, i + 2);
+			}
 		}
 	}
 }
@@ -656,9 +771,9 @@ STATIC int
 sysctl_sysctl_debug(__unused struct sysctl_oid *oidp, __unused void *arg1,
     __unused int arg2, __unused struct sysctl_req *req)
 {
-	lck_rw_lock_shared(sysctl_geometry_lock);
+	lck_rw_lock_shared(&sysctl_geometry_lock);
 	sysctl_sysctl_debug_dump_node(&sysctl__children, 0);
-	lck_rw_done(sysctl_geometry_lock);
+	lck_rw_done(&sysctl_geometry_lock);
 	return ENOENT;
 }
 
@@ -722,7 +837,7 @@ sysctl_sysctl_name(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
 	struct sysctl_oid_list *lsp = &sysctl__children, *lsp2;
 	char tempbuf[10] = {};
 
-	lck_rw_lock_shared(sysctl_geometry_lock);
+	lck_rw_lock_shared(&sysctl_geometry_lock);
 	while (namelen) {
 		if (!lsp) {
 			snprintf(tempbuf, sizeof(tempbuf), "%d", *name);
@@ -733,7 +848,7 @@ sysctl_sysctl_name(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
 				error = SYSCTL_OUT(req, tempbuf, strlen(tempbuf));
 			}
 			if (error) {
-				lck_rw_done(sysctl_geometry_lock);
+				lck_rw_done(&sysctl_geometry_lock);
 				return error;
 			}
 			namelen--;
@@ -741,7 +856,7 @@ sysctl_sysctl_name(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
 			continue;
 		}
 		lsp2 = 0;
-		SLIST_FOREACH(oid, lsp, oid_link) {
+		SYSCTL_OID_FOREACH_NUM_ORDER(oid, lsp) {
 			if (oid->oid_number != *name) {
 				continue;
 			}
@@ -754,7 +869,7 @@ sysctl_sysctl_name(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
 				    strlen(oid->oid_name));
 			}
 			if (error) {
-				lck_rw_done(sysctl_geometry_lock);
+				lck_rw_done(&sysctl_geometry_lock);
 				return error;
 			}
 
@@ -774,7 +889,7 @@ sysctl_sysctl_name(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
 		}
 		lsp = lsp2;
 	}
-	lck_rw_done(sysctl_geometry_lock);
+	lck_rw_done(&sysctl_geometry_lock);
 	return SYSCTL_OUT(req, "", 1);
 }
 
@@ -819,7 +934,7 @@ sysctl_sysctl_next_ls(struct sysctl_oid_list *lsp, int *name, u_int namelen,
 	struct sysctl_oid *oidp;
 
 	*len = level;
-	SLIST_FOREACH(oidp, lsp, oid_link) {
+	SYSCTL_OID_FOREACH_NUM_ORDER(oidp, lsp) {
 		*next = oidp->oid_number;
 		*oidpp = oidp;
 
@@ -932,9 +1047,9 @@ sysctl_sysctl_next(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
 	struct sysctl_oid_list *lsp = &sysctl__children;
 	int newoid[CTL_MAXNAME] = {};
 
-	lck_rw_lock_shared(sysctl_geometry_lock);
+	lck_rw_lock_shared(&sysctl_geometry_lock);
 	i = sysctl_sysctl_next_ls(lsp, name, namelen, newoid, &j, 1, &oid);
-	lck_rw_done(sysctl_geometry_lock);
+	lck_rw_done(&sysctl_geometry_lock);
 	if (i) {
 		return ENOENT;
 	}
@@ -966,10 +1081,10 @@ SYSCTL_NODE(_sysctl, 2, next, CTLFLAG_RD | CTLFLAG_LOCKED, sysctl_sysctl_next, "
 STATIC int
 name2oid(char *name, int *oid, size_t *len)
 {
-	char i;
+	struct sysctl_oid_iterator it;
 	struct sysctl_oid *oidp;
-	struct sysctl_oid_list *lsp = &sysctl__children;
 	char *p;
+	char i;
 
 	if (!*name) {
 		return ENOENT;
@@ -990,11 +1105,12 @@ name2oid(char *name, int *oid, size_t *len)
 		*p = '\0';
 	}
 
-	oidp = SLIST_FIRST(lsp);
+	it = sysctl_oid_iterator_begin(&sysctl__children);
+	oidp = sysctl_oid_iterator_next_system_order(&it);
 
 	while (oidp && *len < CTL_MAXNAME) {
 		if (strcmp(name, oidp->oid_name)) {
-			oidp = SLIST_NEXT(oidp, oid_link);
+			oidp = sysctl_oid_iterator_next_system_order(&it);
 			continue;
 		}
 		*oid++ = oidp->oid_number;
@@ -1012,8 +1128,9 @@ name2oid(char *name, int *oid, size_t *len)
 			break;
 		}
 
-		lsp = (struct sysctl_oid_list *)oidp->oid_arg1;
-		oidp = SLIST_FIRST(lsp);
+		it = sysctl_oid_iterator_begin(oidp->oid_arg1);
+		oidp = sysctl_oid_iterator_next_system_order(&it);
+
 		*p = i; /* restore */
 		name = p + 1;
 		for (p = name; *p && *p != '.'; p++) {
@@ -1081,14 +1198,14 @@ sysctl_sysctl_name2oid(__unused struct sysctl_oid *oidp, __unused void *arg1,
 		return ENAMETOOLONG;
 	}
 
-	MALLOC(p, char *, req->newlen + 1, M_TEMP, M_WAITOK);
+	p = kheap_alloc(KHEAP_TEMP, req->newlen + 1, Z_WAITOK);
 	if (!p) {
 		return ENOMEM;
 	}
 
 	error = SYSCTL_IN(req, p, req->newlen);
 	if (error) {
-		FREE(p, M_TEMP);
+		kheap_free(KHEAP_TEMP, p, req->newlen + 1);
 		return error;
 	}
 
@@ -1098,11 +1215,11 @@ sysctl_sysctl_name2oid(__unused struct sysctl_oid *oidp, __unused void *arg1,
 	 * Note:	We acquire and release the geometry lock here to
 	 *		avoid making name2oid needlessly complex.
 	 */
-	lck_rw_lock_shared(sysctl_geometry_lock);
+	lck_rw_lock_shared(&sysctl_geometry_lock);
 	error = name2oid(p, oid, &len);
-	lck_rw_done(sysctl_geometry_lock);
+	lck_rw_done(&sysctl_geometry_lock);
 
-	FREE(p, M_TEMP);
+	kheap_free(KHEAP_TEMP, p, req->newlen + 1);
 
 	if (error) {
 		return error;
@@ -1160,11 +1277,13 @@ sysctl_sysctl_oidfmt(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
 	int error = ENOENT;             /* default error: not found */
 	u_int namelen = arg2;
 	u_int indx;
+	struct sysctl_oid_iterator it;
 	struct sysctl_oid *oid;
-	struct sysctl_oid_list *lsp = &sysctl__children;
 
-	lck_rw_lock_shared(sysctl_geometry_lock);
-	oid = SLIST_FIRST(lsp);
+	lck_rw_lock_shared(&sysctl_geometry_lock);
+
+	it = sysctl_oid_iterator_begin(&sysctl__children);
+	oid = sysctl_oid_iterator_next_system_order(&it);
 
 	indx = 0;
 	while (oid && indx < CTL_MAXNAME) {
@@ -1177,8 +1296,8 @@ sysctl_sysctl_oidfmt(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
 				if (indx == namelen) {
 					goto found;
 				}
-				lsp = (struct sysctl_oid_list *)oid->oid_arg1;
-				oid = SLIST_FIRST(lsp);
+				it = sysctl_oid_iterator_begin(oid->oid_arg1);
+				oid = sysctl_oid_iterator_next_system_order(&it);
 			} else {
 				if (indx != namelen) {
 					error =  EISDIR;
@@ -1187,7 +1306,7 @@ sysctl_sysctl_oidfmt(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
 				goto found;
 			}
 		} else {
-			oid = SLIST_NEXT(oid, oid_link);
+			oid = sysctl_oid_iterator_next_system_order(&it);
 		}
 	}
 	/* Not found */
@@ -1204,7 +1323,7 @@ found:
 		    strlen(oid->oid_fmt) + 1);
 	}
 err:
-	lck_rw_done(sysctl_geometry_lock);
+	lck_rw_done(&sysctl_geometry_lock);
 	return error;
 }
 
@@ -1448,25 +1567,46 @@ sysctl_new_user(struct sysctl_req *req, void *p, size_t l)
 	return error;
 }
 
+#define WRITE_EXPERIMENT_FACTORS_ENTITLEMENT "com.apple.private.write-kr-experiment-factors"
+/*
+ * Is the current task allowed to write to experiment factors?
+ * tasks with the WRITE_EXPERIMENT_FACTORS_ENTITLEMENT are always allowed to write these.
+ * In the development / debug kernel we also allow root to write them.
+ */
+STATIC bool
+can_write_experiment_factors(__unused struct sysctl_req *req)
+{
+	if (IOTaskHasEntitlement(current_task(), WRITE_EXPERIMENT_FACTORS_ENTITLEMENT)) {
+		return true;
+	}
+#if DEBUG || DEVELOPMENT
+	return !proc_suser(req->p);
+#else
+	return false;
+#endif /* DEBUG || DEVELOPMENT */
+}
+
 /*
  * Traverse our tree, and find the right node, execute whatever it points
  * at, and return the resulting error code.
  */
 
 int
-sysctl_root(boolean_t from_kernel, boolean_t string_is_canonical, char *namestring, size_t namestringlen, int *name, size_t namelen, struct sysctl_req *req)
+sysctl_root(boolean_t from_kernel, boolean_t string_is_canonical,
+    char *namestring, size_t namestringlen,
+    int *name, size_t namelen, struct sysctl_req *req)
 {
 	u_int indx;
 	int i;
+	struct sysctl_oid_iterator it;
 	struct sysctl_oid *oid;
-	struct sysctl_oid_list *lsp = &sysctl__children;
 	sysctl_handler_t oid_handler = NULL;
 	int error;
 	boolean_t unlocked_node_found = FALSE;
 	boolean_t namestring_started = FALSE;
 
 	/* Get the read lock on the geometry */
-	lck_rw_lock_shared(sysctl_geometry_lock);
+	lck_rw_lock_shared(&sysctl_geometry_lock);
 
 	if (string_is_canonical) {
 		/* namestring is actually canonical, name/namelen needs to be populated */
@@ -1476,7 +1616,8 @@ sysctl_root(boolean_t from_kernel, boolean_t string_is_canonical, char *namestri
 		}
 	}
 
-	oid = SLIST_FIRST(lsp);
+	it = sysctl_oid_iterator_begin(&sysctl__children);
+	oid = sysctl_oid_iterator_next_system_order(&it);
 
 	indx = 0;
 	while (oid && indx < CTL_MAXNAME) {
@@ -1524,8 +1665,8 @@ sysctl_root(boolean_t from_kernel, boolean_t string_is_canonical, char *namestri
 					goto err;
 				}
 
-				lsp = (struct sysctl_oid_list *)oid->oid_arg1;
-				oid = SLIST_FIRST(lsp);
+				it = sysctl_oid_iterator_begin(oid->oid_arg1);
+				oid = sysctl_oid_iterator_next_system_order(&it);
 			} else {
 				if (indx != namelen) {
 					error = EISDIR;
@@ -1534,7 +1675,7 @@ sysctl_root(boolean_t from_kernel, boolean_t string_is_canonical, char *namestri
 				goto found;
 			}
 		} else {
-			oid = SLIST_NEXT(oid, oid_link);
+			oid = sysctl_oid_iterator_next_system_order(&it);
 		}
 	}
 	error = ENOENT;
@@ -1582,18 +1723,30 @@ found:
 		goto err;
 	}
 
-	/*
-	 * This is where legacy enforcement of permissions occurs.  If the
-	 * flag does not say CTLFLAG_ANYBODY, then we prohibit anyone but
-	 * root from writing new values down.  If local enforcement happens
-	 * at the leaf node, then it needs to be set as CTLFLAG_ANYBODY.  In
-	 * addition, if the leaf node is set this way, then in order to do
-	 * specific enforcement, it has to be of type SYSCTL_PROC.
-	 */
-	if (!(oid->oid_kind & CTLFLAG_ANYBODY) &&
-	    req->newptr && req->p &&
-	    (error = proc_suser(req->p))) {
-		goto err;
+	if (req->newptr && req->p) {
+		if (oid->oid_kind & CTLFLAG_EXPERIMENT) {
+			/*
+			 * Experiment factors have different permissions since they need to be
+			 * writable by procs with WRITE_EXPERIMENT_FACTORS_ENTITLEMENT.
+			 */
+			if (!can_write_experiment_factors(req)) {
+				error = (EPERM);
+				goto err;
+			}
+		} else {
+			/*
+			 * This is where legacy enforcement of permissions occurs.  If the
+			 * flag does not say CTLFLAG_ANYBODY, then we prohibit anyone but
+			 * root from writing new values down.  If local enforcement happens
+			 * at the leaf node, then it needs to be set as CTLFLAG_ANYBODY.  In
+			 * addition, if the leaf node is set this way, then in order to do
+			 * specific enforcement, it has to be of type SYSCTL_PROC.
+			 */
+			if (!(oid->oid_kind & CTLFLAG_ANYBODY) &&
+			    (error = proc_suser(req->p))) {
+				goto err;
+			}
+		}
 	}
 
 	/*
@@ -1612,9 +1765,11 @@ found:
 	 * not prevent other calls into handlers or calls to manage the
 	 * geometry elsewhere from blocking...
 	 */
-	OSAddAtomic(1, &oid->oid_refcnt);
+	if ((oid->oid_kind & CTLFLAG_PERMANENT) == 0) {
+		OSAddAtomic(1, &oid->oid_refcnt);
+	}
 
-	lck_rw_done(sysctl_geometry_lock);
+	lck_rw_done(&sysctl_geometry_lock);
 
 #if CONFIG_MACF
 	if (!from_kernel) {
@@ -1637,7 +1792,7 @@ found:
 	 * may be into code whose reentrancy is protected by it.
 	 */
 	if (unlocked_node_found) {
-		lck_mtx_lock(sysctl_unlocked_node_lock);
+		lck_mtx_lock(&sysctl_unlocked_node_lock);
 	}
 
 #if defined(HAS_APPLE_PAC)
@@ -1660,7 +1815,7 @@ found:
 	error = i;
 
 	if (unlocked_node_found) {
-		lck_mtx_unlock(sysctl_unlocked_node_lock);
+		lck_mtx_unlock(&sysctl_unlocked_node_lock);
 	}
 
 #if CONFIG_MACF
@@ -1682,13 +1837,16 @@ dropref:
 	 *		barrier to avoid waking every time through on "hot"
 	 *		OIDs.
 	 */
-	lck_rw_lock_shared(sysctl_geometry_lock);
-	if (OSAddAtomic(-1, &oid->oid_refcnt) == 1) {
-		wakeup(&oid->oid_refcnt);
+	lck_rw_lock_shared(&sysctl_geometry_lock);
+
+	if ((oid->oid_kind & CTLFLAG_PERMANENT) == 0) {
+		if (OSAddAtomic(-1, &oid->oid_refcnt) == 1) {
+			wakeup(&oid->oid_refcnt);
+		}
 	}
 
 err:
-	lck_rw_done(sysctl_geometry_lock);
+	lck_rw_done(&sysctl_geometry_lock);
 	return error;
 }
 
@@ -1767,7 +1925,7 @@ sysctl(proc_t p, struct sysctl_args *uap, __unused int32_t *retval)
 		}
 	}
 
-	MALLOC(namestring, char *, namestringlen, M_TEMP, M_WAITOK);
+	namestring = kheap_alloc(KHEAP_TEMP, namestringlen, Z_WAITOK);
 	if (!namestring) {
 		oldlen = 0;
 		goto err;
@@ -1775,7 +1933,7 @@ sysctl(proc_t p, struct sysctl_args *uap, __unused int32_t *retval)
 
 	error = userland_sysctl(FALSE, namestring, namestringlen, name, uap->namelen, &req, &oldlen);
 
-	FREE(namestring, M_TEMP);
+	kheap_free(KHEAP_TEMP, namestring, namestringlen);
 
 	if ((error) && (error != ENOMEM)) {
 		return error;
@@ -1813,14 +1971,14 @@ sys_sysctlbyname(proc_t p, struct sysctlbyname_args *uap, __unused int32_t *retv
 	}
 	namelen = (size_t)uap->namelen;
 
-	MALLOC(name, char *, namelen + 1, M_TEMP, M_WAITOK);
+	name = kheap_alloc(KHEAP_TEMP, namelen + 1, Z_WAITOK);
 	if (!name) {
 		return ENOMEM;
 	}
 
 	error = copyin(uap->name, name, namelen);
 	if (error) {
-		FREE(name, M_TEMP);
+		kheap_free(KHEAP_TEMP, name, namelen + 1);
 		return error;
 	}
 	name[namelen] = '\0';
@@ -1830,7 +1988,7 @@ sys_sysctlbyname(proc_t p, struct sysctlbyname_args *uap, __unused int32_t *retv
 	 */
 
 	if (uap->newlen > SIZE_T_MAX) {
-		FREE(name, M_TEMP);
+		kheap_free(KHEAP_TEMP, name, namelen + 1);
 		return EINVAL;
 	}
 	newlen = (size_t)uap->newlen;
@@ -1852,7 +2010,7 @@ sys_sysctlbyname(proc_t p, struct sysctlbyname_args *uap, __unused int32_t *retv
 
 	error = userland_sysctl(TRUE, name, namelen + 1, oid, CTL_MAXNAME, &req, &oldlen);
 
-	FREE(name, M_TEMP);
+	kheap_free(KHEAP_TEMP, name, namelen + 1);
 
 	if ((error) && (error != ENOMEM)) {
 		return error;
@@ -1946,3 +2104,44 @@ kernel_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, s
 	}
 	return error;
 }
+
+int
+scalable_counter_sysctl_handler SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg2, oidp)
+	scalable_counter_t counter = *(scalable_counter_t*) arg1;
+	uint64_t value = counter_load(&counter);
+	return SYSCTL_OUT(req, &value, sizeof(value));
+}
+
+#define X(name, T) \
+int \
+experiment_factor_##name##_handler SYSCTL_HANDLER_ARGS \
+{ \
+	int error, changed = 0; \
+	T *ptr; \
+	T new_value, current_value; \
+	struct experiment_spec *spec = (struct experiment_spec *) arg1; \
+	if (!arg1) { \
+	        return EINVAL; \
+	} \
+	ptr = (T *)(spec->ptr); \
+	current_value = *ptr; \
+	error = sysctl_io_number(req, current_value, sizeof(T), &new_value, &changed); \
+	if (error != 0) { \
+	        return error; \
+	} \
+	if (changed) { \
+	        if (new_value < (T) spec->min_value || new_value > (T) spec->max_value) { \
+	                return EINVAL; \
+	        } \
+	        if (os_atomic_cmpxchg(&spec->modified, false, true, acq_rel)) { \
+	                spec->original_value = current_value; \
+	        } \
+	        os_atomic_store_wide(ptr, new_value, relaxed); \
+	} \
+	return 0; \
+}
+
+experiment_factor_numeric_types
+#undef X

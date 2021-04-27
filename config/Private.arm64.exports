@@ -41,6 +41,7 @@ _sched_perfcontrol_edge_matrix_set
 _sched_perfcontrol_update_callback_deadline
 _thread_group_join_io_storage
 _thread_group_join_perf_controller
+_ml_cpu_init_completed
 _ml_cpu_signal
 _ml_cpu_signal_deferred
 _ml_cpu_signal_retract
@@ -70,8 +71,6 @@ _pmap_iommu_map
 _pmap_iommu_unmap
 _pmap_iommu_iovmfree
 _pmap_iommu_ioctl
-_pmap_iommu_grant_page
-_pmap_iommu_alloc_contiguous_pages
 _nvme_ppl_get_desc
 _sart_get_desc
 _t8020dart_get_desc

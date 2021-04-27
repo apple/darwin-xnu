@@ -119,14 +119,10 @@
  * result.
  *
  * Note:	Does *NOT* currently include per-thread credential changes
- *
- *		We don't use kauth_cred_print() in current debugging, but it
- *		can be used if needed when debugging is active.
  */
 #if DEBUG_CRED
 #define DEBUG_CRED_ENTER                printf
 #define DEBUG_CRED_CHANGE               printf
-extern void kauth_cred_print(kauth_cred_t cred);
 #else   /* !DEBUG_CRED */
 #define DEBUG_CRED_ENTER(fmt, ...)      do {} while (0)
 #define DEBUG_CRED_CHANGE(fmt, ...)     do {} while (0)

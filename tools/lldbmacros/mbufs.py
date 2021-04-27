@@ -39,8 +39,7 @@ def MBufStat(cmd_args=None):
                                   (mcs.mbcl_total - total - mcs.mbcl_infree),
                                   mcs.mbcl_fail_cnt, mbuf.mtbl_cache.mc_waiter_cnt,
                                   mcs.mbcl_notified, mcs.mbcl_purge_cnt,
-                                  mbuf.mtbl_maxlimit
-                                  )
+                                  mbuf.mtbl_maxlimit)
 # EndMacro: mbuf_stat
 
 # Macro: mbuf_walkpkt

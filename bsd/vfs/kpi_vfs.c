@@ -145,7 +145,7 @@ static void xattrfile_setattr(vnode_t dvp, const char * basename,
     struct vnode_attr * vap, vfs_context_t ctx);
 #endif /* CONFIG_APPLEDOUBLE */
 
-extern lck_rw_t * rootvnode_rw_lock;
+extern lck_rw_t rootvnode_rw_lock;
 
 static errno_t post_rename(vnode_t fdvp, vnode_t fvp, vnode_t tdvp, vnode_t tvp);
 
@@ -1526,6 +1526,36 @@ vfs_context_bind(vfs_context_t ctx)
 }
 
 int
+vfs_set_thread_fs_private(uint8_t tag, uint64_t fs_private)
+{
+	struct uthread *ut;
+
+	if (tag != FS_PRIVATE_TAG_APFS) {
+		return ENOTSUP;
+	}
+
+	ut = get_bsdthread_info(current_thread());
+	ut->t_fs_private = fs_private;
+
+	return 0;
+}
+
+int
+vfs_get_thread_fs_private(uint8_t tag, uint64_t *fs_private)
+{
+	struct uthread *ut;
+
+	if (tag != FS_PRIVATE_TAG_APFS) {
+		return ENOTSUP;
+	}
+
+	ut = get_bsdthread_info(current_thread());
+	*fs_private = ut->t_fs_private;
+
+	return 0;
+}
+
+int
 vfs_isswapmount(mount_t mnt)
 {
 	return mnt && ISSET(mnt->mnt_kern_flag, MNTK_SWAP_MOUNT) ? 1 : 0;
@@ -1567,9 +1597,9 @@ vfs_rootvnode(void)
 {
 	int error;
 
-	lck_rw_lock_shared(rootvnode_rw_lock);
+	lck_rw_lock_shared(&rootvnode_rw_lock);
 	error = vnode_get(rootvnode);
-	lck_rw_unlock_shared(rootvnode_rw_lock);
+	lck_rw_unlock_shared(&rootvnode_rw_lock);
 	if (error) {
 		return (vnode_t)0;
 	} else {

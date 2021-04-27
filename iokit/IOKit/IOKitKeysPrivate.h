@@ -71,6 +71,12 @@
 // care.
 #define kIONVRAMForceSyncNowPropertyKey         "IONVRAM-FORCESYNCNOW-PROPERTY"
 
+// GUID to address variables for the system NVRAM region
+#define kIOKitSystemGUID                        "40A0DDD2-77F8-4392-B4A3-1E7304206516"
+#define kIOKitSystemGUIDPrefix                  (kIOKitSystemGUID ":")
+// Internal only key to give access to system region on internal builds
+#define kIONVRAMSystemInternalAllowKey          "com.apple.private.iokit.system-nvram-internal-allow"
+
 
 // clientHasPrivilege security token for kIOClientPrivilegeSecureConsoleProcess
 typedef struct _IOUCProcessToken {
@@ -90,12 +96,12 @@ typedef struct _IOUCProcessToken {
 #define kIOPlatformFunctionHandlerSet                "IOPlatformFunctionHandlerSet"
 
 #define kIOPlatformFunctionHandlerMaxBusDelay        "IOPlatformFunctionHandlerMaxBusDelay"
-#define kIOPlatformMaxBusDelay        "IOPlatformMaxBusDelay"
+#define kIOPlatformMaxBusDelay                       "IOPlatformMaxBusDelay"
 
 #if defined(__i386__) || defined(__x86_64__)
 
 #define kIOPlatformFunctionHandlerMaxInterruptDelay  "IOPlatformFunctionHandlerMaxInterruptDelay"
-#define kIOPlatformMaxInterruptDelay  "IOPlatformMaxInterruptDelay"
+#define kIOPlatformMaxInterruptDelay                 "IOPlatformMaxInterruptDelay"
 
 #endif /* defined(__i386__) || defined(__x86_64__) */
 

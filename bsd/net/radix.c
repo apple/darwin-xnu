@@ -95,9 +95,6 @@ static char normal_chars[] = {0, 0x80, 0xc0, 0xe0, 0xf0, 0xf8, 0xfc, 0xfe, -1};
 static char *rn_zeros, *rn_ones;
 
 
-extern lck_grp_t        *domain_proto_mtx_grp;
-extern lck_attr_t       *domain_proto_mtx_attr;
-
 #define rn_masktop (mask_rnhead->rnh_treetop)
 #undef Bcmp
 #define Bcmp(a, b, l) \

@@ -58,8 +58,8 @@
  * most Mach exceptions.
  */
 
-static const void                      *ux_handler_kobject    = NULL;
-SECURITY_READ_ONLY_LATE(ipc_port_t)     ux_handler_port       = IP_NULL;
+static SECURITY_READ_ONLY_LATE(const void *)    ux_handler_kobject    = NULL;
+SECURITY_READ_ONLY_LATE(ipc_port_t)             ux_handler_port       = IP_NULL;
 
 /*
  * init is called early in Mach initialization

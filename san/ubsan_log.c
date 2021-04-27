@@ -111,24 +111,26 @@ sysctl_ubsan_log_dump SYSCTL_HANDLER_ARGS
 	os_atomic_thread_fence(seq_cst);
 	tail = os_atomic_load(&ubsan_log_tail, relaxed);
 
-	char *buf;
-	size_t n = 0;
-	int err;
-
 	if (tail == head) {
 		return 0; /* log is empty */
 	}
 
-	buf = kheap_alloc(KHEAP_TEMP, sz, Z_WAITOK | Z_ZERO);
+	char *buf = kheap_alloc(KHEAP_TEMP, sz, Z_WAITOK | Z_ZERO);
 	if (!buf) {
 		return 0;
 	}
 
+	struct ubsan_buf ubsan_buf = {
+		.ub_logged = 0,
+		.ub_buf_size = sz,
+		.ub_buf = buf
+	};
+
 	for (size_t i = tail; i != head; i = next_entry(i)) {
-		n += ubsan_format(&ubsan_log[i], buf + n, sz - n);
+		ubsan_format(&ubsan_log[i], &ubsan_buf);
 	}
 
-	err = SYSCTL_OUT(req, buf, n);
+	int err = SYSCTL_OUT(req, buf, ubsan_buf.ub_logged);
 
 	kheap_free(KHEAP_TEMP, buf, sz);
 	return err;

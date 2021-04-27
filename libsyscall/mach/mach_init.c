@@ -137,13 +137,13 @@ mach_init_doit(void)
 
 	if (vm_kernel_page_shift == 0) {
 #if defined(__x86_64__) || defined(__i386__)
-		if ((*((uint16_t *)_COMM_PAGE_VERSION) >= COMM_PAGE_KERNEL_PAGE_SHIFT_MIN_VERSION)) {
-			vm_kernel_page_shift = *(uint8_t*) _COMM_PAGE_KERNEL_PAGE_SHIFT;
+		if (COMM_PAGE_READ(uint16_t, VERSION) >= COMM_PAGE_KERNEL_PAGE_SHIFT_MIN_VERSION) {
+			vm_kernel_page_shift = COMM_PAGE_READ(uint8_t, KERNEL_PAGE_SHIFT);
 		} else {
 			vm_kernel_page_shift = I386_PGSHIFT;
 		}
 #else
-		vm_kernel_page_shift = *(uint8_t*) _COMM_PAGE_KERNEL_PAGE_SHIFT;
+		vm_kernel_page_shift = COMM_PAGE_READ(uint8_t, KERNEL_PAGE_SHIFT);
 #endif
 		vm_kernel_page_size = 1 << vm_kernel_page_shift;
 		vm_kernel_page_mask = vm_kernel_page_size - 1;
@@ -151,12 +151,12 @@ mach_init_doit(void)
 
 	if (vm_page_shift == 0) {
 #if defined(__arm64__)
-		vm_page_shift = *(uint8_t*) _COMM_PAGE_USER_PAGE_SHIFT_64;
+		vm_page_shift = COMM_PAGE_READ(uint8_t, USER_PAGE_SHIFT_64);
 #elif defined(__arm__)
-		vm_page_shift = *(uint8_t*) _COMM_PAGE_USER_PAGE_SHIFT_32;
+		vm_page_shift = COMM_PAGE_READ(uint8_t, USER_PAGE_SHIFT_32);
 #else
-		if ((*((uint16_t *)_COMM_PAGE_VERSION) >= COMM_PAGE_KERNEL_PAGE_SHIFT_MIN_VERSION)) {
-			vm_page_shift = *(uint8_t*) _COMM_PAGE_USER_PAGE_SHIFT_64;
+		if (COMM_PAGE_READ(uint16_t, VERSION) >= COMM_PAGE_KERNEL_PAGE_SHIFT_MIN_VERSION) {
+			vm_page_shift = COMM_PAGE_READ(uint8_t, USER_PAGE_SHIFT_64);
 		} else {
 			vm_page_shift = vm_kernel_page_shift;
 		}

@@ -42,7 +42,7 @@
 #include <pthread.h>
 #include <stdatomic.h>
 
-#include "vm/perf_helpers.h"
+#include "benchmark/helpers.h"
 
 #if (TARGET_OS_OSX || TARGET_OS_SIMULATOR)
 /*
@@ -121,10 +121,6 @@ typedef struct test_args {
 	bool verbose;
 } test_args_t;
 
-/* Get a (wall-time) timestamp in nanoseconds */
-static uint64_t get_timestamp_ns(void);
-/* Get the number of cpus on this device. */
-static unsigned int get_ncpu(void);
 /*
  * Fault in the pages in the given buffer.
  */
@@ -197,7 +193,7 @@ main(int argc, char **argv)
 #else
 	static const size_t memory_per_core = 25 * (1UL << 20);
 #endif /* (TARGET_OS_OSX || TARGET_OS_SIMULATOR) */
-	const size_t kMemSize = memory_per_core * get_ncpu();
+	const size_t kMemSize = memory_per_core * (size_t) get_ncpu();
 	test_globals_t *globals = allocate_test_globals();
 	/* Total wall-time spent faulting in pages. */
 	uint64_t wall_time_elapsed_ns = 0;
@@ -368,7 +364,7 @@ start_iteration(test_globals_t* globals, test_variant_t variant, bool verbose)
 	setup_memory(globals, variant);
 	benchmark_log(verbose, "Initialized data structures for iteration. Waking workers.\n");
 	/* Grab a timestamp, tick the current iteration, and wake up the worker threads */
-	start_time = get_timestamp_ns();
+	start_time = current_timestamp_ns();
 	globals->tg_current_iteration++;
 	ret = pthread_mutex_unlock(&globals->tg_lock);
 	assert(ret == 0);
@@ -387,7 +383,7 @@ finish_iteration(test_globals_t* globals, uint64_t start_time)
 	while (globals->tg_iterations_completed != globals->tg_current_iteration) {
 		ret = pthread_cond_wait(&globals->tg_cv, &globals->tg_lock);
 	}
-	end_time = get_timestamp_ns();
+	end_time = current_timestamp_ns();
 	ret = pthread_mutex_unlock(&globals->tg_lock);
 	unmap_fault_buffers(globals);
 	assert(ret == 0);
@@ -600,22 +596,6 @@ print_help(char** argv)
 	fprintf(stderr, "\ntest variants:\n");
 	fprintf(stderr, "	%s	Fault in different vm objects in each thread.\n", kSeparateObjectsArgument);
 	fprintf(stderr, "	%s		Share vm objects across faulting threads.\n", kShareObjectsArgument);
-}
-
-static uint64_t
-get_timestamp_ns()
-{
-	return clock_gettime_nsec_np(kWallTimeClock);
-}
-
-static unsigned int
-get_ncpu(void)
-{
-	int ncpu;
-	size_t sysctl_size = sizeof(ncpu);
-	int ret = sysctlbyname("hw.ncpu", &ncpu, &sysctl_size, NULL, 0);
-	assert(ret == 0);
-	return (unsigned int) ncpu;
 }
 
 static void

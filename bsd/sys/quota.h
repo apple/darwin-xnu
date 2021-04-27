@@ -353,7 +353,6 @@ void    dqfileclose(struct quotafile *, int);
 void    dqflush(struct vnode *);
 int     dqget(u_int32_t, struct quotafile *, int, struct dquot **);
 void    dqhashinit(void);
-void    dqinit(void);
 int     dqisinitialized(void);
 void    dqref(struct dquot *);
 void    dqrele(struct dquot *);

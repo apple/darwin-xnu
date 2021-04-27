@@ -77,7 +77,7 @@ sysctl_debug_iokit
 }
 
 SYSCTL_PROC(_debug, OID_AUTO, iokit,
-    CTLTYPE_QUAD | IODEBUG_CTLFLAGS | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_LOCKED,
+    CTLTYPE_QUAD | IODEBUG_CTLFLAGS | CTLFLAG_KERN | CTLFLAG_LOCKED,
     &gIOKitDebug, 0, sysctl_debug_iokit, "Q", "boot_arg io");
 
 size_t          debug_malloc_size;

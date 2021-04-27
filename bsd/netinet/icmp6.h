@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -694,7 +694,8 @@ struct icmp6stat {
 #define ICMPV6CTL_ND6_MAXQLEN           24
 #define ICMPV6CTL_ND6_ACCEPT_6TO4       25
 #define ICMPV6CTL_ND6_OPTIMISTIC_DAD    26      /* RFC 4429 */
-#define ICMPV6CTL_MAXID                 27
+#define ICMPV6CTL_ERRPPSLIMIT_RANDOM_INCR 27
+#define ICMPV6CTL_MAXID                 28
 
 #ifdef BSD_KERNEL_PRIVATE
 #define ICMPV6CTL_NAMES { \

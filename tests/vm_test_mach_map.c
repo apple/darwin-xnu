@@ -7,6 +7,7 @@
  */
 #include <darwintest.h>
 
+#include <dlfcn.h>
 #include <errno.h>
 #include <ptrauth.h>
 #include <stdio.h>
@@ -623,7 +624,7 @@ T_DECL(madvise_shared, "test madvise shared for rdar://problem/2295713 logging \
 	}
 
 #if defined(__x86_64__) || defined(__i386__)
-	if (*((uint64_t *)_COMM_PAGE_CPU_CAPABILITIES64) & kIsTranslated) {
+	if (COMM_PAGE_READ(uint64_t, CPU_CAPABILITIES64) & kIsTranslated) {
 		T_LOG("Skipping madvise reusable tests because we're running under translation.");
 		goto done;
 	}
@@ -672,7 +673,7 @@ T_DECL(madvise_purgeable_can_reuse, "test madvise purgeable can reuse for \
     T_META_ALL_VALID_ARCHS(true))
 {
 #if defined(__x86_64__) || defined(__i386__)
-	if (*((uint64_t *)_COMM_PAGE_CPU_CAPABILITIES64) & kIsTranslated) {
+	if (COMM_PAGE_READ(uint64_t, CPU_CAPABILITIES64) & kIsTranslated) {
 		T_SKIP("madvise reusable is not supported under Rosetta translation. Skipping.)");
 	}
 #endif /* defined(__x86_64__) || defined(__i386__) */
@@ -951,6 +952,677 @@ T_DECL(nested_pmap_trigger, "nested pmap should only be triggered from kernel \
 	T_ASSERT_MACH_SUCCESS(kr, "vm_map()");
 }
 
+static const char *prot_str[] = { "---", "r--", "-w-", "rw-", "--x", "r-x", "-wx", "rwx" };
+static const char *share_mode_str[] = { "---", "COW", "PRIVATE", "EMPTY", "SHARED", "TRUESHARED", "PRIVATE_ALIASED", "SHARED_ALIASED", "LARGE_PAGE" };
+
+T_DECL(shared_region_share_writable, "sharing a writable mapping of the shared region shoudl not give write access to shared region - rdar://problem/74469953",
+    T_META_ALL_VALID_ARCHS(true))
+{
+	int ret;
+	uint64_t sr_start;
+	kern_return_t kr;
+	mach_vm_address_t address, tmp_address, remap_address;
+	mach_vm_size_t size, tmp_size, remap_size;
+	uint32_t depth;
+	mach_msg_type_number_t count;
+	vm_region_submap_info_data_64_t info;
+	vm_prot_t cur_prot, max_prot;
+	uint32_t before, after, remap;
+	mach_port_t mem_entry;
+
+	ret = __shared_region_check_np(&sr_start);
+	if (ret != 0) {
+		int saved_errno;
+		saved_errno = errno;
+
+		T_ASSERT_EQ(saved_errno, ENOMEM, "__shared_region_check_np() %d (%s)",
+		    saved_errno, strerror(saved_errno));
+		T_END;
+	}
+	T_LOG("SHARED_REGION_BASE 0x%llx", SHARED_REGION_BASE);
+	T_LOG("SHARED_REGION_SIZE 0x%llx", SHARED_REGION_SIZE);
+	T_LOG("shared region starts at 0x%llx", sr_start);
+	T_QUIET; T_ASSERT_GE(sr_start, SHARED_REGION_BASE,
+	    "shared region starts below BASE");
+	T_QUIET; T_ASSERT_LT(sr_start, SHARED_REGION_BASE + SHARED_REGION_SIZE,
+	    "shared region starts above BASE+SIZE");
+
+	/*
+	 * Step 1 - check that one can not get write access to a read-only
+	 * mapping in the shared region.
+	 */
+	size = 0;
+	for (address = SHARED_REGION_BASE;
+	    address < SHARED_REGION_BASE + SHARED_REGION_SIZE;
+	    address += size) {
+		size = 0;
+		depth = 99;
+		count = VM_REGION_SUBMAP_INFO_COUNT_64;
+		kr = mach_vm_region_recurse(mach_task_self(),
+		    &address,
+		    &size,
+		    &depth,
+		    (vm_region_recurse_info_t)&info,
+		    &count);
+		T_QUIET; T_EXPECT_MACH_SUCCESS(kr, "vm_region_recurse()");
+		if (kr == KERN_INVALID_ADDRESS) {
+			T_SKIP("could not find read-only nested mapping");
+			T_END;
+		}
+		T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "vm_region_recurse()");
+		T_LOG("0x%llx - 0x%llx depth:%d %s/%s %s 0x%x",
+		    address, address + size, depth,
+		    prot_str[info.protection],
+		    prot_str[info.max_protection],
+		    share_mode_str[info.share_mode],
+		    info.object_id);
+		if (depth > 0 &&
+		    (info.protection == VM_PROT_READ) &&
+		    (info.max_protection == VM_PROT_READ)) {
+			/* nested and read-only: bingo! */
+			break;
+		}
+	}
+	if (address >= SHARED_REGION_BASE + SHARED_REGION_SIZE) {
+		T_SKIP("could not find read-only nested mapping");
+		T_END;
+	}
+
+	/* test vm_remap() of RO */
+	before = *(uint32_t *)(uintptr_t)address;
+	remap_address = 0;
+	remap_size = size;
+	kr = mach_vm_remap(mach_task_self(),
+	    &remap_address,
+	    remap_size,
+	    0,
+	    VM_FLAGS_ANYWHERE | VM_FLAGS_RETURN_DATA_ADDR,
+	    mach_task_self(),
+	    address,
+	    FALSE,
+	    &cur_prot,
+	    &max_prot,
+	    VM_INHERIT_DEFAULT);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "vm_remap()");
+//	T_QUIET; T_ASSERT_EQ(cur_prot, VM_PROT_READ, "cur_prot is read-only");
+//	T_QUIET; T_ASSERT_EQ(max_prot, VM_PROT_READ, "max_prot is read-only");
+	/* check that region is still nested */
+	tmp_address = address;
+	tmp_size = 0;
+	depth = 99;
+	count = VM_REGION_SUBMAP_INFO_COUNT_64;
+	kr = mach_vm_region_recurse(mach_task_self(),
+	    &tmp_address,
+	    &tmp_size,
+	    &depth,
+	    (vm_region_recurse_info_t)&info,
+	    &count);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "vm_region_recurse()");
+	T_LOG("0x%llx - 0x%llx depth:%d %s/%s %s 0x%x",
+	    tmp_address, tmp_address + tmp_size, depth,
+	    prot_str[info.protection],
+	    prot_str[info.max_protection],
+	    share_mode_str[info.share_mode],
+	    info.object_id);
+	T_QUIET; T_ASSERT_EQ(tmp_address, address, "address hasn't changed");
+//	T_QUIET; T_ASSERT_EQ(tmp_size, size, "size hasn't changed");
+	T_QUIET; T_ASSERT_GT(depth, 0, "still nested");
+	T_QUIET; T_ASSERT_EQ(info.protection, VM_PROT_READ, "cur_prot still read-only");
+//	T_QUIET; T_ASSERT_EQ(info.max_protection, VM_PROT_READ, "max_prot still read-only");
+	/* check that new mapping is read-only */
+	tmp_address = remap_address;
+	tmp_size = 0;
+	depth = 99;
+	count = VM_REGION_SUBMAP_INFO_COUNT_64;
+	kr = mach_vm_region_recurse(mach_task_self(),
+	    &tmp_address,
+	    &tmp_size,
+	    &depth,
+	    (vm_region_recurse_info_t)&info,
+	    &count);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "vm_region_recurse()");
+	T_LOG("0x%llx - 0x%llx depth:%d %s/%s %s 0x%x",
+	    tmp_address, tmp_address + tmp_size, depth,
+	    prot_str[info.protection],
+	    prot_str[info.max_protection],
+	    share_mode_str[info.share_mode],
+	    info.object_id);
+	T_QUIET; T_ASSERT_EQ(tmp_address, remap_address, "address hasn't changed");
+//	T_QUIET; T_ASSERT_EQ(tmp_size, size, "size hasn't changed");
+	T_QUIET; T_ASSERT_EQ(info.protection, VM_PROT_READ, "new cur_prot read-only");
+//	T_QUIET; T_ASSERT_EQ(info.max_protection, VM_PROT_READ, "new max_prot read-only");
+	remap = *(uint32_t *)(uintptr_t)remap_address;
+	T_QUIET; T_ASSERT_EQ(remap, before, "remap matches original");
+// this would crash if actually read-only:
+//	*(uint32_t *)(uintptr_t)remap_address = before + 1;
+	after = *(uint32_t *)(uintptr_t)address;
+	T_LOG("vm_remap(): 0x%llx 0x%x -> 0x%x", address, before, after);
+//	*(uint32_t *)(uintptr_t)remap_address = before;
+	if (before != after) {
+		T_FAIL("vm_remap() bypassed copy-on-write");
+	} else {
+		T_PASS("vm_remap() did not bypass copy-on-write");
+	}
+	/* cleanup */
+	kr = mach_vm_deallocate(mach_task_self(), remap_address, remap_size);
+	T_QUIET; T_EXPECT_MACH_SUCCESS(kr, "vm_deallocate()");
+	T_PASS("vm_remap() read-only");
+
+#if defined(VM_MEMORY_ROSETTA)
+	if (dlsym(RTLD_DEFAULT, "mach_vm_remap_new") == NULL) {
+		T_PASS("vm_remap_new() is not present");
+		goto skip_vm_remap_new_ro;
+	}
+	/* test vm_remap_new() of RO */
+	before = *(uint32_t *)(uintptr_t)address;
+	remap_address = 0;
+	remap_size = size;
+	cur_prot = VM_PROT_READ | VM_PROT_WRITE;
+	max_prot = VM_PROT_READ | VM_PROT_WRITE;
+	kr = mach_vm_remap_new(mach_task_self(),
+	    &remap_address,
+	    remap_size,
+	    0,
+	    VM_FLAGS_ANYWHERE,
+	    mach_task_self(),
+	    address,
+	    FALSE,
+	    &cur_prot,
+	    &max_prot,
+	    VM_INHERIT_DEFAULT);
+	T_QUIET; T_EXPECT_MACH_SUCCESS(kr, "vm_remap_new()");
+	if (kr == KERN_PROTECTION_FAILURE) {
+		/* wrong but not a security issue... */
+		goto skip_vm_remap_new_ro;
+	}
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "vm_remap_new()");
+	remap = *(uint32_t *)(uintptr_t)remap_address;
+	T_QUIET; T_ASSERT_EQ(remap, before, "remap matches original");
+	*(uint32_t *)(uintptr_t)remap_address = before + 1;
+	after = *(uint32_t *)(uintptr_t)address;
+	T_LOG("vm_remap_new(): 0x%llx 0x%x -> 0x%x", address, before, after);
+	*(uint32_t *)(uintptr_t)remap_address = before;
+	if (before != after) {
+		T_FAIL("vm_remap_new() bypassed copy-on-write");
+	} else {
+		T_PASS("vm_remap_new() did not bypass copy-on-write");
+	}
+	/* check that region is still nested */
+	tmp_address = address;
+	tmp_size = 0;
+	depth = 99;
+	count = VM_REGION_SUBMAP_INFO_COUNT_64;
+	kr = mach_vm_region_recurse(mach_task_self(),
+	    &tmp_address,
+	    &tmp_size,
+	    &depth,
+	    (vm_region_recurse_info_t)&info,
+	    &count);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "vm_region_recurse()");
+	T_LOG("0x%llx - 0x%llx depth:%d %s/%s %s 0x%x",
+	    tmp_address, tmp_address + tmp_size, depth,
+	    prot_str[info.protection],
+	    prot_str[info.max_protection],
+	    share_mode_str[info.share_mode],
+	    info.object_id);
+	T_QUIET; T_ASSERT_EQ(tmp_address, address, "address hasn't changed");
+//	T_QUIET; T_ASSERT_EQ(tmp_size, size, "size hasn't changed");
+	T_QUIET; T_ASSERT_GT(depth, 0, "still nested");
+	T_QUIET; T_ASSERT_EQ(info.protection, VM_PROT_READ, "cur_prot still read-only");
+	T_QUIET; T_ASSERT_EQ(info.max_protection, VM_PROT_READ, "max_prot still read-only");
+	T_PASS("vm_remap_new() read-only");
+skip_vm_remap_new_ro:
+#else /* defined(VM_MEMORY_ROSETTA) */
+	/* pre-BigSur SDK: no vm_remap_new() */
+	T_LOG("No vm_remap_new() to test");
+#endif /* defined(VM_MEMORY_ROSETTA) */
+
+	/* test mach_make_memory_entry_64(VM_SHARE) of RO */
+	before = *(uint32_t *)(uintptr_t)address;
+	remap_size = size;
+	mem_entry = MACH_PORT_NULL;
+	kr = mach_make_memory_entry_64(mach_task_self(),
+	    &remap_size,
+	    address,
+	    MAP_MEM_VM_SHARE | VM_PROT_READ | VM_PROT_WRITE,
+	    &mem_entry,
+	    MACH_PORT_NULL);
+	T_QUIET; T_EXPECT_MACH_SUCCESS(kr, "mach_make_memory_entry_64(VM_SHARE)");
+	if (kr == KERN_PROTECTION_FAILURE) {
+		/* wrong but not a security issue... */
+		goto skip_mem_entry_vm_share_ro;
+	}
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "mach_make_memory_entry_64(VM_SHARE)");
+	remap_address = 0;
+	kr = mach_vm_map(mach_task_self(),
+	    &remap_address,
+	    remap_size,
+	    0,              /* mask */
+	    VM_FLAGS_ANYWHERE,
+	    mem_entry,
+	    0,              /* offset */
+	    FALSE,              /* copy */
+	    VM_PROT_READ | VM_PROT_WRITE,
+	    VM_PROT_READ | VM_PROT_WRITE,
+	    VM_INHERIT_DEFAULT);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "vm_map()");
+	remap = *(uint32_t *)(uintptr_t)remap_address;
+	T_QUIET; T_ASSERT_EQ(remap, before, "remap matches original");
+	*(uint32_t *)(uintptr_t)remap_address = before + 1;
+	after = *(uint32_t *)(uintptr_t)address;
+	T_LOG("mem_entry(VM_SHARE): 0x%llx 0x%x -> 0x%x", address, before, after);
+	*(uint32_t *)(uintptr_t)remap_address = before;
+	if (before != after) {
+		T_FAIL("mem_entry(VM_SHARE) bypassed copy-on-write");
+	} else {
+		T_PASS("mem_entry(VM_SHARE) did not bypass copy-on-write");
+	}
+	/* check that region is still nested */
+	tmp_address = address;
+	tmp_size = 0;
+	depth = 99;
+	count = VM_REGION_SUBMAP_INFO_COUNT_64;
+	kr = mach_vm_region_recurse(mach_task_self(),
+	    &tmp_address,
+	    &tmp_size,
+	    &depth,
+	    (vm_region_recurse_info_t)&info,
+	    &count);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "vm_region_recurse()");
+	T_LOG("0x%llx - 0x%llx depth:%d %s/%s %s 0x%x",
+	    tmp_address, tmp_address + tmp_size, depth,
+	    prot_str[info.protection],
+	    prot_str[info.max_protection],
+	    share_mode_str[info.share_mode],
+	    info.object_id);
+	T_QUIET; T_ASSERT_EQ(tmp_address, address, "address hasn't changed");
+//	T_QUIET; T_ASSERT_EQ(tmp_size, size, "size hasn't changed");
+	T_QUIET; T_ASSERT_GT(depth, 0, "still nested");
+	T_QUIET; T_ASSERT_EQ(info.protection, VM_PROT_READ, "cur_prot still read-only");
+	T_QUIET; T_ASSERT_EQ(info.max_protection, VM_PROT_READ, "max_prot still read-only");
+	/* check that new mapping is a copy */
+	tmp_address = remap_address;
+	tmp_size = 0;
+	depth = 99;
+	count = VM_REGION_SUBMAP_INFO_COUNT_64;
+	kr = mach_vm_region_recurse(mach_task_self(),
+	    &tmp_address,
+	    &tmp_size,
+	    &depth,
+	    (vm_region_recurse_info_t)&info,
+	    &count);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "vm_region_recurse()");
+	T_LOG("0x%llx - 0x%llx depth:%d %s/%s %s 0x%x",
+	    tmp_address, tmp_address + tmp_size, depth,
+	    prot_str[info.protection],
+	    prot_str[info.max_protection],
+	    share_mode_str[info.share_mode],
+	    info.object_id);
+	T_QUIET; T_ASSERT_EQ(tmp_address, remap_address, "address hasn't changed");
+//	T_QUIET; T_ASSERT_EQ(tmp_size, size, "size hasn't changed");
+	T_QUIET; T_ASSERT_EQ(depth, 0, "new mapping is unnested");
+//	T_QUIET; T_ASSERT_EQ(info.protection, VM_PROT_READ, "new cur_prot read-only");
+//	T_QUIET; T_ASSERT_EQ(info.max_protection, VM_PROT_READ, "new max_prot read-only");
+	/* cleanup */
+	kr = mach_vm_deallocate(mach_task_self(), remap_address, remap_size);
+	T_QUIET; T_EXPECT_MACH_SUCCESS(kr, "vm_deallocate()");
+	T_PASS("mem_entry(VM_SHARE) read-only");
+skip_mem_entry_vm_share_ro:
+
+	/* test mach_make_memory_entry_64() of RO */
+	before = *(uint32_t *)(uintptr_t)address;
+	remap_size = size;
+	mem_entry = MACH_PORT_NULL;
+	kr = mach_make_memory_entry_64(mach_task_self(),
+	    &remap_size,
+	    address,
+	    VM_PROT_READ | VM_PROT_WRITE,
+	    &mem_entry,
+	    MACH_PORT_NULL);
+	T_QUIET; T_ASSERT_EQ(kr, KERN_PROTECTION_FAILURE, "mach_make_memory_entry_64()");
+	/* check that region is still nested */
+	tmp_address = address;
+	tmp_size = 0;
+	depth = 99;
+	count = VM_REGION_SUBMAP_INFO_COUNT_64;
+	kr = mach_vm_region_recurse(mach_task_self(),
+	    &tmp_address,
+	    &tmp_size,
+	    &depth,
+	    (vm_region_recurse_info_t)&info,
+	    &count);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "vm_region_recurse()");
+	T_LOG("0x%llx - 0x%llx depth:%d %s/%s %s 0x%x",
+	    tmp_address, tmp_address + tmp_size, depth,
+	    prot_str[info.protection],
+	    prot_str[info.max_protection],
+	    share_mode_str[info.share_mode],
+	    info.object_id);
+	T_QUIET; T_ASSERT_EQ(tmp_address, address, "address hasn't changed");
+//	T_QUIET; T_ASSERT_EQ(tmp_size, size, "size hasn't changed");
+//	T_QUIET; T_ASSERT_GT(depth, 0, "still nested");
+	T_QUIET; T_ASSERT_EQ(info.protection, VM_PROT_READ, "cur_prot still read-only");
+	if (depth > 0) {
+		T_QUIET; T_ASSERT_EQ(info.max_protection, VM_PROT_READ, "max_prot still read-only");
+	}
+	T_PASS("mem_entry() read-only");
+
+
+	/*
+	 * Step 2 - check that one can not share write access with a writable
+	 * mapping in the shared region.
+	 */
+	size = 0;
+	for (address = SHARED_REGION_BASE;
+	    address < SHARED_REGION_BASE + SHARED_REGION_SIZE;
+	    address += size) {
+		size = 0;
+		depth = 99;
+		count = VM_REGION_SUBMAP_INFO_COUNT_64;
+		kr = mach_vm_region_recurse(mach_task_self(),
+		    &address,
+		    &size,
+		    &depth,
+		    (vm_region_recurse_info_t)&info,
+		    &count);
+		T_QUIET; T_EXPECT_MACH_SUCCESS(kr, "vm_region_recurse()");
+		if (kr == KERN_INVALID_ADDRESS) {
+			T_SKIP("could not find writable nested mapping");
+			T_END;
+		}
+		T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "vm_region_recurse()");
+		T_LOG("0x%llx - 0x%llx depth:%d %s/%s %s 0x%x",
+		    address, address + size, depth,
+		    prot_str[info.protection],
+		    prot_str[info.max_protection],
+		    share_mode_str[info.share_mode],
+		    info.object_id);
+		if (depth > 0 && (info.protection & VM_PROT_WRITE)) {
+			/* nested and writable: bingo! */
+			break;
+		}
+	}
+	if (address >= SHARED_REGION_BASE + SHARED_REGION_SIZE) {
+		T_SKIP("could not find writable nested mapping");
+		T_END;
+	}
+
+	/* test vm_remap() of RW */
+	before = *(uint32_t *)(uintptr_t)address;
+	remap_address = 0;
+	remap_size = size;
+	kr = mach_vm_remap(mach_task_self(),
+	    &remap_address,
+	    remap_size,
+	    0,
+	    VM_FLAGS_ANYWHERE | VM_FLAGS_RETURN_DATA_ADDR,
+	    mach_task_self(),
+	    address,
+	    FALSE,
+	    &cur_prot,
+	    &max_prot,
+	    VM_INHERIT_DEFAULT);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "vm_remap()");
+	if (!(cur_prot & VM_PROT_WRITE)) {
+		T_LOG("vm_remap(): 0x%llx not writable %s/%s",
+		    remap_address, prot_str[cur_prot], prot_str[max_prot]);
+		T_ASSERT_FAIL("vm_remap() remapping not writable");
+	}
+	remap = *(uint32_t *)(uintptr_t)remap_address;
+	T_QUIET; T_ASSERT_EQ(remap, before, "remap matches original");
+	*(uint32_t *)(uintptr_t)remap_address = before + 1;
+	after = *(uint32_t *)(uintptr_t)address;
+	T_LOG("vm_remap(): 0x%llx 0x%x -> 0x%x", address, before, after);
+	*(uint32_t *)(uintptr_t)remap_address = before;
+	if (before != after) {
+		T_FAIL("vm_remap() bypassed copy-on-write");
+	} else {
+		T_PASS("vm_remap() did not bypass copy-on-write");
+	}
+	/* check that region is still nested */
+	tmp_address = address;
+	tmp_size = 0;
+	depth = 99;
+	count = VM_REGION_SUBMAP_INFO_COUNT_64;
+	kr = mach_vm_region_recurse(mach_task_self(),
+	    &tmp_address,
+	    &tmp_size,
+	    &depth,
+	    (vm_region_recurse_info_t)&info,
+	    &count);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "vm_region_recurse()");
+	T_LOG("0x%llx - 0x%llx depth:%d %s/%s %s 0x%x",
+	    tmp_address, tmp_address + tmp_size, depth,
+	    prot_str[info.protection],
+	    prot_str[info.max_protection],
+	    share_mode_str[info.share_mode],
+	    info.object_id);
+	T_QUIET; T_ASSERT_EQ(tmp_address, address, "address hasn't changed");
+//	T_QUIET; T_ASSERT_EQ(tmp_size, size, "size hasn't changed");
+	T_QUIET; T_ASSERT_GT(depth, 0, "still nested");
+	T_QUIET; T_ASSERT_EQ(info.protection, VM_PROT_DEFAULT, "cur_prot still writable");
+	T_QUIET; T_ASSERT_EQ((info.max_protection & VM_PROT_WRITE), VM_PROT_WRITE, "max_prot still writable");
+	/* cleanup */
+	kr = mach_vm_deallocate(mach_task_self(), remap_address, remap_size);
+	T_QUIET; T_EXPECT_MACH_SUCCESS(kr, "vm_deallocate()");
+
+#if defined(VM_MEMORY_ROSETTA)
+	if (dlsym(RTLD_DEFAULT, "mach_vm_remap_new") == NULL) {
+		T_PASS("vm_remap_new() is not present");
+		goto skip_vm_remap_new_rw;
+	}
+	/* test vm_remap_new() of RW */
+	before = *(uint32_t *)(uintptr_t)address;
+	remap_address = 0;
+	remap_size = size;
+	cur_prot = VM_PROT_READ | VM_PROT_WRITE;
+	max_prot = VM_PROT_READ | VM_PROT_WRITE;
+	kr = mach_vm_remap_new(mach_task_self(),
+	    &remap_address,
+	    remap_size,
+	    0,
+	    VM_FLAGS_ANYWHERE,
+	    mach_task_self(),
+	    address,
+	    FALSE,
+	    &cur_prot,
+	    &max_prot,
+	    VM_INHERIT_DEFAULT);
+	T_QUIET; T_EXPECT_MACH_SUCCESS(kr, "vm_remap_new()");
+	if (kr == KERN_PROTECTION_FAILURE) {
+		/* wrong but not a security issue... */
+		goto skip_vm_remap_new_rw;
+	}
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "vm_remap_new()");
+	if (!(cur_prot & VM_PROT_WRITE)) {
+		T_LOG("vm_remap_new(): 0x%llx not writable %s/%s",
+		    remap_address, prot_str[cur_prot], prot_str[max_prot]);
+		T_ASSERT_FAIL("vm_remap_new() remapping not writable");
+	}
+	remap = *(uint32_t *)(uintptr_t)remap_address;
+	T_QUIET; T_ASSERT_EQ(remap, before, "remap matches original");
+	*(uint32_t *)(uintptr_t)remap_address = before + 1;
+	after = *(uint32_t *)(uintptr_t)address;
+	T_LOG("vm_remap_new(): 0x%llx 0x%x -> 0x%x", address, before, after);
+	*(uint32_t *)(uintptr_t)remap_address = before;
+	if (before != after) {
+		T_FAIL("vm_remap_new() bypassed copy-on-write");
+	} else {
+		T_PASS("vm_remap_new() did not bypass copy-on-write");
+	}
+	/* check that region is still nested */
+	tmp_address = address;
+	tmp_size = 0;
+	depth = 99;
+	count = VM_REGION_SUBMAP_INFO_COUNT_64;
+	kr = mach_vm_region_recurse(mach_task_self(),
+	    &tmp_address,
+	    &tmp_size,
+	    &depth,
+	    (vm_region_recurse_info_t)&info,
+	    &count);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "vm_region_recurse()");
+	T_LOG("0x%llx - 0x%llx depth:%d %s/%s %s 0x%x",
+	    tmp_address, tmp_address + tmp_size, depth,
+	    prot_str[info.protection],
+	    prot_str[info.max_protection],
+	    share_mode_str[info.share_mode],
+	    info.object_id);
+	T_QUIET; T_ASSERT_EQ(tmp_address, address, "address hasn't changed");
+//	T_QUIET; T_ASSERT_EQ(tmp_size, size, "size hasn't changed");
+	T_QUIET; T_ASSERT_GT(depth, 0, "still nested");
+	T_QUIET; T_ASSERT_EQ(info.protection, VM_PROT_DEFAULT, "cur_prot still writable");
+	T_QUIET; T_ASSERT_EQ((info.max_protection & VM_PROT_WRITE), VM_PROT_WRITE, "max_prot still writable");
+	/* cleanup */
+	kr = mach_vm_deallocate(mach_task_self(), remap_address, remap_size);
+	T_QUIET; T_EXPECT_MACH_SUCCESS(kr, "vm_deallocate()");
+skip_vm_remap_new_rw:
+#else /* defined(VM_MEMORY_ROSETTA) */
+	/* pre-BigSur SDK: no vm_remap_new() */
+	T_LOG("No vm_remap_new() to test");
+#endif /* defined(VM_MEMORY_ROSETTA) */
+
+	/* test mach_make_memory_entry_64(VM_SHARE) of RW */
+	before = *(uint32_t *)(uintptr_t)address;
+	remap_size = size;
+	mem_entry = MACH_PORT_NULL;
+	kr = mach_make_memory_entry_64(mach_task_self(),
+	    &remap_size,
+	    address,
+	    MAP_MEM_VM_SHARE | VM_PROT_READ | VM_PROT_WRITE,
+	    &mem_entry,
+	    MACH_PORT_NULL);
+	T_QUIET; T_EXPECT_MACH_SUCCESS(kr, "mach_make_memory_entry_64(VM_SHARE)");
+	if (kr == KERN_PROTECTION_FAILURE) {
+		/* wrong but not a security issue... */
+		goto skip_mem_entry_vm_share_rw;
+	}
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "mach_make_memory_entry_64(VM_SHARE)");
+	T_QUIET; T_ASSERT_EQ(remap_size, size, "mem_entry(VM_SHARE) should cover whole mapping");
+//	T_LOG("AFTER MAKE_MEM_ENTRY(VM_SHARE) 0x%llx...", address); fflush(stdout); fflush(stderr); getchar();
+	remap_address = 0;
+	kr = mach_vm_map(mach_task_self(),
+	    &remap_address,
+	    remap_size,
+	    0,              /* mask */
+	    VM_FLAGS_ANYWHERE,
+	    mem_entry,
+	    0,              /* offset */
+	    FALSE,              /* copy */
+	    VM_PROT_READ | VM_PROT_WRITE,
+	    VM_PROT_READ | VM_PROT_WRITE,
+	    VM_INHERIT_DEFAULT);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "vm_map()");
+	remap = *(uint32_t *)(uintptr_t)remap_address;
+	T_QUIET; T_ASSERT_EQ(remap, before, "remap matches original");
+//	T_LOG("AFTER VM_MAP 0x%llx...", remap_address); fflush(stdout); fflush(stderr); getchar();
+	*(uint32_t *)(uintptr_t)remap_address = before + 1;
+//	T_LOG("AFTER WRITE 0x%llx...", remap_address); fflush(stdout); fflush(stderr); getchar();
+	after = *(uint32_t *)(uintptr_t)address;
+	T_LOG("mem_entry(VM_SHARE): 0x%llx 0x%x -> 0x%x", address, before, after);
+	*(uint32_t *)(uintptr_t)remap_address = before;
+	if (before != after) {
+		T_FAIL("mem_entry(VM_SHARE) bypassed copy-on-write");
+	} else {
+		T_PASS("mem_entry(VM_SHARE) did not bypass copy-on-write");
+	}
+	/* check that region is still nested */
+	tmp_address = address;
+	tmp_size = 0;
+	depth = 99;
+	count = VM_REGION_SUBMAP_INFO_COUNT_64;
+	kr = mach_vm_region_recurse(mach_task_self(),
+	    &tmp_address,
+	    &tmp_size,
+	    &depth,
+	    (vm_region_recurse_info_t)&info,
+	    &count);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "vm_region_recurse()");
+	T_LOG("0x%llx - 0x%llx depth:%d %s/%s %s 0x%x",
+	    tmp_address, tmp_address + tmp_size, depth,
+	    prot_str[info.protection],
+	    prot_str[info.max_protection],
+	    share_mode_str[info.share_mode],
+	    info.object_id);
+	T_QUIET; T_ASSERT_EQ(tmp_address, address, "address hasn't changed");
+//	T_QUIET; T_ASSERT_EQ(tmp_size, size, "size hasn't changed");
+	T_QUIET; T_ASSERT_GT(depth, 0, "still nested");
+	T_QUIET; T_ASSERT_EQ(info.protection, VM_PROT_DEFAULT, "cur_prot still writable");
+	T_QUIET; T_ASSERT_EQ((info.max_protection & VM_PROT_WRITE), VM_PROT_WRITE, "max_prot still writable");
+	/* cleanup */
+	kr = mach_vm_deallocate(mach_task_self(), remap_address, remap_size);
+	T_QUIET; T_EXPECT_MACH_SUCCESS(kr, "vm_deallocate()");
+	mach_port_deallocate(mach_task_self(), mem_entry);
+skip_mem_entry_vm_share_rw:
+
+	/* test mach_make_memory_entry_64() of RW */
+	before = *(uint32_t *)(uintptr_t)address;
+	remap_size = size;
+	mem_entry = MACH_PORT_NULL;
+	kr = mach_make_memory_entry_64(mach_task_self(),
+	    &remap_size,
+	    address,
+	    VM_PROT_READ | VM_PROT_WRITE,
+	    &mem_entry,
+	    MACH_PORT_NULL);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "mach_make_memory_entry_64()");
+	remap_address = 0;
+	kr = mach_vm_map(mach_task_self(),
+	    &remap_address,
+	    remap_size,
+	    0,              /* mask */
+	    VM_FLAGS_ANYWHERE,
+	    mem_entry,
+	    0,              /* offset */
+	    FALSE,              /* copy */
+	    VM_PROT_READ | VM_PROT_WRITE,
+	    VM_PROT_READ | VM_PROT_WRITE,
+	    VM_INHERIT_DEFAULT);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "vm_map()");
+	remap = *(uint32_t *)(uintptr_t)remap_address;
+	T_QUIET; T_ASSERT_EQ(remap, before, "remap matches original");
+	*(uint32_t *)(uintptr_t)remap_address = before + 1;
+	after = *(uint32_t *)(uintptr_t)address;
+	T_LOG("mem_entry(): 0x%llx 0x%x -> 0x%x", address, before, after);
+	*(uint32_t *)(uintptr_t)remap_address = before;
+	/* check that region is no longer nested */
+	tmp_address = address;
+	tmp_size = 0;
+	depth = 99;
+	count = VM_REGION_SUBMAP_INFO_COUNT_64;
+	kr = mach_vm_region_recurse(mach_task_self(),
+	    &tmp_address,
+	    &tmp_size,
+	    &depth,
+	    (vm_region_recurse_info_t)&info,
+	    &count);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "vm_region_recurse()");
+	T_LOG("0x%llx - 0x%llx depth:%d %s/%s %s 0x%x",
+	    tmp_address, tmp_address + tmp_size, depth,
+	    prot_str[info.protection],
+	    prot_str[info.max_protection],
+	    share_mode_str[info.share_mode],
+	    info.object_id);
+	if (before != after) {
+		if (depth == 0) {
+			T_PASS("mem_entry() honored copy-on-write");
+		} else {
+			T_FAIL("mem_entry() did not trigger copy-on_write");
+		}
+	} else {
+		T_FAIL("mem_entry() did not honor copy-on-write");
+	}
+	T_QUIET; T_ASSERT_EQ(tmp_address, address, "address hasn't changed");
+//	T_QUIET; T_ASSERT_EQ(tmp_size, size, "size hasn't changed");
+	T_QUIET; T_ASSERT_EQ(depth, 0, "no longer nested");
+	T_QUIET; T_ASSERT_EQ(info.protection, VM_PROT_DEFAULT, "cur_prot still writable");
+	T_QUIET; T_ASSERT_EQ((info.max_protection & VM_PROT_WRITE), VM_PROT_WRITE, "max_prot still writable");
+	/* cleanup */
+	kr = mach_vm_deallocate(mach_task_self(), remap_address, remap_size);
+	T_QUIET; T_EXPECT_MACH_SUCCESS(kr, "vm_deallocate()");
+	mach_port_deallocate(mach_task_self(), mem_entry);
+}
+
 T_DECL(copyoverwrite_submap_protection, "test copywrite vm region submap \
     protection", T_META_ALL_VALID_ARCHS(true))
 {
@@ -1029,14 +1701,14 @@ T_DECL(wire_text, "test wired text for rdar://problem/16783546 Wiring code in \
     the shared region triggers code-signing violations",
     T_META_ALL_VALID_ARCHS(true))
 {
-	char *addr;
+	uint32_t *addr, before, after;
 	int retval;
 	int saved_errno;
 	kern_return_t kr;
 	vm_address_t map_addr, remap_addr;
 	vm_prot_t curprot, maxprot;
 
-	addr = (char *)&printf;
+	addr = (uint32_t *)&printf;
 #if __has_feature(ptrauth_calls)
 	map_addr = (vm_address_t)(uintptr_t)ptrauth_strip(addr, ptrauth_key_function_pointer);
 #else /* __has_feature(ptrauth_calls) */
@@ -1052,31 +1724,43 @@ T_DECL(wire_text, "test wired text for rdar://problem/16783546 Wiring code in \
 	    VM_INHERIT_DEFAULT);
 	T_ASSERT_EQ(kr, KERN_SUCCESS, "vm_remap error 0x%x (%s)",
 	    kr, mach_error_string(kr));
+	before = *addr;
 	retval = mlock(addr, 4096);
+	after = *addr;
 	if (retval != 0) {
 		saved_errno = errno;
 		T_ASSERT_EQ(saved_errno, EACCES, "wire shared text error %d (%s), expected: %d",
 		    saved_errno, strerror(saved_errno), EACCES);
+	} else if (after != before) {
+		T_ASSERT_FAIL("shared text changed by wiring at %p 0x%x -> 0x%x", addr, before, after);
 	} else {
 		T_PASS("wire shared text");
 	}
 
-	addr = (char *) &fprintf;
+	addr = (uint32_t *) &fprintf;
+	before = *addr;
 	retval = mlock(addr, 4096);
+	after = *addr;
 	if (retval != 0) {
 		saved_errno = errno;
 		T_ASSERT_EQ(saved_errno, EACCES, "wire shared text error %d (%s), expected: %d",
 		    saved_errno, strerror(saved_errno), EACCES);
+	} else if (after != before) {
+		T_ASSERT_FAIL("shared text changed by wiring at %p 0x%x -> 0x%x", addr, before, after);
 	} else {
 		T_PASS("wire shared text");
 	}
 
-	addr = (char *) &testmain_wire_text;
+	addr = (uint32_t *) &testmain_wire_text;
+	before = *addr;
 	retval = mlock(addr, 4096);
+	after = *addr;
 	if (retval != 0) {
 		saved_errno = errno;
 		T_ASSERT_EQ(saved_errno, EACCES, "wire text error return error %d (%s)",
 		    saved_errno, strerror(saved_errno));
+	} else if (after != before) {
+		T_ASSERT_FAIL("text changed by wiring at %p 0x%x -> 0x%x", addr, before, after);
 	} else {
 		T_PASS("wire text");
 	}

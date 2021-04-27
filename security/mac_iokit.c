@@ -65,6 +65,15 @@
 #include <security/mac_internal.h>
 
 int
+mac_iokit_check_open_service(kauth_cred_t cred, io_object_t service, unsigned int user_client_type)
+{
+	int error;
+
+	MAC_CHECK(iokit_check_open_service, cred, service, user_client_type);
+	return error;
+}
+
+int
 mac_iokit_check_open(kauth_cred_t cred, io_object_t user_client, unsigned int user_client_type)
 {
 	int error;

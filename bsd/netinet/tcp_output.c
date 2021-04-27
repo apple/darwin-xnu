@@ -155,6 +155,10 @@ SYSCTL_SKMEM_TCP_INT(OID_AUTO, ack_compression_rate,
     CTLFLAG_RW | CTLFLAG_LOCKED, int, tcp_ack_compression_rate, TCP_COMP_CHANGE_RATE,
     "Rate at which we force sending new ACKs (in ms)");
 
+SYSCTL_SKMEM_TCP_INT(OID_AUTO, randomize_timestamps,
+    CTLFLAG_RW | CTLFLAG_LOCKED, int, tcp_randomize_timestamps, 1,
+    "Randomize TCP timestamps to prevent tracking (on: 1, off: 0)");
+
 static int
 sysctl_change_ecn_setting SYSCTL_HANDLER_ARGS
 {
@@ -1636,7 +1640,7 @@ send:
 
 		/* Form timestamp option as shown in appendix A of RFC 1323. */
 		*lp++ = htonl(TCPOPT_TSTAMP_HDR);
-		*lp++ = htonl(tcp_now);
+		*lp++ = htonl(tcp_now + tp->t_ts_offset);
 		*lp   = htonl(tp->ts_recent);
 		optlen += TCPOLEN_TSTAMP_APPA;
 	}
@@ -2814,9 +2818,9 @@ out:
 		}
 		/*
 		 * Unless this is due to interface restriction policy,
-		 * treat EHOSTUNREACH/ENETDOWN as a soft error.
+		 * treat EHOSTUNREACH/ENETDOWN/EADDRNOTAVAIL as a soft error.
 		 */
-		if ((error == EHOSTUNREACH || error == ENETDOWN) &&
+		if ((error == EHOSTUNREACH || error == ENETDOWN || error == EADDRNOTAVAIL) &&
 		    TCPS_HAVERCVDSYN(tp->t_state) &&
 		    !inp_restricted_send(inp, inp->inp_last_outifp)) {
 			tp->t_softerror = error;

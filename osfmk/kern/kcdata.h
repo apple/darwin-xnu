@@ -492,7 +492,7 @@ struct kcdata_type_definition {
 #define STACKSHOT_KCTYPE_TASK_SNAPSHOT               0x905u /* task_snapshot_v2 */
 #define STACKSHOT_KCTYPE_THREAD_SNAPSHOT             0x906u /* thread_snapshot_v2, thread_snapshot_v3 */
 #define STACKSHOT_KCTYPE_DONATING_PIDS               0x907u /* int[] */
-#define STACKSHOT_KCTYPE_SHAREDCACHE_LOADINFO        0x908u /* same as KCDATA_TYPE_LIBRARY_LOADINFO64 */
+#define STACKSHOT_KCTYPE_SHAREDCACHE_LOADINFO        0x908u /* dyld_shared_cache_loadinfo */
 #define STACKSHOT_KCTYPE_THREAD_NAME                 0x909u /* char[] */
 #define STACKSHOT_KCTYPE_KERN_STACKFRAME             0x90Au /* struct stack_snapshot_frame32 */
 #define STACKSHOT_KCTYPE_KERN_STACKFRAME64           0x90Bu /* struct stack_snapshot_frame64 */
@@ -556,17 +556,42 @@ struct dyld_uuid_info_64 {
 	uuid_t   imageUUID;
 };
 
+/*
+ * N.B.: Newer kernels output dyld_shared_cache_loadinfo structures
+ * instead of this, since the field names match their contents better.
+ */
 struct dyld_uuid_info_64_v2 {
 	uint64_t imageLoadAddress; /* XXX image slide */
 	uuid_t   imageUUID;
 	/* end of version 1 of dyld_uuid_info_64. sizeof v1 was 24 */
-	uint64_t imageSlidBaseAddress; /* slid base address of image */
+	uint64_t imageSlidBaseAddress; /* slid base address or slid first mapping of image */
+};
+
+/*
+ * This is the renamed version of dyld_uuid_info_64 with more accurate
+ * field names, for STACKSHOT_KCTYPE_SHAREDCACHE_LOADINFO.  Any users
+ * must be aware of the dyld_uuid_info_64* version history and ensure
+ * the fields they are accessing are within the actual bounds.
+ *
+ * OLD_FIELD              NEW_FIELD
+ * imageLoadAddress       sharedCacheSlide
+ * imageUUID              sharedCacheUUID
+ * imageSlidBaseAddress   sharedCacheUnreliableSlidBaseAddress
+ * -                      sharedCacheSlidFirstMapping
+ */
+struct dyld_shared_cache_loadinfo {
+	uint64_t sharedCacheSlide;      /* image slide value */
+	uuid_t   sharedCacheUUID;
+	/* end of version 1 of dyld_uuid_info_64. sizeof v1 was 24 */
+	uint64_t sharedCacheUnreliableSlidBaseAddress;  /* for backwards-compatibility; use sharedCacheSlidFirstMapping if available */
+	/* end of version 2 of dyld_uuid_info_64. sizeof v2 was 32 */
+	uint64_t sharedCacheSlidFirstMapping; /* slid base address of first mapping */
 };
 
 struct dyld_aot_cache_uuid_info {
-	uint64_t x86SlidBaseAddress; /* slid base address of x86 shared cache */
+	uint64_t x86SlidBaseAddress; /* slid first mapping address of x86 shared cache */
 	uuid_t x86UUID; /* UUID of x86 shared cache */
-	uint64_t aotSlidBaseAddress; /* slide base address of aot cache */
+	uint64_t aotSlidBaseAddress; /* slide first mapping address of aot cache */
 	uuid_t aotUUID; /* UUID of aot shared cache */
 };
 
@@ -618,6 +643,9 @@ enum task_snapshot_flags {
 	kTaskIsDirtyTracked                   = 0x4000000,
 	kTaskAllowIdleExit                    = 0x8000000,
 	kTaskIsTranslated                     = 0x10000000,
+	kTaskSharedRegionNone                 = 0x20000000,     /* task doesn't have a shared region */
+	kTaskSharedRegionSystem               = 0x40000000,     /* task is attached to system shared region */
+	kTaskSharedRegionOther                = 0x80000000,     /* task is attached to a different shared region */
 };
 
 enum thread_snapshot_flags {
@@ -874,6 +902,12 @@ struct stackshot_cpu_times_v2 {
 struct stackshot_duration {
 	uint64_t stackshot_duration;
 	uint64_t stackshot_duration_outer;
+} __attribute__((packed));
+
+struct stackshot_duration_v2 {
+	uint64_t stackshot_duration;
+	uint64_t stackshot_duration_outer;
+	uint64_t stackshot_duration_prior;
 } __attribute__((packed));
 
 struct stackshot_fault_stats {

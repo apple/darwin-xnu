@@ -284,7 +284,7 @@ def GetObjectAtIndexFromArray(array_base, index):
     base_address = array_base_val.GetValueAsUnsigned()
     size = array_base_val.GetType().GetPointeeType().GetByteSize()
     obj_address = base_address + (index * size)
-    obj = kern.GetValueFromAddress(obj_address, array_base_val.GetType().GetName())
+    obj = kern.GetValueFromAddress(obj_address, array_base_val.GetType())
     return Cast(obj, array_base_val.GetType())
 
 
@@ -1169,7 +1169,35 @@ def TrapTrace_cmd(cmd_args=[], cmd_options={}):
 
     Trace_cmd(cmd_args, cmd_options, hdrString, entryString, kern.globals.traptrace_ring,
         kern.globals.traptrace_entries_per_cpu, MAX_TRAPTRACE_BACKTRACES)
-                
+
+# Yields an iterator over all the sysctls from the provided root.
+# Can optionally filter by the given prefix
+def IterateSysctls(root_oid=kern.globals.sysctl__children, prefix="", depth = 0, parent = ""):
+    headp = root_oid
+    for pp in IterateListEntry(headp, 'struct sysctl_oid *', 'oid_link', 's'):
+        node_str = ""
+        if prefix != "":
+            node_str = str(pp.oid_name)
+            if parent != "":
+                node_str = parent + "." + node_str
+                if node_str.startswith(prefix):
+                    yield pp, depth, parent
+        else:
+            yield pp, depth, parent
+        type = pp.oid_kind & 0xf
+        if type == 1 and pp.oid_arg1 != 0:
+            if node_str == "":
+                next_parent = str(pp.oid_name)
+                if parent != "":
+                    next_parent = parent + "." + next_parent
+            else:
+                next_parent = node_str
+            # Only recurse if the next parent starts with our allowed prefix.
+            # Note that it's OK if the parent string is too short (because the prefix might be for a deeper node).
+            prefix_len = min(len(prefix), len(next_parent))
+            if next_parent[:prefix_len] == prefix[:prefix_len]:
+                for x in IterateSysctls(Cast(pp.oid_arg1, "struct sysctl_oid_list *"), prefix, depth + 1, next_parent):
+                    yield x
 
 @lldb_command('showsysctls', 'P:')
 def ShowSysctls(cmd_args=[], cmd_options={}):
@@ -1186,28 +1214,63 @@ def ShowSysctls(cmd_args=[], cmd_options={}):
     else:
         _ShowSysctl_prefix = ''
         allowed_prefixes = []
-    def IterateSysctls(oid, parent_str, i):
-        headp = oid
-        parentstr = "<none>" if parent_str is None else parent_str
-        for pp in IterateListEntry(headp, 'struct sysctl_oid *', 'oid_link', 's'):
-            type = pp.oid_kind & 0xf
-            next_parent = str(pp.oid_name)
-            if parent_str is not None:
-                next_parent = parent_str + "." + next_parent
-            st = (" " * i) + str(pp.GetSBValue().Dereference()).replace("\n", "\n" + (" " * i))
-            if type == 1 and pp.oid_arg1 != 0:
-                # Check allowed_prefixes to see if we can recurse from root to the allowed prefix.
-                # To recurse further, we need to check only the the next parent starts with the user-specified
-                # prefix
-                if next_parent not in allowed_prefixes and next_parent.startswith(_ShowSysctl_prefix) is False:
-                    continue
-                print 'parent = "%s"' % parentstr, st[st.find("{"):]
-                IterateSysctls(Cast(pp.oid_arg1, "struct sysctl_oid_list *"), next_parent, i + 2)
-            elif _ShowSysctl_prefix == '' or next_parent.startswith(_ShowSysctl_prefix):
-                print ('parent = "%s"' % parentstr), st[st.find("{"):]
-    IterateSysctls(kern.globals.sysctl__children, None, 0)
 
+    for sysctl, depth, parentstr in IterateSysctls(kern.globals.sysctl__children, _ShowSysctl_prefix):
+        if parentstr == "":
+            parentstr = "<none>"
+        headp = sysctl
+        st = (" " * depth * 2) + str(sysctl.GetSBValue().Dereference()).replace("\n", "\n" + (" " * depth * 2))
+        print 'parent = "%s"' % parentstr, st[st.find("{"):]
 
+@lldb_command('showexperiments', 'F')
+def ShowExperiments(cmd_args=[], cmd_options={}):
+    """ Shows any active kernel experiments being run on the device via trial.
+        Arguments:
+        -F: Scan for changed experiment values even if no trial identifiers have been set.
+    """
+
+    treatment_id = str(kern.globals.trial_treatment_id)
+    experiment_id = str(kern.globals.trial_experiment_id)
+    deployment_id = kern.globals.trial_deployment_id._GetValueAsSigned()
+    if treatment_id == "" and experiment_id == "" and deployment_id == -1:
+        print("Device is not enrolled in any kernel experiments.")
+        if not '-F' in cmd_options:
+            return
+    else:
+        print("""Device is enrolled in a kernel experiment:
+    treatment_id: %s
+    experiment_id: %s
+    deployment_id: %d""" % (treatment_id, experiment_id, deployment_id))
+
+    print("Scanning sysctl tree for modified factors...")
+
+    kExperimentFactorFlag = 0x00100000
+    
+    formats = {
+            "IU": gettype("unsigned int *"),
+            "I": gettype("int *"),
+            "LU": gettype("unsigned long *"),
+            "L": gettype("long *"),
+            "QU": gettype("uint64_t *"),
+            "Q": gettype("int64_t *")
+    }
+
+    for sysctl, depth, parentstr in IterateSysctls(kern.globals.sysctl__children):
+        if sysctl.oid_kind & kExperimentFactorFlag:
+            spec = cast(sysctl.oid_arg1, "struct experiment_spec *")
+            # Skip if arg2 isn't set to 1 (indicates an experiment factor created without an experiment_spec).
+            if sysctl.oid_arg2 == 1:
+                if spec.modified == 1:
+                    fmt = str(sysctl.oid_fmt)
+                    ptr = spec.ptr
+                    t = formats.get(fmt, None)
+                    if t:
+                        value = cast(ptr, t)
+                    else:
+                        # Unknown type
+                        continue
+                    name = str(parentstr) + "." + str(sysctl.oid_name)
+                    print("%s = %d (Default value is %d)" % (name, dereference(value), spec.original_value))
 
 from memory import *
 from process import *
@@ -1240,3 +1303,4 @@ from ulock import *
 from ntstat import *
 from zonetriage import *
 from sysreg import *
+from counter import *

@@ -103,16 +103,11 @@ struct msgmap           *msgmaps;       /* MSGSEG msgmap structures */
 struct msg              *msghdrs;       /* MSGTQL msg headers */
 struct msqid_kernel     *msqids;        /* MSGMNI msqid_kernel structs (wrapping user_msqid_ds structs) */
 
-static lck_grp_t       *sysv_msg_subsys_lck_grp;
-static lck_grp_attr_t  *sysv_msg_subsys_lck_grp_attr;
-static lck_attr_t      *sysv_msg_subsys_lck_attr;
-static lck_mtx_t        sysv_msg_subsys_mutex;
+static LCK_GRP_DECLARE(sysv_msg_subsys_lck_grp, "sysv_msg_subsys_lock");
+static LCK_MTX_DECLARE(sysv_msg_subsys_mutex, &sysv_msg_subsys_lck_grp);
 
 #define SYSV_MSG_SUBSYS_LOCK() lck_mtx_lock(&sysv_msg_subsys_mutex)
 #define SYSV_MSG_SUBSYS_UNLOCK() lck_mtx_unlock(&sysv_msg_subsys_mutex)
-
-void sysv_msg_lock_init(void);
-
 
 #ifdef __APPLE_API_PRIVATE
 int     msgmax,                 /* max chars in a message */
@@ -130,18 +125,6 @@ struct msginfo msginfo = {
 	.msgseg = MSGSEG                /* = 2048 : number of message segments */
 };
 #endif /* __APPLE_API_PRIVATE */
-
-/* Initialize the mutex governing access to the SysV msg subsystem */
-__private_extern__ void
-sysv_msg_lock_init( void )
-{
-	sysv_msg_subsys_lck_grp_attr = lck_grp_attr_alloc_init();
-
-	sysv_msg_subsys_lck_grp = lck_grp_alloc_init("sysv_msg_subsys_lock", sysv_msg_subsys_lck_grp_attr);
-
-	sysv_msg_subsys_lck_attr = lck_attr_alloc_init();
-	lck_mtx_init(&sysv_msg_subsys_mutex, sysv_msg_subsys_lck_grp, sysv_msg_subsys_lck_attr);
-}
 
 static __inline__ user_time_t
 sysv_msgtime(void)
@@ -252,30 +235,27 @@ msginit(__unused void *dummy)
 	 * if this fails, fail safely and leave it uninitialized (related
 	 * system calls will fail).
 	 */
-	msgpool = (char *)_MALLOC(msginfo.msgmax, M_SHM, M_WAITOK);
+	msgpool = kheap_alloc(KHEAP_DATA_BUFFERS, msginfo.msgmax, Z_WAITOK);
 	if (msgpool == NULL) {
 		printf("msginit: can't allocate msgpool");
 		goto bad;
 	}
-	MALLOC(msgmaps, struct msgmap *,
-	    sizeof(struct msgmap) * msginfo.msgseg,
-	    M_SHM, M_WAITOK);
+	msgmaps = kheap_alloc(KM_SHM, sizeof(struct msgmap) * msginfo.msgseg,
+	    Z_WAITOK);
 	if (msgmaps == NULL) {
 		printf("msginit: can't allocate msgmaps");
 		goto bad;
 	}
 
-	MALLOC(msghdrs, struct msg *,
-	    sizeof(struct msg) * msginfo.msgtql,
-	    M_SHM, M_WAITOK);
+	msghdrs = kheap_alloc(KM_SHM, sizeof(struct msg) * msginfo.msgtql,
+	    Z_WAITOK);
 	if (msghdrs == NULL) {
 		printf("msginit: can't allocate msghdrs");
 		goto bad;
 	}
 
-	MALLOC(msqids, struct msqid_kernel *,
-	    sizeof(struct msqid_kernel) * msginfo.msgmni,
-	    M_SHM, M_WAITOK);
+	msqids = kheap_alloc(KM_SHM,
+	    sizeof(struct msqid_kernel) * msginfo.msgmni, Z_WAITOK);
 	if (msqids == NULL) {
 		printf("msginit: can't allocate msqids");
 		goto bad;
@@ -319,18 +299,14 @@ msginit(__unused void *dummy)
 	initted = 1;
 bad:
 	if (!initted) {
-		if (msgpool != NULL) {
-			_FREE(msgpool, M_SHM);
-		}
-		if (msgmaps != NULL) {
-			FREE(msgmaps, M_SHM);
-		}
-		if (msghdrs != NULL) {
-			FREE(msghdrs, M_SHM);
-		}
-		if (msqids != NULL) {
-			FREE(msqids, M_SHM);
-		}
+		kheap_free(KHEAP_DATA_BUFFERS, msgpool,
+		    sizeof(struct msgmap) * msginfo.msgseg);
+		kheap_free(KM_SHM, msgmaps,
+		    sizeof(struct msgmap) * msginfo.msgseg);
+		kheap_free(KM_SHM, msghdrs,
+		    sizeof(struct msg) * msginfo.msgtql);
+		kheap_free(KM_SHM, msqids,
+		    sizeof(struct msqid_kernel) * msginfo.msgmni);
 	}
 	return initted;
 }
@@ -1467,12 +1443,11 @@ msgrcv_nocancel(struct proc *p, struct msgrcv_nocancel_args *uap, user_ssize_t *
 	for (len = 0; len < msgsz; len += msginfo.msgssz) {
 		size_t tlen;
 
-		/* compare input (size_t) value against restrict (int) value */
-		if (msgsz > (size_t)msginfo.msgssz) {
-			tlen = msginfo.msgssz;
-		} else {
-			tlen = msgsz;
-		}
+		/*
+		 * copy the full segment, or less if we're at the end
+		 * of the message
+		 */
+		tlen = MIN(msgsz - len, (size_t)msginfo.msgssz);
 		if (next <= -1) {
 			panic("next too low #3");
 		}

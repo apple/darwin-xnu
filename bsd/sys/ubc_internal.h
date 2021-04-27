@@ -109,7 +109,7 @@ struct cs_blob {
 	off_t           csb_end_offset;         /* Blob coverage area end, from csb_base_offset */
 	vm_size_t       csb_mem_size;
 	vm_offset_t     csb_mem_offset;
-	vm_address_t    csb_mem_kaddr;
+	void            * XNU_PTRAUTH_SIGNED_PTR("cs_blob.csb_mem_kaddr") csb_mem_kaddr;
 	unsigned char   csb_cdhash[CS_CDHASH_LEN];
 	ptrauth_generic_signature_t csb_cdhash_signature;
 	const struct cs_hash  *csb_hashtype;
@@ -125,6 +125,7 @@ struct cs_blob {
 	char            * XNU_PTRAUTH_SIGNED_PTR("cs_blob.csb_supplement_teamid") csb_supplement_teamid;
 #endif
 	const CS_GenericBlob * XNU_PTRAUTH_SIGNED_PTR("cs_blob.csb_entitlements_blob") csb_entitlements_blob;    /* raw blob, subrange of csb_mem_kaddr */
+	ptrauth_generic_signature_t csb_entitlements_blob_signature;
 	void *          XNU_PTRAUTH_SIGNED_PTR("cs_blob.csb_entitlements") csb_entitlements;       /* The entitlements as an OSDictionary */
 	unsigned int    csb_signer_type;
 	unsigned int    csb_reconstituted;      /* signature has potentially been modified after validation */

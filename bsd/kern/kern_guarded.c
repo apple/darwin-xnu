@@ -1006,8 +1006,8 @@ free_vgo(struct vng_owner *vgo)
 }
 
 static int label_slot;
-static lck_rw_t llock;
-static lck_grp_t *llock_grp;
+static LCK_GRP_DECLARE(llock_grp, VNG_POLICY_NAME);
+static LCK_RW_DECLARE(llock, &llock_grp);
 
 static __inline void *
 vng_lbl_get(struct label *label)
@@ -1413,7 +1413,9 @@ vng_guard_violation(const struct vng_info *vgi,
 		if (vng_policy_flags & kVNG_POLICY_EXC_CORPSE) {
 			char *path;
 			int len = MAXPATHLEN;
-			MALLOC(path, char *, len, M_TEMP, M_WAITOK);
+
+			path = zalloc(ZV_NAMEI);
+
 			os_reason_t r = NULL;
 			if (NULL != path) {
 				vn_getpath(vp, path, &len);
@@ -1425,9 +1427,8 @@ vng_guard_violation(const struct vng_info *vgi,
 			if (NULL != r) {
 				os_reason_free(r);
 			}
-			if (NULL != path) {
-				FREE(path, M_TEMP);
-			}
+
+			zfree(ZV_NAMEI, path);
 		} else {
 			thread_t t = current_thread();
 			thread_guard_violation(t, code, subcode, TRUE);
@@ -1623,13 +1624,6 @@ vng_vnode_check_open(kauth_cred_t cred,
  * Configuration gorp
  */
 
-static void
-vng_init(struct mac_policy_conf *mpc)
-{
-	llock_grp = lck_grp_alloc_init(mpc->mpc_name, LCK_GRP_ATTR_NULL);
-	lck_rw_init(&llock, llock_grp, LCK_ATTR_NULL);
-}
-
 SECURITY_READ_ONLY_EARLY(static struct mac_policy_ops) vng_policy_ops = {
 	.mpo_file_label_destroy = vng_file_label_destroy,
 
@@ -1642,7 +1636,6 @@ SECURITY_READ_ONLY_EARLY(static struct mac_policy_ops) vng_policy_ops = {
 	.mpo_vnode_check_open = vng_vnode_check_open,
 
 	.mpo_policy_syscall = vng_policy_syscall,
-	.mpo_policy_init = vng_init,
 };
 
 static const char *vng_labelnames[] = {

@@ -121,7 +121,7 @@ common_hook(void)
 	return rv;
 }
 
-#if (MAC_POLICY_OPS_VERSION != 69)
+#if (MAC_POLICY_OPS_VERSION != 74)
 # error "struct mac_policy_ops doesn't match definition in mac_policy.h"
 #endif
 /*
@@ -238,9 +238,9 @@ const static struct mac_policy_ops policy_ops = {
 	CHECK_SET_HOOK(mount_label_init)
 	CHECK_SET_HOOK(mount_label_internalize)
 
-	.mpo_reserved38 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved39 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved40 = (mpo_reserved_hook_t *)common_hook,
+	CHECK_SET_HOOK(proc_check_expose_task_with_flavor)
+	CHECK_SET_HOOK(proc_check_get_task_with_flavor)
+	CHECK_SET_HOOK(proc_check_task_id_token_get_task)
 
 	CHECK_SET_HOOK(pipe_check_ioctl)
 	CHECK_SET_HOOK(pipe_check_kqfilter)
@@ -339,8 +339,8 @@ const static struct mac_policy_ops policy_ops = {
 	CHECK_SET_HOOK(socket_check_setsockopt)
 	CHECK_SET_HOOK(socket_check_getsockopt)
 
-	.mpo_reserved50 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved51 = (mpo_reserved_hook_t *)common_hook,
+	CHECK_SET_HOOK(proc_check_get_movable_control_port)
+	CHECK_SET_HOOK(proc_check_dyld_process_info_notify_register)
 	.mpo_reserved52 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved53 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved54 = (mpo_reserved_hook_t *)common_hook,
@@ -351,7 +351,8 @@ const static struct mac_policy_ops policy_ops = {
 	.mpo_reserved59 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved60 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved61 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved62 = (mpo_reserved_hook_t *)common_hook,
+
+	CHECK_SET_HOOK(iokit_check_open_service)
 
 	CHECK_SET_HOOK(system_check_acct)
 	CHECK_SET_HOOK(system_check_audit)

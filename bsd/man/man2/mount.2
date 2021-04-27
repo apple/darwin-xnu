@@ -208,6 +208,8 @@ may fail with one of the following errors:
 The caller is not the super-user, and the
 .Nm mount()
 was not done by the user.
+.It Bq Er EPERM
+A system policy denied the operation.
 .It Bq Er ENOTDIR
 A component of the path is not a directory.
 .It Bq Er EINVAL

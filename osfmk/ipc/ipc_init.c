@@ -110,7 +110,7 @@
 
 #include <mach/machine/ndr_def.h>   /* NDR_record */
 
-#define IPC_KERNEL_MAP_SIZE      (1024 * 1024)
+#define IPC_KERNEL_MAP_SIZE      (CONFIG_IPC_KERNEL_MAP_SIZE * 1024 * 1024)
 SECURITY_READ_ONLY_LATE(vm_map_t) ipc_kernel_map;
 
 /* values to limit physical copy out-of-line memory descriptors */
@@ -124,6 +124,19 @@ const vm_size_t ipc_kmsg_max_vm_space = ((IPC_KERNEL_COPY_MAP_SIZE * 7) / 8);
  */
 #define IPC_KMSG_MAX_SPACE (64 * 1024 * 1024) /* keep in sync with COPYSIZELIMIT_PANIC */
 const vm_size_t ipc_kmsg_max_body_space = ((IPC_KMSG_MAX_SPACE * 3) / 4 - MAX_TRAILER_SIZE);
+
+#if XNU_TARGET_OS_OSX
+#define IPC_CONTROL_PORT_OPTIONS_DEFAULT IPC_CONTROL_PORT_OPTIONS_NONE
+#else
+#define IPC_CONTROL_PORT_OPTIONS_DEFAULT (IPC_CONTROL_PORT_OPTIONS_IMMOVABLE_HARD | IPC_CONTROL_PORT_OPTIONS_PINNED_SOFT)
+#endif
+
+TUNABLE(ipc_control_port_options_t, ipc_control_port_options,
+    "ipc_control_port_options", IPC_CONTROL_PORT_OPTIONS_DEFAULT);
+
+SECURITY_READ_ONLY_LATE(bool) pinned_control_port_enabled;
+SECURITY_READ_ONLY_LATE(bool) immovable_control_port_enabled;
+
 
 LCK_GRP_DECLARE(ipc_lck_grp, "ipc");
 LCK_ATTR_DECLARE(ipc_lck_attr, 0, 0);
@@ -162,6 +175,15 @@ ipc_init(void)
 #if CONFIG_ARCADE
 	arcade_init();
 #endif
+
+	pinned_control_port_enabled    = !!(ipc_control_port_options & (IPC_CONTROL_PORT_OPTIONS_PINNED_SOFT | IPC_CONTROL_PORT_OPTIONS_PINNED_HARD));
+	immovable_control_port_enabled = !!(ipc_control_port_options & (IPC_CONTROL_PORT_OPTIONS_IMMOVABLE_SOFT | IPC_CONTROL_PORT_OPTIONS_IMMOVABLE_HARD));
+
+	if (pinned_control_port_enabled && !immovable_control_port_enabled) {
+		kprintf("Invalid ipc_control_port_options boot-arg: pinned control port cannot be enabled without immovability enforcement. Ignoring pinning boot-arg.");
+		pinned_control_port_enabled = false;
+		ipc_control_port_options &= ~(IPC_CONTROL_PORT_OPTIONS_PINNED_SOFT | IPC_CONTROL_PORT_OPTIONS_PINNED_HARD);
+	}
 
 	kr = kmem_suballoc(kernel_map, &min, IPC_KERNEL_MAP_SIZE,
 	    TRUE,

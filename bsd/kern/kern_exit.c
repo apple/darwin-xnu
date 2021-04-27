@@ -127,6 +127,7 @@
 #include <kern/assert.h>
 #include <kern/policy_internal.h>
 #include <kern/exc_guard.h>
+#include <kern/backtrace.h>
 
 #include <vm/vm_protos.h>
 #include <os/log.h>
@@ -935,8 +936,7 @@ exit_with_reason(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, 
 		os_reason_free(exit_reason);
 		if (current_proc() == p) {
 			if (p->exit_thread == self) {
-				printf("exit_thread failed to exit, leaving process %s[%d] in unkillable limbo\n",
-				    p->p_comm, p->p_pid);
+				panic("exit_thread failed to exit");
 			}
 
 			if (thread_can_terminate) {
@@ -1004,10 +1004,10 @@ exit_with_reason(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, 
 static void
 proc_memorystatus_remove(proc_t p)
 {
-	LCK_MTX_ASSERT(proc_list_mlock, LCK_MTX_ASSERT_OWNED);
+	LCK_MTX_ASSERT(&proc_list_mlock, LCK_MTX_ASSERT_OWNED);
 	while (memorystatus_remove(p) == EAGAIN) {
 		os_log(OS_LOG_DEFAULT, "memorystatus_remove: Process[%d] tried to exit while being frozen. Blocking exit until freeze completes.", p->p_pid);
-		msleep(&p->p_memstat_state, proc_list_mlock, PWAIT, "proc_memorystatus_remove", NULL);
+		msleep(&p->p_memstat_state, &proc_list_mlock, PWAIT, "proc_memorystatus_remove", NULL);
 	}
 }
 #endif
@@ -1068,6 +1068,58 @@ proc_prepareexit(proc_t p, int rv, boolean_t perf_notify)
 		/* Nobody handled EXC_CRASH?? remember to make corpse */
 		if (kr != 0) {
 			create_corpse = TRUE;
+		}
+
+		/*
+		 * Revalidate the code signing of the text pages around current PC.
+		 * This is an attempt to detect and repair faults due to memory
+		 * corruption of text pages.
+		 *
+		 * The goal here is to fixup infrequent memory corruptions due to
+		 * things like aging RAM bit flips. So the approach is to only expect
+		 * to have to fixup one thing per crash. This also limits the amount
+		 * of extra work we cause in case this is a development kernel with an
+		 * active memory stomp happening.
+		 */
+		task_t task = proc_task(p);
+		uintptr_t bt[2];
+		int bt_err;
+		bool user64;
+		bool was_truncated;
+		unsigned int frame_count = backtrace_user(bt, 2, &bt_err, &user64, &was_truncated);
+
+		if (bt_err == 0 && frame_count >= 1) {
+			/*
+			 * First check at the page containing the current PC.
+			 * This passes if the page code signs -or- if we can't figure out
+			 * what is at that address. The latter action is so we continue checking
+			 * previous pages which may be corrupt and caused a wild branch.
+			 */
+			kr = revalidate_text_page(task, bt[0]);
+
+			/* No corruption found, check the previous sequential page */
+			if (kr == KERN_SUCCESS) {
+				kr = revalidate_text_page(task, bt[0] - get_task_page_size(task));
+			}
+
+			/* Still no corruption found, check the current function's caller */
+			if (kr == KERN_SUCCESS) {
+				if (frame_count > 1 &&
+				    atop(bt[0]) != atop(bt[1]) &&           /* don't recheck PC page */
+				    atop(bt[0]) - 1 != atop(bt[1])) {       /* don't recheck page before */
+					kr = revalidate_text_page(task, (vm_map_offset_t)bt[1]);
+				}
+			}
+
+			/*
+			 * Log that we found a corruption.
+			 * TBD..figure out how to bubble this up to crash reporter too,
+			 * instead of just the log message.
+			 */
+			if (kr != KERN_SUCCESS) {
+				os_log(OS_LOG_DEFAULT,
+				    "Text page corruption detected in dying process %d\n", p->p_pid);
+			}
 		}
 	}
 
@@ -1389,7 +1441,7 @@ proc_exit(proc_t p)
 			}
 			/* check for sysctl zomb lookup */
 			while ((q->p_listflag & P_LIST_WAITING) == P_LIST_WAITING) {
-				msleep(&q->p_stat, proc_list_mlock, PWAIT, "waitcoll", 0);
+				msleep(&q->p_stat, &proc_list_mlock, PWAIT, "waitcoll", 0);
 			}
 			q->p_listflag |= P_LIST_WAITING;
 			/*
@@ -1630,7 +1682,7 @@ proc_exit(proc_t p)
 		    pid, exitval, 0, 0, 0);
 		/* check for sysctl zomb lookup */
 		while ((p->p_listflag & P_LIST_WAITING) == P_LIST_WAITING) {
-			msleep(&p->p_stat, proc_list_mlock, PWAIT, "waitcoll", 0);
+			msleep(&p->p_stat, &proc_list_mlock, PWAIT, "waitcoll", 0);
 		}
 		/* safe to use p as this is a system reap */
 		p->p_stat = SZOMB;
@@ -1843,13 +1895,14 @@ reap_child_locked(proc_t parent, proc_t child, int deadparent, int reparentedtoi
 		child->p_ucred = NOCRED;
 	}
 
-	lck_mtx_destroy(&child->p_mlock, proc_mlock_grp);
-	lck_mtx_destroy(&child->p_ucred_mlock, proc_ucred_mlock_grp);
-	lck_mtx_destroy(&child->p_fdmlock, proc_fdmlock_grp);
+	lck_mtx_destroy(&child->p_mlock, &proc_mlock_grp);
+	lck_mtx_destroy(&child->p_ucred_mlock, &proc_ucred_mlock_grp);
+	lck_mtx_destroy(&child->p_fdmlock, &proc_fdmlock_grp);
 #if CONFIG_DTRACE
-	lck_mtx_destroy(&child->p_dtrace_sprlock, proc_lck_grp);
+	lck_mtx_destroy(&child->p_dtrace_sprlock, &proc_lck_grp);
 #endif
-	lck_spin_destroy(&child->p_slock, proc_slock_grp);
+	lck_spin_destroy(&child->p_slock, &proc_slock_grp);
+	lck_rw_destroy(&child->p_dirs_lock, &proc_dirslock_grp);
 
 	zfree(proc_zone, child);
 	if ((locked == 1) && (droplock == 0)) {
@@ -1935,7 +1988,7 @@ loop1:
 			wait4_data->args = uap;
 			thread_set_pending_block_hint(current_thread(), kThreadWaitOnProcess);
 
-			(void)msleep(&p->p_stat, proc_list_mlock, PWAIT, "waitcoll", 0);
+			(void)msleep(&p->p_stat, &proc_list_mlock, PWAIT, "waitcoll", 0);
 			goto loop1;
 		}
 		p->p_listflag |= P_LIST_WAITING;   /* only allow single thread to wait() */
@@ -2080,7 +2133,7 @@ loop1:
 	wait4_data->retval = retval;
 
 	thread_set_pending_block_hint(current_thread(), kThreadWaitOnProcess);
-	if ((error = msleep0((caddr_t)q, proc_list_mlock, PWAIT | PCATCH | PDROP, "wait", 0, wait1continue))) {
+	if ((error = msleep0((caddr_t)q, &proc_list_mlock, PWAIT | PCATCH | PDROP, "wait", 0, wait1continue))) {
 		return error;
 	}
 
@@ -2199,7 +2252,7 @@ loop1:
 		 * the single return for waited process guarantee.
 		 */
 		if (p->p_listflag & P_LIST_WAITING) {
-			(void) msleep(&p->p_stat, proc_list_mlock,
+			(void) msleep(&p->p_stat, &proc_list_mlock,
 			    PWAIT, "waitidcoll", 0);
 			goto loop1;
 		}
@@ -2327,14 +2380,14 @@ loop1:
 			}
 			goto out;
 		}
-		ASSERT_LCK_MTX_OWNED(proc_list_mlock);
+		ASSERT_LCK_MTX_OWNED(&proc_list_mlock);
 
 		/* Not a process we are interested in; go on to next child */
 
 		p->p_listflag &= ~P_LIST_WAITING;
 		wakeup(&p->p_stat);
 	}
-	ASSERT_LCK_MTX_OWNED(proc_list_mlock);
+	ASSERT_LCK_MTX_OWNED(&proc_list_mlock);
 
 	/* No child processes that could possibly satisfy the request? */
 
@@ -2368,7 +2421,7 @@ loop1:
 	waitid_data->args = uap;
 	waitid_data->retval = retval;
 
-	if ((error = msleep0(q, proc_list_mlock,
+	if ((error = msleep0(q, &proc_list_mlock,
 	    PWAIT | PCATCH | PDROP, "waitid", 0, waitidcontinue)) != 0) {
 		return error;
 	}
@@ -2562,7 +2615,7 @@ vfork_exit_internal(proc_t p, int rv, int forceexit)
 			}
 			/* check for lookups by zomb sysctl */
 			while ((q->p_listflag & P_LIST_WAITING) == P_LIST_WAITING) {
-				msleep(&q->p_stat, proc_list_mlock, PWAIT, "waitcoll", 0);
+				msleep(&q->p_stat, &proc_list_mlock, PWAIT, "waitcoll", 0);
 			}
 			q->p_listflag |= P_LIST_WAITING;
 			/*
@@ -2725,8 +2778,9 @@ vfork_exit_internal(proc_t p, int rv, int forceexit)
 	zfree(proc_sigacts_zone, p->p_sigacts);
 	p->p_sigacts = NULL;
 
-	FREE(p->p_subsystem_root_path, M_SBUF);
-	p->p_subsystem_root_path = NULL;
+	if (p->p_subsystem_root_path) {
+		zfree(ZV_NAMEI, p->p_subsystem_root_path);
+	}
 
 	proc_limitdrop(p);
 
@@ -2775,7 +2829,7 @@ vfork_exit_internal(proc_t p, int rv, int forceexit)
 		proc_list_lock();
 		/* check for lookups by zomb sysctl */
 		while ((p->p_listflag & P_LIST_WAITING) == P_LIST_WAITING) {
-			msleep(&p->p_stat, proc_list_mlock, PWAIT, "waitcoll", 0);
+			msleep(&p->p_stat, &proc_list_mlock, PWAIT, "waitcoll", 0);
 		}
 		p->p_stat = SZOMB;
 		p->p_listflag |= P_LIST_WAITING;

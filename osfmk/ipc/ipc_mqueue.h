@@ -164,7 +164,7 @@ typedef struct ipc_mqueue {
 #define imq_is_valid(mq)        waitq_is_valid(&(mq)->imq_wait_queue)
 
 #define imq_unlock(mq)          waitq_unlock(&(mq)->imq_wait_queue)
-#define imq_held(mq)            waitq_held(&(mq)->imq_wait_queue)
+#define imq_held(mq)            assert(waitq_held(&(mq)->imq_wait_queue))
 #define imq_valid(mq)           waitq_valid(&(mq)->imq_wait_queue)
 
 extern void imq_lock(ipc_mqueue_t mq);

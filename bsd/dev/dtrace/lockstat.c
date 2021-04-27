@@ -122,8 +122,6 @@ lockstat_probe_t lockstat_probes[] =
 };
 
 dtrace_id_t lockstat_probemap[LS_NPROBES];
-void (*lockstat_probe)(dtrace_id_t, uint64_t, uint64_t,
-    uint64_t, uint64_t, uint64_t);
 
 static dtrace_provider_id_t lockstat_id;
 
@@ -247,9 +245,6 @@ lockstat_attach(dev_info_t *devi)
 		ddi_remove_minor_node(devi, NULL);
 		return DDI_FAILURE;
 	}
-
-	lockstat_probe = dtrace_probe;
-	membar_producer();
 
 	return DDI_SUCCESS;
 }

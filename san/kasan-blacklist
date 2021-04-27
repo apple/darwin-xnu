@@ -46,5 +46,4 @@ fun:_ZL18IOTrackingLeakScanPv
 # Exclude KASAN dependencies
 # XXX: could this be relaxed since fakestack is reentrant?
 src:./osfmk/kern/zalloc.c
-src:./osfmk/kern/zcache.c
 

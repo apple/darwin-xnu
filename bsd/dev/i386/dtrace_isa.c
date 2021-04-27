@@ -166,15 +166,6 @@ dtrace_xcall(processorid_t cpu, dtrace_xcall_t f, void *arg)
 }
 
 /*
- * Initialization
- */
-void
-dtrace_isa_init(void)
-{
-	return;
-}
-
-/*
  * Runtime and ABI
  */
 uint64_t

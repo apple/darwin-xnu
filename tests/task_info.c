@@ -13,6 +13,8 @@
 #include <sys/sysctl.h>
 #include <unistd.h>
 
+#include "test_utils.h"
+
 T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
 
 /* *************************************************************************************
@@ -51,7 +53,6 @@ void test_task_basic_info_32(void);
 void test_task_basic_info_64(void);
 void task_basic_info_32_debug(void);
 void task_basic2_info_32_warmup(void);
-static int is_development_kernel(void);
 void test_task_basic_info(enum info_kind kind);
 uint64_t info_get(enum info_kind kind, enum info_get get, void * data);
 
@@ -1143,29 +1144,4 @@ info_get(enum info_kind kind, enum info_get get, void * data)
 	}
 
 	__builtin_unreachable();
-}
-
-/*
- * Determines whether we're running on a development kernel
- */
-static int
-is_development_kernel(void)
-{
-#define NOTSET -1
-
-	static int is_dev = NOTSET;
-
-	if (is_dev == NOTSET) {
-		int dev;
-		size_t dev_size = sizeof(dev);
-
-		T_QUIET;
-		T_ASSERT_POSIX_SUCCESS(sysctlbyname("kern.development", &dev, &dev_size, NULL, 0), NULL);
-		is_dev = (dev != 0);
-
-		return is_dev;
-	} else {
-		return is_dev;
-	}
-#undef NOTSET
 }

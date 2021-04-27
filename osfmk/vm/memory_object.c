@@ -1462,16 +1462,7 @@ memory_object_iopl_request(
 		vm_object_reference(object);
 		named_entry_unlock(named_entry);
 	} else if (ip_kotype(port) == IKOT_MEM_OBJ_CONTROL) {
-		memory_object_control_t control;
-		control = (memory_object_control_t) port;
-		if (control == NULL) {
-			return KERN_INVALID_ARGUMENT;
-		}
-		object = memory_object_control_to_vm_object(control);
-		if (object == VM_OBJECT_NULL) {
-			return KERN_INVALID_ARGUMENT;
-		}
-		vm_object_reference(object);
+		panic("unexpected IKOT_MEM_OBJ_CONTROL: %p", port);
 	} else {
 		return KERN_INVALID_ARGUMENT;
 	}
@@ -1637,8 +1628,6 @@ host_default_memory_manager(
 	if (host_priv == HOST_PRIV_NULL) {
 		return KERN_INVALID_HOST;
 	}
-
-	assert(host_priv == &realhost);
 
 	new_manager = *default_manager;
 	lck_mtx_lock(&memory_manager_default_lock);
@@ -2006,43 +1995,26 @@ memory_object_is_shared_cache(
 	return object->object_is_shared_cache;
 }
 
-static ZONE_DECLARE(mem_obj_control_zone, "mem_obj_control",
-    sizeof(struct memory_object_control), ZC_NOENCRYPT);
-
 __private_extern__ memory_object_control_t
 memory_object_control_allocate(
 	vm_object_t             object)
 {
-	memory_object_control_t control;
-
-	control = (memory_object_control_t)zalloc(mem_obj_control_zone);
-	if (control != MEMORY_OBJECT_CONTROL_NULL) {
-		control->moc_object = object;
-		control->moc_ikot = IKOT_MEM_OBJ_CONTROL; /* fake ip_kotype */
-	}
-	return control;
+	return object;
 }
 
 __private_extern__ void
 memory_object_control_collapse(
-	memory_object_control_t control,
+	memory_object_control_t *control,
 	vm_object_t             object)
 {
-	assert((control->moc_object != VM_OBJECT_NULL) &&
-	    (control->moc_object != object));
-	control->moc_object = object;
+	*control = object;
 }
 
 __private_extern__ vm_object_t
 memory_object_control_to_vm_object(
 	memory_object_control_t control)
 {
-	if (control == MEMORY_OBJECT_CONTROL_NULL ||
-	    control->moc_ikot != IKOT_MEM_OBJ_CONTROL) {
-		return VM_OBJECT_NULL;
-	}
-
-	return control->moc_object;
+	return control;
 }
 
 __private_extern__ vm_object_t
@@ -2090,17 +2062,16 @@ memory_object_control_reference(
  */
 void
 memory_object_control_deallocate(
-	memory_object_control_t control)
+	__unused memory_object_control_t control)
 {
-	zfree(mem_obj_control_zone, control);
 }
 
 void
 memory_object_control_disable(
-	memory_object_control_t control)
+	memory_object_control_t *control)
 {
-	assert(control->moc_object != VM_OBJECT_NULL);
-	control->moc_object = VM_OBJECT_NULL;
+	assert(*control != VM_OBJECT_NULL);
+	*control = VM_OBJECT_NULL;
 }
 
 void

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2020 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2021 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -153,10 +153,8 @@ static u_int32_t        so_cache_time;
 static int              socketinit_done;
 static struct zone      *so_cache_zone;
 
-static lck_grp_t        *so_cache_mtx_grp;
-static lck_attr_t       *so_cache_mtx_attr;
-static lck_grp_attr_t   *so_cache_mtx_grp_attr;
-static lck_mtx_t        *so_cache_mtx;
+static LCK_GRP_DECLARE(so_cache_mtx_grp, "so_cache");
+static LCK_MTX_DECLARE(so_cache_mtx, &so_cache_mtx_grp);
 
 #include <machine/limits.h>
 
@@ -410,24 +408,6 @@ socketinit(void)
 	PE_parse_boot_argn("socket_debug", &socket_debug,
 	    sizeof(socket_debug));
 
-	/*
-	 * allocate lock group attribute and group for socket cache mutex
-	 */
-	so_cache_mtx_grp_attr = lck_grp_attr_alloc_init();
-	so_cache_mtx_grp = lck_grp_alloc_init("so_cache",
-	    so_cache_mtx_grp_attr);
-
-	/*
-	 * allocate the lock attribute for socket cache mutex
-	 */
-	so_cache_mtx_attr = lck_attr_alloc_init();
-
-	/* cached sockets mutex */
-	so_cache_mtx = lck_mtx_alloc_init(so_cache_mtx_grp, so_cache_mtx_attr);
-	if (so_cache_mtx == NULL) {
-		panic("%s: unable to allocate so_cache_mtx\n", __func__);
-		/* NOTREACHED */
-	}
 	STAILQ_INIT(&so_cache_head);
 
 	so_cache_zone_element_size = (vm_size_t)(sizeof(struct socket) + 4
@@ -442,7 +422,6 @@ socketinit(void)
 	soextbkidlestat.so_xbkidle_rcvhiwat = SO_IDLE_BK_IDLE_RCV_HIWAT;
 
 	in_pcbinit();
-	sflt_init();
 	socket_tclass_init();
 #if MULTIPATH
 	mp_pcbinit();
@@ -455,7 +434,7 @@ cached_sock_alloc(struct socket **so, zalloc_flags_t how)
 	caddr_t temp;
 	uintptr_t offset;
 
-	lck_mtx_lock(so_cache_mtx);
+	lck_mtx_lock(&so_cache_mtx);
 
 	if (!STAILQ_EMPTY(&so_cache_head)) {
 		VERIFY(cached_sock_count > 0);
@@ -465,14 +444,14 @@ cached_sock_alloc(struct socket **so, zalloc_flags_t how)
 		STAILQ_NEXT((*so), so_cache_ent) = NULL;
 
 		cached_sock_count--;
-		lck_mtx_unlock(so_cache_mtx);
+		lck_mtx_unlock(&so_cache_mtx);
 
 		temp = (*so)->so_saved_pcb;
 		bzero((caddr_t)*so, sizeof(struct socket));
 
 		(*so)->so_saved_pcb = temp;
 	} else {
-		lck_mtx_unlock(so_cache_mtx);
+		lck_mtx_unlock(&so_cache_mtx);
 
 		*so = zalloc_flags(so_cache_zone, how | Z_ZERO);
 
@@ -502,12 +481,12 @@ cached_sock_alloc(struct socket **so, zalloc_flags_t how)
 static void
 cached_sock_free(struct socket *so)
 {
-	lck_mtx_lock(so_cache_mtx);
+	lck_mtx_lock(&so_cache_mtx);
 
 	so_cache_time = net_uptime();
 	if (++cached_sock_count > max_cached_sock_count) {
 		--cached_sock_count;
-		lck_mtx_unlock(so_cache_mtx);
+		lck_mtx_unlock(&so_cache_mtx);
 		zfree(so_cache_zone, so);
 	} else {
 		if (so_cache_hw < cached_sock_count) {
@@ -517,7 +496,7 @@ cached_sock_free(struct socket *so)
 		STAILQ_INSERT_TAIL(&so_cache_head, so, so_cache_ent);
 
 		so->cache_timestamp = so_cache_time;
-		lck_mtx_unlock(so_cache_mtx);
+		lck_mtx_unlock(&so_cache_mtx);
 	}
 }
 
@@ -574,7 +553,7 @@ so_cache_timer(void)
 	int             n_freed = 0;
 	boolean_t rc = FALSE;
 
-	lck_mtx_lock(so_cache_mtx);
+	lck_mtx_lock(&so_cache_mtx);
 	so_cache_timeouts++;
 	so_cache_time = net_uptime();
 
@@ -602,7 +581,7 @@ so_cache_timer(void)
 		rc = TRUE;
 	}
 
-	lck_mtx_unlock(so_cache_mtx);
+	lck_mtx_unlock(&so_cache_mtx);
 	return rc;
 }
 
@@ -2510,9 +2489,7 @@ sosend(struct socket *so, struct sockaddr *addr, struct uio *uio,
 				if (error) {
 					if (error == EJUSTRETURN) {
 						error = 0;
-						clen = 0;
-						control = NULL;
-						top = NULL;
+						goto packet_consumed;
 					}
 					goto out_locked;
 				}
@@ -3056,6 +3033,20 @@ done:
 }
 
 /*
+ * When peeking SCM_RIGHTS, the actual file descriptors are not yet created
+ * so clear the data portion in order not to leak the file pointers
+ */
+static void
+sopeek_scm_rights(struct mbuf *rights)
+{
+	struct cmsghdr *cm = mtod(rights, struct cmsghdr *);
+
+	if (cm->cmsg_type == SCM_RIGHTS) {
+		memset(cm + 1, 0, cm->cmsg_len - sizeof(*cm));
+	}
+}
+
+/*
  * Process one or more MT_CONTROL mbufs present before any data mbufs
  * in the first mbuf chain on the socket buffer.  If MSG_PEEK, we
  * just copy the data; if !MSG_PEEK, we call into the protocol to
@@ -3103,6 +3094,9 @@ soreceive_ctl(struct socket *so, struct mbuf **controlp, int flags,
 					error = ENOBUFS;
 					goto done;
 				}
+
+				sopeek_scm_rights(*controlp);
+
 				controlp = &(*controlp)->m_next;
 			}
 			m = m->m_next;
@@ -3679,6 +3673,11 @@ dontblock:
 				break;
 			}
 		} else if (type == MT_OOBDATA) {
+			break;
+		}
+
+		if (m->m_type != MT_OOBDATA && m->m_type != MT_DATA &&
+		    m->m_type != MT_HEADER) {
 			break;
 		}
 		/*
@@ -8009,10 +8008,6 @@ socket_post_kev_msg_closed(struct socket *so)
 			    &ev.ev_data, sizeof(ev));
 		}
 	}
-	if (socksa != NULL) {
-		FREE(socksa, M_SONAME);
-	}
-	if (peersa != NULL) {
-		FREE(peersa, M_SONAME);
-	}
+	FREE(socksa, M_SONAME);
+	FREE(peersa, M_SONAME);
 }

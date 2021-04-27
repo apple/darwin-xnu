@@ -3275,6 +3275,41 @@ pmap_lookup_in_static_trust_cache(const uint8_t __unused cdhash[20])
 	return false;
 }
 
+SIMPLE_LOCK_DECLARE(pmap_compilation_service_cdhash_lock, 0);
+uint8_t pmap_compilation_service_cdhash[CS_CDHASH_LEN] = { 0 };
+
+void
+pmap_set_compilation_service_cdhash(const uint8_t cdhash[CS_CDHASH_LEN])
+{
+	simple_lock(&pmap_compilation_service_cdhash_lock, LCK_GRP_NULL);
+	memcpy(pmap_compilation_service_cdhash, cdhash, CS_CDHASH_LEN);
+	simple_unlock(&pmap_compilation_service_cdhash_lock);
+
+#if DEVELOPMENT || DEBUG
+	printf("Added Compilation Service CDHash through the PMAP: 0x%02X 0x%02X 0x%02X 0x%02X\n", cdhash[0], cdhash[1], cdhash[2], cdhash[4]);
+#endif
+}
+
+bool
+pmap_match_compilation_service_cdhash(const uint8_t cdhash[CS_CDHASH_LEN])
+{
+	bool match = false;
+
+	simple_lock(&pmap_compilation_service_cdhash_lock, LCK_GRP_NULL);
+	if (bcmp(pmap_compilation_service_cdhash, cdhash, CS_CDHASH_LEN) == 0) {
+		match = true;
+	}
+	simple_unlock(&pmap_compilation_service_cdhash_lock);
+
+#if DEVELOPMENT || DEBUG
+	if (match) {
+		printf("Matched Compilation Service CDHash through the PMAP\n");
+	}
+#endif
+
+	return match;
+}
+
 bool
 pmap_in_ppl(void)
 {
@@ -3307,3 +3342,26 @@ pmap_free_reserved_ppl_page(void __unused *kva)
 {
 	// Unsupported on this architecture.
 }
+
+#if DEVELOPMENT || DEBUG
+/*
+ * Used for unit testing recovery from text corruptions.
+ */
+kern_return_t
+pmap_test_text_corruption(pmap_paddr_t pa)
+{
+	int pai;
+	uint8_t *va;
+
+	pai = ppn_to_pai(atop(pa));
+	if (!IS_MANAGED_PAGE(pai)) {
+		return KERN_FAILURE;
+	}
+
+	va = (uint8_t *)PHYSMAP_PTOV(pa);
+	va[0] = 0x0f; /* opcode for UD2 */
+	va[1] = 0x0b;
+
+	return KERN_SUCCESS;
+}
+#endif /* DEVELOPMENT || DEBUG */

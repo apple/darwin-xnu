@@ -569,7 +569,6 @@ _sysctl__machdep_children
 _sysctl__net_children
 _sysctl__sysctl_children
 _sysctl__vfs_children
-_sysctl__vfs_generic
 _sysctl__vfs_generic_children
 _sysctl__vm_children
 _sysctl_handle_int

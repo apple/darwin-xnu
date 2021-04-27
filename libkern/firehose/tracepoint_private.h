@@ -27,7 +27,11 @@
 #if KERNEL
 #include <atm/atm_internal.h>
 #endif
+#if __has_include(<os/atomic_private.h>)
 #include <os/atomic_private.h>
+#else
+#include <os/internal/internal_shared.h>
+#endif
 #include "firehose_types_private.h"
 
 OS_ASSUME_NONNULL_BEGIN

@@ -91,7 +91,7 @@ static boolean_t imageboot_setup_new(imageboot_type_t type);
 
 void *ubc_getobject_from_filename(const char *filename, struct vnode **vpp, off_t *file_size);
 
-extern lck_rw_t * rootvnode_rw_lock;
+extern lck_rw_t rootvnode_rw_lock;
 
 #define kIBFilePrefix "file://"
 
@@ -199,12 +199,12 @@ extern bool IOBaseSystemARVRootHashAvailable(void);
  * It will be mounted at mount_path.
  * The vfs_switch_root operation will be performed.
  * After the pivot, the outgoing root filesystem (the filesystem at root when
- * this function begins) will be at outgoing_root_path.  If `rooted_dmg` is true,
- * then ignore then chunklisted or authAPFS checks on this image
+ * this function begins) will be at outgoing_root_path.  If `skip_signature_check` is true,
+ * then ignore the chunklisted or authAPFS checks on this image
  */
 __private_extern__ int
 imageboot_pivot_image(const char *image_path, imageboot_type_t type, const char *mount_path,
-    const char *outgoing_root_path, const bool rooted_dmg)
+    const char *outgoing_root_path, const bool rooted_dmg, const bool skip_signature_check)
 {
 	int error;
 	boolean_t authenticated_dmg_chunklist = false;
@@ -324,8 +324,9 @@ imageboot_pivot_image(const char *image_path, imageboot_type_t type, const char 
 		/*
 		 * If we are using a custom rooted DMG, or if we have already authenticated
 		 * the DMG via chunklist, then it is permissible to use.
+		 * Or, if CSR_ALLOW_ANY_RECOVERY_OS is set on Development or Debug build variant.
 		 */
-		if (rooted_dmg || authenticated_dmg_chunklist) {
+		if (rooted_dmg || authenticated_dmg_chunklist || skip_signature_check) {
 			rootauth = 0;
 		}
 		error = rootauth;
@@ -505,7 +506,7 @@ imageboot_mount_image(const char *root_path, int height, imageboot_type_t type)
 	vnode_ref(newdp);
 	vnode_put(newdp);
 
-	lck_rw_lock_exclusive(rootvnode_rw_lock);
+	lck_rw_lock_exclusive(&rootvnode_rw_lock);
 	/* switch to the new rootvnode */
 	if (update_rootvnode) {
 		rootvnode = newdp;
@@ -518,7 +519,7 @@ imageboot_mount_image(const char *root_path, int height, imageboot_type_t type)
 	mount_unlock(new_rootfs);
 
 	filedesc0.fd_cdir = newdp;
-	lck_rw_unlock_exclusive(rootvnode_rw_lock);
+	lck_rw_unlock_exclusive(&rootvnode_rw_lock);
 
 	DBG_TRACE("%s: root switched\n", __FUNCTION__);
 
@@ -696,6 +697,9 @@ imgboot_get_image_file(const char *path, off_t *fsize, int *errp)
 	}
 
 	if (err) {
+		if (vp) {
+			vnode_put(vp);
+		}
 		*errp = err;
 		vp = NULL;
 	}
@@ -843,15 +847,15 @@ imageboot_mount_ramdisk(const char *path)
 #endif
 
 	/* ... and unmount everything */
-	vfs_unmountall();
+	vfs_unmountall(FALSE);
 
-	lck_rw_lock_exclusive(rootvnode_rw_lock);
+	lck_rw_lock_exclusive(&rootvnode_rw_lock);
 	filedesc0.fd_cdir = NULL;
 	tvp = rootvnode;
 	rootvnode = NULL;
 	rootvp = NULLVP;
 	rootdev = NODEV;
-	lck_rw_unlock_exclusive(rootvnode_rw_lock);
+	lck_rw_unlock_exclusive(&rootvnode_rw_lock);
 	vnode_get_and_drop_always(tvp);
 
 	/* Attach the ramfs image ... */
@@ -876,7 +880,7 @@ imageboot_mount_ramdisk(const char *path)
 	}
 	vnode_ref(newdp);
 
-	lck_rw_lock_exclusive(rootvnode_rw_lock);
+	lck_rw_lock_exclusive(&rootvnode_rw_lock);
 	rootvnode = newdp;
 	rootvnode->v_flag |= VROOT;
 	new_rootfs = rootvnode->v_mount;
@@ -887,7 +891,7 @@ imageboot_mount_ramdisk(const char *path)
 	set_fake_bootuuid(new_rootfs);
 
 	filedesc0.fd_cdir = newdp;
-	lck_rw_unlock_exclusive(rootvnode_rw_lock);
+	lck_rw_unlock_exclusive(&rootvnode_rw_lock);
 
 	vnode_put(newdp);
 

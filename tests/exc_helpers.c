@@ -106,13 +106,35 @@ catch_mach_exception_raise(
 }
 
 /**
+ * This has to be defined for linking purposes, but it's unused.
+ */
+kern_return_t
+catch_mach_exception_raise_state(
+	mach_port_t exception_port,
+	exception_type_t type,
+	exception_data_t codes,
+	mach_msg_type_number_t code_count,
+	int *flavor,
+	thread_state_t in_state,
+	mach_msg_type_number_t in_state_count,
+	thread_state_t out_state,
+	mach_msg_type_number_t *out_state_count)
+{
+#pragma unused(exception_port, type, codes, code_count, flavor, in_state, in_state_count, out_state, out_state_count)
+	T_FAIL("Triggered catch_mach_exception_raise_state() which shouldn't happen...");
+	__builtin_unreachable();
+}
+
+/**
  * Called by mach_exc_server() to handle the exception. This will call the
  * test's exception-handler callback and will then modify
  * the thread state to move to the next instruction.
  */
 kern_return_t
-catch_mach_exception_raise_state(
+catch_mach_exception_raise_state_identity(
 	mach_port_t exception_port __unused,
+	mach_port_t thread,
+	mach_port_t task,
 	exception_type_t type,
 	exception_data_t codes,
 	mach_msg_type_number_t code_count,
@@ -138,7 +160,7 @@ catch_mach_exception_raise_state(
 	T_ASSERT_EQ(*flavor, EXCEPTION_THREAD_STATE, "The thread state flavor is EXCEPTION_THREAD_STATE");
 	T_ASSERT_EQ(in_state_count, EXCEPTION_THREAD_STATE_COUNT, "The thread state count is EXCEPTION_THREAD_STATE_COUNT");
 
-	size_t advance_pc = exc_handler_callback(type, codes_64);
+	size_t advance_pc = exc_handler_callback(task, thread, type, codes_64);
 
 	/**
 	 * Increment the PC by the requested amount so the thread doesn't cause
@@ -155,34 +177,13 @@ catch_mach_exception_raise_state(
 	pc = ptrauth_sign_unauthenticated(pc, ptrauth_key_function_pointer, 0);
 	arm_thread_state64_set_pc_fptr(*state, pc);
 #else
+	(void)advance_pc;
 	T_FAIL("catch_mach_exception_raise_state() not fully implemented on this architecture");
 	__builtin_unreachable();
 #endif
 
 	/* Return KERN_SUCCESS to tell the kernel to keep running the victim thread. */
 	return KERN_SUCCESS;
-}
-
-/**
- * This has to be defined for linking purposes, but it's unused.
- */
-kern_return_t
-catch_mach_exception_raise_state_identity(
-	mach_port_t exception_port,
-	mach_port_t thread,
-	mach_port_t task,
-	exception_type_t type,
-	exception_data_t codes,
-	mach_msg_type_number_t code_count,
-	int *flavor,
-	thread_state_t in_state,
-	mach_msg_type_number_t in_state_count,
-	thread_state_t out_state,
-	mach_msg_type_number_t *out_state_count)
-{
-#pragma unused(exception_port, thread, task, type, codes, code_count, flavor, in_state, in_state_count, out_state, out_state_count)
-	T_FAIL("Triggered catch_mach_exception_raise_state_identity() which shouldn't happen...");
-	__builtin_unreachable();
 }
 
 mach_port_t
@@ -209,7 +210,7 @@ create_exception_port(exception_mask_t exception_mask)
 		thread,
 		exception_mask,
 		exc_port,
-		(exception_behavior_t)(EXCEPTION_STATE | MACH_EXCEPTION_CODES),
+		(exception_behavior_t)(EXCEPTION_STATE_IDENTITY | MACH_EXCEPTION_CODES),
 		EXCEPTION_THREAD_STATE);
 	T_ASSERT_MACH_SUCCESS(kr, "Set the exception port to my custom handler");
 

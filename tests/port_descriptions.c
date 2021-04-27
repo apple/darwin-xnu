@@ -76,10 +76,11 @@ T_DECL(host_special_port_descriptions,
 	TEST_HSP(HOST_SYSPOLICYD_PORT);
 	TEST_HSP(HOST_FILECOORDINATIOND_PORT);
 	TEST_HSP(HOST_FAIRPLAYD_PORT);
+	TEST_HSP(HOST_IOCOMPRESSIONSTATS_PORT);
 
 #undef TEST_HSP
 
-	T_EXPECT_EQ(HOST_FAIRPLAYD_PORT, HOST_MAX_SPECIAL_PORT,
+	T_EXPECT_EQ(HOST_IOCOMPRESSIONSTATS_PORT, HOST_MAX_SPECIAL_PORT,
 	    "checked all of the ports");
 
 	const char *invalid_hsp =
@@ -96,6 +97,8 @@ T_DECL(task_special_port_descriptions,
 	        portdef, #portdef)
 
 	TEST_TSP(TASK_KERNEL_PORT);
+	TEST_TSP(TASK_READ_PORT);
+	TEST_TSP(TASK_INSPECT_PORT);
 	TEST_TSP(TASK_HOST_PORT);
 	TEST_TSP(TASK_NAME_PORT);
 	TEST_TSP(TASK_BOOTSTRAP_PORT);
@@ -113,6 +116,28 @@ T_DECL(task_special_port_descriptions,
 	    mach_task_special_port_description(TASK_MAX_SPECIAL_PORT + 1);
 	T_EXPECT_NULL(invalid_tsp,
 	    "invalid task special port description should be NULL");
+}
+
+T_DECL(thread_special_port_descriptions,
+    "verify that thread special ports can be described")
+{
+#define TEST_TSP(portdef) \
+	        expect_special_port_description(mach_thread_special_port_description, \
+	        portdef, #portdef)
+
+	TEST_TSP(THREAD_KERNEL_PORT);
+	TEST_TSP(THREAD_READ_PORT);
+	TEST_TSP(THREAD_INSPECT_PORT);
+
+#undef TEST_TSP
+
+	T_EXPECT_EQ(THREAD_READ_PORT, THREAD_MAX_SPECIAL_PORT,
+	    "checked all of the ports");
+
+	const char *invalid_tsp =
+	    mach_thread_special_port_description(THREAD_MAX_SPECIAL_PORT + 1);
+	T_EXPECT_NULL(invalid_tsp,
+	    "invalid thread special port description should be NULL");
 }
 
 static void
@@ -172,6 +197,8 @@ T_DECL(task_special_port_mapping,
 	        portdef, #portdef)
 
 	TEST_TSP(TASK_KERNEL_PORT);
+	TEST_TSP(TASK_READ_PORT);
+	TEST_TSP(TASK_INSPECT_PORT);
 	TEST_TSP(TASK_HOST_PORT);
 	TEST_TSP(TASK_NAME_PORT);
 	TEST_TSP(TASK_BOOTSTRAP_PORT);
@@ -185,4 +212,22 @@ T_DECL(task_special_port_mapping,
 	int invalid_tsp = mach_task_special_port_for_id("BOGUS_SPECIAL_PORT_NAME");
 	T_EXPECT_EQ(invalid_tsp, -1,
 	    "invalid task special port IDs should return -1");
+}
+
+T_DECL(thread_special_port_mapping,
+    "verify that thread special port names can be mapped to numbers")
+{
+#define TEST_TSP(portdef) \
+	        expect_special_port_id(mach_thread_special_port_for_id, \
+	        portdef, #portdef)
+
+	TEST_TSP(THREAD_KERNEL_PORT);
+	TEST_TSP(THREAD_READ_PORT);
+	TEST_TSP(THREAD_INSPECT_PORT);
+
+#undef TEST_TSP
+
+	int invalid_tsp = mach_thread_special_port_for_id("BOGUS_SPECIAL_PORT_NAME");
+	T_EXPECT_EQ(invalid_tsp, -1,
+	    "invalid thread special port IDs should return -1");
 }

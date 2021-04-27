@@ -49,6 +49,7 @@
 #include <IOKit/IOCFUnserialize.h>
 #endif
 
+#if CONFIG_USER_NOTIFICATION
 /*
  * DEFINES AND STRUCTURES
  */
@@ -409,6 +410,7 @@ convert_port_to_UNDReply(
 	}
 	return UND_REPLY_NULL;
 }
+#endif
 
 /*
  *      User interface for setting the host UserNotification Daemon port.
@@ -419,7 +421,12 @@ host_set_UNDServer(
 	host_priv_t     host_priv,
 	UNDServerRef    server)
 {
+#if CONFIG_USER_NOTIFICATION
 	return host_set_user_notification_port(host_priv, server);
+#else
+#pragma unused(host_priv, server)
+	return KERN_NOT_SUPPORTED;
+#endif
 }
 
 /*
@@ -431,5 +438,10 @@ host_get_UNDServer(
 	host_priv_t     host_priv,
 	UNDServerRef    *serverp)
 {
+#if CONFIG_USER_NOTIFICATION
 	return host_get_user_notification_port(host_priv, serverp);
+#else
+#pragma unused(host_priv, serverp)
+	return KERN_NOT_SUPPORTED;
+#endif
 }

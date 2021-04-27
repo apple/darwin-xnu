@@ -100,6 +100,10 @@ struct ifclassq;
 enum cqdq_op;
 enum cqrq;
 
+#if DEBUG || DEVELOPMENT
+extern uint32_t ifclassq_flow_control_adv;
+#endif /* DEBUG || DEVELOPMENT */
+
 typedef int (*ifclassq_enq_func)(struct ifclassq *, classq_pkt_t *,
     boolean_t *);
 typedef void  (*ifclassq_deq_func)(struct ifclassq *, classq_pkt_t *);

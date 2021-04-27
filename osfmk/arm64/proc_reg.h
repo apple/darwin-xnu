@@ -1378,6 +1378,8 @@
 #define ARM_PTE_NX                 0x0040000000000000ULL /* value for no execute bit */
 #define ARM_PTE_NXMASK             0x0040000000000000ULL /* no execute mask */
 
+#define ARM_PTE_XMASK              (ARM_PTE_PNXMASK | ARM_PTE_NXMASK)
+
 #define ARM_PTE_WIRED              0x0400000000000000ULL /* value for software wired bit */
 #define ARM_PTE_WIRED_MASK         0x0400000000000000ULL /* software wired mask */
 
@@ -2055,6 +2057,19 @@ b.ne 1f
  */
 .macro EXEC_END
 1:
+.endmacro
+
+/*
+ * Wedges CPUs with a specified core that are below a specified revision.  This
+ * macro is intended for CPUs that have been deprecated in iBoot and may have
+ * incorrect behavior if they continue running xnu.
+ */
+.macro DEPRECATE_COREEQ_REVLO   core, rev, midr_el1, scratch
+EXEC_COREEQ_REVLO \core, \rev, \midr_el1, \scratch
+/* BEGIN IGNORE CODESTYLE */
+b .
+/* END IGNORE CODESTYLE */
+EXEC_END
 .endmacro
 
 /*

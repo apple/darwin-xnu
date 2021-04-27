@@ -336,6 +336,11 @@ extern void ttyhold(struct tty *tp);
 
 #define PTS_MAJOR 4
 #define PTC_MAJOR 5
+/*
+ * If you need accounting consider using
+ * KALLOC_HEAP_DEFINE to define a view.
+ */
+#define KM_TTYS     KHEAP_DEFAULT
 #endif /* defined(XNU_KERNEL_PRIVATE) */
 
 __END_DECLS

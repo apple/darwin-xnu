@@ -88,7 +88,7 @@ typedef struct {
 
 
 extern const mach_trap_t	mach_trap_table[];
-extern int			mach_trap_count;
+extern const int			mach_trap_count;
 
 #if CONFIG_REQUIRES_U32_MUNGING || (__arm__ && (__BIGGEST_ALIGNMENT__ > 4))
 

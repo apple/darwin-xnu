@@ -212,8 +212,8 @@ extern struct flowq *fq_if_hash_pkt(fq_if_t *, u_int32_t, mbuf_svc_class_t,
 extern boolean_t fq_if_at_drop_limit(fq_if_t *);
 extern void fq_if_drop_packet(fq_if_t *);
 extern void fq_if_is_flow_heavy(fq_if_t *, struct flowq *);
-extern boolean_t fq_if_add_fcentry(fq_if_t *, pktsched_pkt_t *, uint32_t,
-    uint8_t, fq_if_classq_t *);
+extern boolean_t fq_if_add_fcentry(fq_if_t *, pktsched_pkt_t *, uint8_t,
+    struct flowq *, fq_if_classq_t *);
 extern void fq_if_flow_feedback(fq_if_t *, struct flowq *, fq_if_classq_t *);
 extern int fq_if_setup_ifclassq(struct ifclassq *ifq, u_int32_t flags,
     classq_pkt_type_t ptype);
@@ -221,7 +221,7 @@ extern void fq_if_teardown_ifclassq(struct ifclassq *ifq);
 extern int fq_if_getqstats_ifclassq(struct ifclassq *ifq, u_int32_t qid,
     struct if_ifclassq_stats *ifqs);
 extern void fq_if_destroy_flow(fq_if_t *, fq_if_classq_t *,
-    struct flowq *);
+    struct flowq *, bool);
 
 
 #endif /* BSD_KERNEL_PRIVATE */

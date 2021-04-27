@@ -109,7 +109,6 @@ __END_DECLS
 
 #ifdef  MACH_KERNEL_PRIVATE
 
-#include <task_swapper.h>
 #include <mach_assert.h>
 
 #include <vm/vm_object.h>
@@ -467,9 +466,9 @@ struct _vm_map {
 	vm_map_size_t           size;           /* virtual size */
 	vm_map_size_t           user_wire_limit;/* rlimit on user locked memory */
 	vm_map_size_t           user_wire_size; /* current size of user locked memory in this map */
-#if !CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX
 	vm_map_offset_t         vmmap_high_start;
-#endif
+#endif /* XNU_TARGET_OS_OSX */
 
 	union {
 		/*
@@ -504,31 +503,27 @@ struct _vm_map {
 #define first_free              f_s._first_free
 #define holes_list              f_s._holes
 
-	struct os_refcnt        map_refcnt;     /* Reference count */
-
-#if     TASK_SWAPPER
-	int                     res_count;      /* Residence count (swap) */
-	int                     sw_state;       /* Swap state */
-#endif  /* TASK_SWAPPER */
+	struct os_refcnt        map_refcnt;       /* Reference count */
 
 	unsigned int
 	/* boolean_t */ wait_for_space:1,         /* Should callers wait for space? */
-	/* boolean_t */ wiring_required:1,         /* All memory wired? */
-	/* boolean_t */ no_zero_fill:1,         /*No zero fill absent pages */
-	/* boolean_t */ mapped_in_other_pmaps:1,         /*has this submap been mapped in maps that use a different pmap */
-	/* boolean_t */ switch_protect:1,         /*  Protect map from write faults while switched */
-	/* boolean_t */ disable_vmentry_reuse:1,         /*  All vm entries should keep using newer and higher addresses in the map */
-	/* boolean_t */ map_disallow_data_exec:1,         /* Disallow execution from data pages on exec-permissive architectures */
+	/* boolean_t */ wiring_required:1,        /* All memory wired? */
+	/* boolean_t */ no_zero_fill:1,           /* No zero fill absent pages */
+	/* boolean_t */ mapped_in_other_pmaps:1,  /* has this submap been mapped in maps that use a different pmap */
+	/* boolean_t */ switch_protect:1,         /* Protect map from write faults while switched */
+	/* boolean_t */ disable_vmentry_reuse:1,  /* All vm entries should keep using newer and higher addresses in the map */
+	/* boolean_t */ map_disallow_data_exec:1, /* Disallow execution from data pages on exec-permissive architectures */
 	/* boolean_t */ holelistenabled:1,
 	/* boolean_t */ is_nested_map:1,
-	/* boolean_t */ map_disallow_new_exec:1,         /* Disallow new executable code */
+	/* boolean_t */ map_disallow_new_exec:1, /* Disallow new executable code */
 	/* boolean_t */ jit_entry_exists:1,
 	/* boolean_t */ has_corpse_footprint:1,
 	/* boolean_t */ terminated:1,
-	/* boolean_t */ is_alien:1,             /* for platform simulation, i.e. PLATFORM_IOS on OSX */
-	/* boolean_t */ cs_enforcement:1,       /* code-signing enforcement */
-	/* boolean_t */ reserved_regions:1,       /* has reserved regions. The map size that userspace sees should ignore these. */
-	/* reserved */ pad:16;
+	/* boolean_t */ is_alien:1,              /* for platform simulation, i.e. PLATFORM_IOS on OSX */
+	/* boolean_t */ cs_enforcement:1,        /* code-signing enforcement */
+	/* boolean_t */ reserved_regions:1,      /* has reserved regions. The map size that userspace sees should ignore these. */
+	/* boolean_t */ single_jit:1,        /* only allow one JIT mapping */
+	/* reserved */ pad:15;
 	unsigned int            timestamp;      /* Version number */
 };
 
@@ -536,14 +531,6 @@ struct _vm_map {
 #define vm_map_to_entry(map) CAST_TO_VM_MAP_ENTRY(&(map)->hdr.links)
 #define vm_map_first_entry(map) ((map)->hdr.links.next)
 #define vm_map_last_entry(map)  ((map)->hdr.links.prev)
-
-#if     TASK_SWAPPER
-/*
- * VM map swap states.  There are no transition states.
- */
-#define MAP_SW_IN        1      /* map is swapped in; residence count > 0 */
-#define MAP_SW_OUT       2      /* map is out (res_count == 0 */
-#endif  /* TASK_SWAPPER */
 
 /*
  *	Type:		vm_map_version_t [exported; contents invisible]
@@ -828,97 +815,9 @@ extern vm_map_entry_t   vm_map_entry_insert(
 /* Physical map associated
 * with this address map */
 
-/*
- * Macros/functions for map residence counts and swapin/out of vm maps
- */
-#if     TASK_SWAPPER
-
-#if     MACH_ASSERT
 /* Gain a reference to an existing map */
 extern void             vm_map_reference(
 	vm_map_t        map);
-/* Lose a residence count */
-extern void             vm_map_res_deallocate(
-	vm_map_t        map);
-/* Gain a residence count on a map */
-extern void             vm_map_res_reference(
-	vm_map_t        map);
-/* Gain reference & residence counts to possibly swapped-out map */
-extern void             vm_map_reference_swap(
-	vm_map_t        map);
-
-#else   /* MACH_ASSERT */
-
-#define vm_map_reference(map)           \
-MACRO_BEGIN                                      \
-	vm_map_t Map = (map);                    \
-	if (Map) {                               \
-	        lck_mtx_lock(&Map->s_lock);      \
-	        Map->res_count++;                \
-	        os_ref_retain(&Map->map_refcnt); \
-	        lck_mtx_unlock(&Map->s_lock);    \
-	}                                        \
-MACRO_END
-
-#define vm_map_res_reference(map)               \
-MACRO_BEGIN                                     \
-	vm_map_t Lmap = (map);          \
-	if (Lmap->res_count == 0) {             \
-	        lck_mtx_unlock(&Lmap->s_lock);\
-	        vm_map_lock(Lmap);              \
-	        vm_map_swapin(Lmap);            \
-	        lck_mtx_lock(&Lmap->s_lock);    \
-	        ++Lmap->res_count;              \
-	        vm_map_unlock(Lmap);            \
-	} else                                  \
-	        ++Lmap->res_count;              \
-MACRO_END
-
-#define vm_map_res_deallocate(map)              \
-MACRO_BEGIN                                     \
-	vm_map_t Map = (map);           \
-	if (--Map->res_count == 0) {    \
-	        lck_mtx_unlock(&Map->s_lock);   \
-	        vm_map_lock(Map);               \
-	        vm_map_swapout(Map);            \
-	        vm_map_unlock(Map);             \
-	        lck_mtx_lock(&Map->s_lock);     \
-	}                                       \
-MACRO_END
-
-#define vm_map_reference_swap(map)      \
-MACRO_BEGIN                             \
-	vm_map_t Map = (map);           \
-	lck_mtx_lock(&Map->s_lock);     \
-	os_ref_retain(&Map->map_refcnt);\
-	vm_map_res_reference(Map);      \
-	lck_mtx_unlock(&Map->s_lock);   \
-MACRO_END
-#endif  /* MACH_ASSERT */
-
-extern void             vm_map_swapin(
-	vm_map_t        map);
-
-extern void             vm_map_swapout(
-	vm_map_t        map);
-
-#else   /* TASK_SWAPPER */
-
-#define vm_map_reference(map)                   \
-MACRO_BEGIN                                     \
-	vm_map_t Map = (map);                   \
-	if (Map) {                              \
-	        lck_mtx_lock(&Map->s_lock);     \
-	        os_ref_retain(&Map->map_refcnt);\
-	        lck_mtx_unlock(&Map->s_lock);   \
-	}                                       \
-MACRO_END
-
-#define vm_map_reference_swap(map)      vm_map_reference(map)
-#define vm_map_res_reference(map)
-#define vm_map_res_deallocate(map)
-
-#endif  /* TASK_SWAPPER */
 
 /*
  *	Submap object.  Must be used to create memory to be put
@@ -937,28 +836,6 @@ extern vm_object_t      vm_submap_object;
 
 #define vm_map_entry_wakeup(map)        \
 	thread_wakeup((event_t)(&(map)->hdr))
-
-
-#define vm_map_ref_fast(map)                    \
-	MACRO_BEGIN                                     \
-	lck_mtx_lock(&map->s_lock);                     \
-	map->ref_count++;                               \
-	vm_map_res_reference(map);                      \
-	lck_mtx_unlock(&map->s_lock);                   \
-	MACRO_END
-
-#define vm_map_dealloc_fast(map)                \
-	MACRO_BEGIN                                     \
-	int c;                                          \
-                                                        \
-	lck_mtx_lock(&map->s_lock);                     \
-	c = --map->ref_count;                   \
-	if (c > 0)                                      \
-	        vm_map_res_deallocate(map);             \
-	lck_mtx_unlock(&map->s_lock);                   \
-	if (c == 0)                                     \
-	        vm_map_destroy(map);                    \
-	MACRO_END
 
 
 /* simplify map entries */
@@ -1384,6 +1261,9 @@ extern kern_return_t    vm_map_enter_mem_object_control(
 extern kern_return_t    vm_map_terminate(
 	vm_map_t                map);
 
+extern void             vm_map_require(
+	vm_map_t                map);
+
 #endif /* !XNU_KERNEL_PRIVATE */
 
 /* Deallocate a region */
@@ -1475,7 +1355,6 @@ extern kern_return_t    vm_map_copy_extract(
 	vm_map_t                src_map,
 	vm_map_address_t        src_addr,
 	vm_map_size_t           len,
-	vm_prot_t               required_prot,
 	boolean_t               copy,
 	vm_map_copy_t           *copy_result,   /* OUT */
 	vm_prot_t               *cur_prot,      /* OUT */
@@ -1529,11 +1408,11 @@ extern kern_return_t    vm_map_raise_max_offset(
 extern kern_return_t    vm_map_raise_min_offset(
 	vm_map_t        map,
 	vm_map_offset_t new_min_offset);
-#if !CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX
 extern void vm_map_set_high_start(
 	vm_map_t        map,
 	vm_map_offset_t high_start);
-#endif
+#endif /* XNU_TARGET_OS_OSX */
 
 extern vm_map_offset_t  vm_compute_max_offset(
 	boolean_t               is64);
@@ -1607,6 +1486,7 @@ mach_vm_range_overflows(mach_vm_offset_t addr, mach_vm_size_t size)
 
 #if XNU_TARGET_OS_OSX
 extern void vm_map_mark_alien(vm_map_t map);
+extern void vm_map_single_jit(vm_map_t map);
 #endif /* XNU_TARGET_OS_OSX */
 
 extern kern_return_t vm_map_page_info(
@@ -1716,7 +1596,7 @@ static inline bool
 VM_MAP_POLICY_ALLOW_MULTIPLE_JIT(
 	vm_map_t map __unused)
 {
-	if (VM_MAP_IS_ALIEN(map)) {
+	if (VM_MAP_IS_ALIEN(map) || map->single_jit) {
 		return false;
 	}
 	return true;

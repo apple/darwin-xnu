@@ -215,7 +215,7 @@ struct nfsbuf {
 LIST_HEAD(nfsbuflists, nfsbuf);
 TAILQ_HEAD(nfsbuffreehead, nfsbuf);
 
-extern lck_mtx_t *nfs_buf_mutex;
+extern lck_mtx_t nfs_buf_mutex;
 extern int nfsbufcnt, nfsbufmin, nfsbufmax, nfsbufmetacnt, nfsbufmetamax;
 extern int nfsbuffreecnt, nfsbuffreemetacnt, nfsbufdelwricnt, nfsneedbuffer;
 extern int nfs_nbdwrite;
@@ -431,7 +431,7 @@ struct nfs_vattr {
 	} while (0)
 
 
-extern lck_grp_t *nfs_open_grp;
+extern lck_grp_t nfs_open_grp;
 extern uint32_t nfs_open_owner_seqnum, nfs_lock_owner_seqnum;
 
 /*
@@ -799,7 +799,7 @@ struct nfsnode {
 #define NFSTOV(np)      ((np)->n_vnode)
 
 /* nfsnode hash table mutex */
-extern lck_mtx_t *nfs_node_hash_mutex;
+extern lck_mtx_t nfs_node_hash_mutex;
 
 /*
  * printf-like helper macro that also outputs node name.
@@ -822,7 +822,7 @@ TAILQ_HEAD(nfsiodlist, nfsiod);
 TAILQ_HEAD(nfsiodmountlist, nfsmount);
 extern struct nfsiodlist nfsiodfree, nfsiodwork;
 extern struct nfsiodmountlist nfsiodmounts;
-extern lck_mtx_t *nfsiod_mutex;
+extern lck_mtx_t nfsiod_mutex;
 
 #if defined(KERNEL)
 

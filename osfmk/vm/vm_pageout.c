@@ -82,7 +82,7 @@
 #include <mach/sdt.h>
 
 #include <kern/kern_types.h>
-#include <kern/counters.h>
+#include <kern/counter.h>
 #include <kern/host_statistics.h>
 #include <kern/machine.h>
 #include <kern/misc_protos.h>
@@ -151,11 +151,11 @@ thread_t  vm_pageout_scan_thread = THREAD_NULL;
 boolean_t vps_dynamic_priority_enabled = FALSE;
 
 #ifndef VM_PAGEOUT_BURST_INACTIVE_THROTTLE  /* maximum iterations of the inactive queue w/o stealing/cleaning a page */
-#ifdef  CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 #define VM_PAGEOUT_BURST_INACTIVE_THROTTLE 1024
-#else
+#else /* !XNU_TARGET_OS_OSX */
 #define VM_PAGEOUT_BURST_INACTIVE_THROTTLE 4096
-#endif
+#endif /* !XNU_TARGET_OS_OSX */
 #endif
 
 #ifndef VM_PAGEOUT_DEADLOCK_RELIEF
@@ -214,11 +214,11 @@ boolean_t vps_dynamic_priority_enabled = FALSE;
  */
 
 #ifndef VM_PAGE_FREE_TARGET
-#ifdef  CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 #define VM_PAGE_FREE_TARGET(free)       (15 + (free) / 100)
-#else
+#else /* !XNU_TARGET_OS_OSX */
 #define VM_PAGE_FREE_TARGET(free)       (15 + (free) / 80)
-#endif
+#endif /* !XNU_TARGET_OS_OSX */
 #endif  /* VM_PAGE_FREE_TARGET */
 
 
@@ -228,22 +228,22 @@ boolean_t vps_dynamic_priority_enabled = FALSE;
  */
 
 #ifndef VM_PAGE_FREE_MIN
-#ifdef  CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 #define VM_PAGE_FREE_MIN(free)          (10 + (free) / 200)
-#else
+#else /* !XNU_TARGET_OS_OSX */
 #define VM_PAGE_FREE_MIN(free)          (10 + (free) / 100)
-#endif
+#endif /* !XNU_TARGET_OS_OSX */
 #endif  /* VM_PAGE_FREE_MIN */
 
-#ifdef  CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 #define VM_PAGE_FREE_RESERVED_LIMIT     100
 #define VM_PAGE_FREE_MIN_LIMIT          1500
 #define VM_PAGE_FREE_TARGET_LIMIT       2000
-#else
+#else /* !XNU_TARGET_OS_OSX */
 #define VM_PAGE_FREE_RESERVED_LIMIT     1700
 #define VM_PAGE_FREE_MIN_LIMIT          3500
 #define VM_PAGE_FREE_TARGET_LIMIT       4000
-#endif
+#endif /* !XNU_TARGET_OS_OSX */
 
 /*
  *	When vm_page_free_count falls below vm_page_free_reserved,
@@ -269,11 +269,11 @@ boolean_t vps_dynamic_priority_enabled = FALSE;
 #define VM_PAGE_REACTIVATE_LIMIT_MAX 20000
 
 #ifndef VM_PAGE_REACTIVATE_LIMIT
-#ifdef  CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 #define VM_PAGE_REACTIVATE_LIMIT(avail) (VM_PAGE_INACTIVE_TARGET(avail) / 2)
-#else
+#else /* !XNU_TARGET_OS_OSX */
 #define VM_PAGE_REACTIVATE_LIMIT(avail) (MAX((avail) * 1 / 20,VM_PAGE_REACTIVATE_LIMIT_MAX))
-#endif
+#endif /* !XNU_TARGET_OS_OSX */
 #endif  /* VM_PAGE_REACTIVATE_LIMIT */
 #define VM_PAGEOUT_INACTIVE_FORCE_RECLAIM       1000
 
@@ -315,9 +315,9 @@ boolean_t vm_pageout_running = FALSE;
 uint32_t vm_page_upl_tainted = 0;
 uint32_t vm_page_iopl_tainted = 0;
 
-#if !CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX
 static boolean_t vm_pageout_waiter  = FALSE;
-#endif /* !CONFIG_EMBEDDED */
+#endif /* XNU_TARGET_OS_OSX */
 
 
 #if DEVELOPMENT || DEBUG
@@ -446,7 +446,7 @@ vm_pageout_object_terminate(
 
 			if (m->vmp_dirty) {
 				vm_page_unwire(m, TRUE);        /* reactivates */
-				VM_STAT_INCR(reactivations);
+				counter_inc(&vm_statistics_reactivations);
 				PAGE_WAKEUP_DONE(m);
 			} else {
 				vm_page_free(m);  /* clears busy, etc. */
@@ -1587,7 +1587,7 @@ update_vm_info(void)
 	vm_pageout_stats[vm_pageout_stat_now].phantom_ghosts_added = (unsigned int)(tmp - last.vm_phantom_cache_added_ghost);
 	last.vm_phantom_cache_added_ghost = tmp;
 
-	tmp64 = get_pages_grabbed_count();
+	tmp64 = counter_load(&vm_page_grab_count);
 	vm_pageout_stats[vm_pageout_stat_now].pages_grabbed = (unsigned int)(tmp64 - last_vm_page_pages_grabbed);
 	last_vm_page_pages_grabbed = tmp64;
 
@@ -2299,8 +2299,6 @@ vps_flow_control(struct flow_control *flow_control, int *anons_grabbed, vm_objec
 	iq->pgo_throttled = TRUE;
 	assert_wait_timeout((event_t) &iq->pgo_laundry, THREAD_INTERRUPTIBLE, msecs, 1000 * NSEC_PER_USEC);
 
-	counter(c_vm_pageout_scan_block++);
-
 	vm_page_unlock_queues();
 
 	assert(vm_pageout_scan_wants_object == VM_OBJECT_NULL);
@@ -2478,7 +2476,7 @@ want_anonymous:
 						vm_pageout_vminfo.vm_pageout_filecache_min_reactivated++;
 
 						vm_page_activate(m);
-						VM_STAT_INCR(reactivations);
+						counter_inc(&vm_statistics_reactivations);
 #if CONFIG_BACKGROUND_QUEUE
 #if DEVELOPMENT || DEBUG
 						if (*is_page_from_bg_q == TRUE) {
@@ -2748,7 +2746,7 @@ vps_deal_with_throttled_queues(vm_page_t m, vm_object_t *object, uint32_t *vm_pa
 #endif /* CONFIG_MEMORYSTATUS && CONFIG_JETSAM */
 	} else {
 		vm_page_activate(m);
-		VM_STAT_INCR(reactivations);
+		counter_inc(&vm_statistics_reactivations);
 
 #if CONFIG_BACKGROUND_QUEUE
 #if DEVELOPMENT || DEBUG
@@ -3418,7 +3416,7 @@ reactivate_page:
 					 * The page was/is being used, so put back on active list.
 					 */
 					vm_page_activate(m);
-					VM_STAT_INCR(reactivations);
+					counter_inc(&vm_statistics_reactivations);
 					inactive_burst_count = 0;
 				}
 #if CONFIG_BACKGROUND_QUEUE
@@ -3727,22 +3725,21 @@ vm_pageout_continue(void)
 	assert_wait((event_t) &vm_page_free_wanted, THREAD_UNINT);
 
 	vm_pageout_running = FALSE;
-#if !CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX
 	if (vm_pageout_waiter) {
 		vm_pageout_waiter = FALSE;
 		thread_wakeup((event_t)&vm_pageout_waiter);
 	}
-#endif /* !CONFIG_EMBEDDED */
+#endif /* XNU_TARGET_OS_OSX */
 
 	lck_mtx_unlock(&vm_page_queue_free_lock);
 	vm_page_unlock_queues();
 
-	counter(c_vm_pageout_block++);
 	thread_block((thread_continue_t)vm_pageout_continue);
 	/*NOTREACHED*/
 }
 
-#if !CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX
 kern_return_t
 vm_pageout_wait(uint64_t deadline)
 {
@@ -3761,7 +3758,7 @@ vm_pageout_wait(uint64_t deadline)
 
 	return kr;
 }
-#endif /* !CONFIG_EMBEDDED */
+#endif /* XNU_TARGET_OS_OSX */
 
 
 static void
@@ -4232,7 +4229,7 @@ vm_pageout_compress_page(void **current_chead, char *scratch_buf, vm_page_t m)
 			vm_object_owner_compressed_update(object,
 			    +1);
 		}
-		VM_STAT_INCR(compressions);
+		counter_inc(&vm_statistics_compressions);
 
 		if (m->vmp_tabled) {
 			vm_page_remove(m, TRUE);
@@ -4380,16 +4377,16 @@ vm_pressure_response(void)
 		return;
 	}
 
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 
 	available_memory = (uint64_t) memorystatus_available_pages;
 
-#else /* CONFIG_EMBEDDED */
+#else /* !XNU_TARGET_OS_OSX */
 
 	available_memory = (uint64_t) AVAILABLE_NON_COMPRESSED_MEMORY;
 	memorystatus_available_pages = (uint64_t) AVAILABLE_NON_COMPRESSED_MEMORY;
 
-#endif /* CONFIG_EMBEDDED */
+#endif /* !XNU_TARGET_OS_OSX */
 
 	total_pages = (unsigned int) atop_64(max_mem);
 #if CONFIG_SECLUDED_MEMORY
@@ -4582,7 +4579,7 @@ void
 vm_pageout_garbage_collect(int collect)
 {
 	if (collect) {
-		if (is_zone_map_nearing_exhaustion()) {
+		if (zone_map_nearing_exhaustion()) {
 			/*
 			 * Woken up by the zone allocator for zone-map-exhaustion jetsams.
 			 *
@@ -4600,7 +4597,7 @@ vm_pageout_garbage_collect(int collect)
 			 * ok; if memory pressure persists, the thread will simply be woken
 			 * up again.
 			 */
-			consider_zone_gc(TRUE);
+			zone_gc(ZONE_GC_JETSAM);
 		} else {
 			/* Woken up by vm_pageout_scan or compute_pageout_gc_throttle. */
 			boolean_t buf_large_zfree = FALSE;
@@ -4617,10 +4614,10 @@ vm_pageout_garbage_collect(int collect)
 				}
 				if (first_try == TRUE || buf_large_zfree == TRUE) {
 					/*
-					 * consider_zone_gc should be last, because the other operations
+					 * zone_gc should be last, because the other operations
 					 * might return memory to zones.
 					 */
-					consider_zone_gc(FALSE);
+					zone_gc(ZONE_GC_TRIM);
 				}
 				first_try = FALSE;
 			} while (buf_large_zfree == TRUE && vm_page_free_count < vm_page_free_target);
@@ -4872,13 +4869,22 @@ vm_pageout(void)
 	thread_set_thread_name(vm_pageout_state.vm_pageout_external_iothread, "VM_pageout_external_iothread");
 	thread_deallocate(vm_pageout_state.vm_pageout_external_iothread);
 
-	result = kernel_thread_start_priority((thread_continue_t)vm_pageout_garbage_collect, NULL,
+	result = kernel_thread_create((thread_continue_t)vm_pageout_garbage_collect, NULL,
 	    BASEPRI_DEFAULT,
 	    &thread);
 	if (result != KERN_SUCCESS) {
 		panic("vm_pageout_garbage_collect: create failed");
 	}
 	thread_set_thread_name(thread, "VM_pageout_garbage_collect");
+	if (thread->reserved_stack == 0) {
+		assert(thread->kernel_stack);
+		thread->reserved_stack = thread->kernel_stack;
+	}
+
+	thread_mtx_lock(thread);
+	thread_start(thread);
+	thread_mtx_unlock(thread);
+
 	thread_deallocate(thread);
 
 #if VM_PRESSURE_EVENTS
@@ -5010,15 +5016,15 @@ vm_pageout_internal_start(void)
 
 	assert(hinfo.max_cpus > 0);
 
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 	vm_pageout_state.vm_compressor_thread_count = 1;
-#else
+#else /* !XNU_TARGET_OS_OSX */
 	if (hinfo.max_cpus > 4) {
 		vm_pageout_state.vm_compressor_thread_count = 2;
 	} else {
 		vm_pageout_state.vm_compressor_thread_count = 1;
 	}
-#endif
+#endif /* !XNU_TARGET_OS_OSX */
 	PE_parse_boot_argn("vmcomp_threads", &vm_pageout_state.vm_compressor_thread_count,
 	    sizeof(vm_pageout_state.vm_compressor_thread_count));
 
@@ -5339,27 +5345,19 @@ must_throttle_writes()
 #define MAX_DELAYED_WORK_CTX_ALLOCATED  (512)
 
 int vm_page_delayed_work_ctx_needed = 0;
-zone_t  dw_ctx_zone = ZONE_NULL;
+SECURITY_READ_ONLY_LATE(zone_t) dw_ctx_zone;
 
 void
 vm_page_delayed_work_init_ctx(void)
 {
-	int nelems = 0, elem_size = 0;
-
-	elem_size = sizeof(struct vm_page_delayed_work_ctx);
+	size_t elem_size = sizeof(struct vm_page_delayed_work_ctx);
 
 	dw_ctx_zone = zone_create_ext("delayed-work-ctx", elem_size,
 	    ZC_NOGC, ZONE_ID_ANY, ^(zone_t z) {
-		zone_set_exhaustible(z, MAX_DELAYED_WORK_CTX_ALLOCATED * elem_size);
+		zone_set_exhaustible(z, MAX_DELAYED_WORK_CTX_ALLOCATED);
 	});
 
-	nelems = zfill(dw_ctx_zone, MIN_DELAYED_WORK_CTX_ALLOCATED);
-	if (nelems < MIN_DELAYED_WORK_CTX_ALLOCATED) {
-		printf("vm_page_delayed_work_init_ctx: Failed to preallocate minimum delayed work contexts (%d vs %d).\n", nelems, MIN_DELAYED_WORK_CTX_ALLOCATED);
-#if DEVELOPMENT || DEBUG
-		panic("Failed to preallocate minimum delayed work contexts (%d vs %d).\n", nelems, MIN_DELAYED_WORK_CTX_ALLOCATED);
-#endif /* DEVELOPMENT || DEBUG */
-	}
+	zone_fill_initially(dw_ctx_zone, MIN_DELAYED_WORK_CTX_ALLOCATED);
 }
 
 struct vm_page_delayed_work*
@@ -5578,7 +5576,7 @@ vm_object_upl_request(
 		    "object %p shadow_offset 0x%llx",
 		    upl->map_object, upl->map_object->vo_shadow_offset);
 
-		VM_PAGE_GRAB_FICTITIOUS(alias_page);
+		alias_page = vm_page_grab_fictitious(TRUE);
 
 		upl->flags |= UPL_SHADOWED;
 	}
@@ -5648,11 +5646,11 @@ vm_object_upl_request(
 	if ((cntrl_flags & UPL_WILL_MODIFY) && must_throttle_writes() == TRUE) {
 		boolean_t       isSSD = FALSE;
 
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 		isSSD = TRUE;
-#else
+#else /* !XNU_TARGET_OS_OSX */
 		vnode_pager_get_isSSD(object->pager, &isSSD);
-#endif
+#endif /* !XNU_TARGET_OS_OSX */
 		vm_object_unlock(object);
 
 		OSAddAtomic(size_in_pages, &vm_upl_wait_for_pages);
@@ -5672,7 +5670,7 @@ vm_object_upl_request(
 
 		if ((alias_page == NULL) && !(cntrl_flags & UPL_SET_LITE)) {
 			vm_object_unlock(object);
-			VM_PAGE_GRAB_FICTITIOUS(alias_page);
+			alias_page = vm_page_grab_fictitious(TRUE);
 			vm_object_lock(object);
 		}
 		if (cntrl_flags & UPL_COPYOUT_FROM) {
@@ -6030,7 +6028,7 @@ check_busy:
 					dst_page->vmp_clustered = TRUE;
 
 					if (!(cntrl_flags & UPL_FILE_IO)) {
-						VM_STAT_INCR(pageins);
+						counter_inc(&vm_statistics_pageins);
 					}
 				}
 			}
@@ -6201,7 +6199,7 @@ check_busy:
 try_next_page:
 		if (dwp->dw_mask) {
 			if (dwp->dw_mask & DW_vm_page_activate) {
-				VM_STAT_INCR(reactivations);
+				counter_inc(&vm_statistics_reactivations);
 			}
 
 			VM_PAGE_ADD_DELAYED_WORK(dwp, dst_page, dw_count);
@@ -6462,7 +6460,7 @@ REDISCOVER_ENTRY:
 		goto done;
 	}
 
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 	if (map->pmap != kernel_pmap &&
 	    (caller_flags & UPL_COPYOUT_FROM) &&
 	    (entry->protection & VM_PROT_EXECUTE) &&
@@ -6531,7 +6529,7 @@ REDISCOVER_ENTRY:
 #endif /* DEVELOPMENT || DEBUG */
 		goto done;
 	}
-#endif /* CONFIG_EMBEDDED */
+#endif /* !XNU_TARGET_OS_OSX */
 
 	local_object = VME_OBJECT(entry);
 	assert(local_object != VM_OBJECT_NULL);
@@ -6636,24 +6634,6 @@ REDISCOVER_ENTRY:
 		vm_map_version_t        version;
 		vm_map_t                real_map;
 		vm_prot_t               fault_type;
-
-		if (entry->vme_start < VM_MAP_TRUNC_PAGE(offset, VM_MAP_PAGE_MASK(map)) ||
-		    entry->vme_end > VM_MAP_ROUND_PAGE(offset + *upl_size, VM_MAP_PAGE_MASK(map))) {
-			/*
-			 * Clip the requested range first to minimize the
-			 * amount of potential copying...
-			 */
-			if (vm_map_lock_read_to_write(map)) {
-				goto REDISCOVER_ENTRY;
-			}
-			vm_map_lock_assert_exclusive(map);
-			assert(VME_OBJECT(entry) == local_object);
-			vm_map_clip_start(map, entry,
-			    VM_MAP_TRUNC_PAGE(offset, VM_MAP_PAGE_MASK(map)));
-			vm_map_clip_end(map, entry,
-			    VM_MAP_ROUND_PAGE(offset + *upl_size, VM_MAP_PAGE_MASK(map)));
-			vm_map_lock_write_to_read(map);
-		}
 
 		local_map = map;
 
@@ -7009,7 +6989,7 @@ process_upl_to_enter:
 			assert(pg_num == new_offset / PAGE_SIZE);
 
 			if (lite_list[pg_num >> 5] & (1U << (pg_num & 31))) {
-				VM_PAGE_GRAB_FICTITIOUS(alias_page);
+				alias_page = vm_page_grab_fictitious(TRUE);
 
 				vm_object_lock(object);
 
@@ -7739,7 +7719,7 @@ process_upl_to_commit:
 				dwp->dw_mask |= DW_vm_page_activate | DW_PAGE_WAKEUP;
 
 				if (upl->flags & UPL_PAGEOUT) {
-					VM_STAT_INCR(reactivations);
+					counter_inc(&vm_statistics_reactivations);
 					DTRACE_VM2(pgrec, int, 1, (uint64_t *), NULL);
 				}
 			} else {
@@ -7780,7 +7760,7 @@ process_upl_to_commit:
 		if (hibernate_cleaning_in_progress == FALSE && !m->vmp_dirty && (upl->flags & UPL_PAGEOUT)) {
 			pgpgout_count++;
 
-			VM_STAT_INCR(pageouts);
+			counter_inc(&vm_statistics_pageouts);
 			DTRACE_VM2(pgout, int, 1, (uint64_t *), NULL);
 
 			dwp->dw_mask |= DW_enqueue_cleaned;
@@ -9672,7 +9652,7 @@ return_err:
 		vm_page_unlock_queues();
 
 		if (need_unwire == TRUE) {
-			VM_STAT_INCR(reactivations);
+			counter_inc(&vm_statistics_reactivations);
 		}
 	}
 #if UPL_DEBUG

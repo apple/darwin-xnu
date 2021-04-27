@@ -184,15 +184,15 @@ ml_cpu_signal_type(unsigned int cpu_mpidr, uint32_t type)
 	MRS(local_mpidr, "MPIDR_EL1");
 	if (MPIDR_CLUSTER_ID(local_mpidr) == MPIDR_CLUSTER_ID(cpu_mpidr)) {
 		uint64_t x = type | MPIDR_CPU_ID(cpu_mpidr);
-		MSR(ARM64_REG_IPI_RR_LOCAL, x);
+		MSR("S3_5_C15_C0_0", x);
 	} else {
 		#define IPI_RR_TARGET_CLUSTER_SHIFT 16
 		uint64_t x = type | (MPIDR_CLUSTER_ID(cpu_mpidr) << IPI_RR_TARGET_CLUSTER_SHIFT) | MPIDR_CPU_ID(cpu_mpidr);
-		MSR(ARM64_REG_IPI_RR_GLOBAL, x);
+		MSR("S3_5_C15_C0_1", x);
 	}
 #else
 	uint64_t x = type | MPIDR_CPU_ID(cpu_mpidr);
-	MSR(ARM64_REG_IPI_RR, x);
+	MSR("S3_5_C15_C0_1", x);
 #endif
 }
 #endif
@@ -236,7 +236,7 @@ ml_cpu_signal_deferred_adjust_timer(uint64_t nanosecs)
 	/* update deferred_ipi_timer_ns with the new clamped value */
 	absolutetime_to_nanoseconds(abstime, &deferred_ipi_timer_ns);
 
-	MSR(ARM64_REG_IPI_CR, abstime);
+	MSR("S3_5_C15_C3_1", abstime);
 #else
 	(void)nanosecs;
 	panic("Platform does not support ACC Fast IPI");
@@ -494,6 +494,7 @@ machine_processor_shutdown(
 	return Shutdown_context(doshutdown, processor);
 }
 
+
 /*
  *      Routine:        ml_init_lock_timeout
  *      Function:
@@ -531,6 +532,8 @@ ml_init_lock_timeout(void)
 	}
 	MutexSpin = abstime;
 	low_MutexSpin = MutexSpin;
+
+
 	/*
 	 * high_MutexSpin should be initialized as low_MutexSpin * real_ncpus, but
 	 * real_ncpus is not set at this time
@@ -541,6 +544,17 @@ ml_init_lock_timeout(void)
 	high_MutexSpin = low_MutexSpin;
 
 	nanoseconds_to_absolutetime(MAX_WFE_HINT_INTERVAL_US * NSEC_PER_USEC, &ml_wfe_hint_max_interval);
+}
+
+/*
+ * This is called when all of the ml_processor_info_t structures have been
+ * initialized and all the processors have been started through processor_start().
+ *
+ * Required by the scheduler subsystem.
+ */
+void
+ml_cpu_init_completed(void)
+{
 }
 
 /*
@@ -822,29 +836,6 @@ ml_read_chip_revision(unsigned int *rev __unused)
 #endif
 }
 
-static boolean_t
-ml_parse_interrupt_prop(const DTEntry entry, ml_topology_cpu_t *cpu)
-{
-	uint32_t const *prop;
-	unsigned int propSize;
-
-	if (SecureDTGetProperty(entry, "interrupts", (void const **)&prop, &propSize) != kSuccess) {
-		return FALSE;
-	}
-
-	if (propSize == sizeof(uint32_t) * 1) {
-		cpu->pmi_irq = prop[0];
-		return TRUE;
-	} else if (propSize == sizeof(uint32_t) * 3) {
-		cpu->self_ipi_irq = prop[0];
-		cpu->pmi_irq = prop[1];
-		cpu->other_ipi_irq = prop[2];
-		return TRUE;
-	} else {
-		return FALSE;
-	}
-}
-
 void
 ml_parse_cpu_topology(void)
 {
@@ -903,7 +894,6 @@ ml_parse_cpu_topology(void)
 		cpu->l3_cache_size = (uint32_t)ml_readprop(child, "l3-cache-size", 0);
 		cpu->l3_cache_id = (uint32_t)ml_readprop(child, "l3-cache-id", 0);
 
-		ml_parse_interrupt_prop(child, cpu);
 		ml_read_reg_range(child, "cpu-uttdbg-reg", &cpu->cpu_UTTDBG_pa, &cpu->cpu_UTTDBG_len);
 		ml_read_reg_range(child, "cpu-impl-reg", &cpu->cpu_IMPL_pa, &cpu->cpu_IMPL_len);
 		ml_read_reg_range(child, "coresight-reg", &cpu->coresight_pa, &cpu->coresight_len);
@@ -1231,7 +1221,43 @@ ml_processor_register(ml_processor_info_t *in_processor_info,
 	this_cpu_datap->cluster_master = is_boot_cpu;
 #endif /* HAS_CLUSTER */
 
+#if !defined(RC_HIDE_XNU_FIRESTORM) && (MAX_CPU_CLUSTERS > 2)
+	{
+		/* Workaround for the existing scheduler
+		 * code, which only supports a limited number of psets.
+		 *
+		 * To get around that limitation, we distribute all cores into
+		 * two psets according to their cluster type, instead of
+		 * having a dedicated pset per cluster ID.
+		 */
+
+		pset_cluster_type_t pset_cluster_type;
+
+		/* For this workaround, we don't expect seeing anything else
+		 * than E or P clusters. */
+		switch (in_processor_info->cluster_type) {
+		case CLUSTER_TYPE_E:
+			pset_cluster_type = PSET_AMP_E;
+			break;
+		case CLUSTER_TYPE_P:
+			pset_cluster_type = PSET_AMP_P;
+			break;
+		default:
+			panic("unknown/unsupported cluster type %d", in_processor_info->cluster_type);
+		}
+
+		pset = pset_find_first_by_cluster_type(pset_cluster_type);
+
+		if (pset == NULL) {
+			panic("no pset for cluster type %d/%d", in_processor_info->cluster_type, pset_cluster_type);
+		}
+
+		kprintf("%s>chosen pset with cluster id %d cluster type %d for core:\n",
+		    __FUNCTION__, pset->pset_cluster_id, pset->pset_cluster_type);
+	}
+#else /* !defined(RC_HIDE_XNU_FIRESTORM) && (MAX_CPU_CLUSTERS > 2) */
 	pset = pset_find(in_processor_info->cluster_id, processor_pset(master_processor));
+#endif /* !defined(RC_HIDE_XNU_FIRESTORM) && (MAX_CPU_CLUSTERS > 2) */
 
 	assert(pset != NULL);
 	kprintf("%s>cpu_id %p cluster_id %d cpu_number %d is type %d\n", __FUNCTION__, in_processor_info->cpu_id, in_processor_info->cluster_id, this_cpu_datap->cpu_number, in_processor_info->cluster_type);
@@ -1560,12 +1586,25 @@ ml_static_protect(
 void
 ml_static_mfree(
 	vm_offset_t vaddr,
-	vm_size_t size)
+	vm_size_t   size)
 {
-	vm_offset_t     vaddr_cur;
-	ppnum_t         ppn;
-	uint32_t freed_pages = 0;
-	uint32_t freed_kernelcache_pages = 0;
+	vm_offset_t vaddr_cur;
+	ppnum_t     ppn;
+	uint32_t    freed_pages = 0;
+	uint32_t    bad_page_cnt = 0;
+	uint32_t    freed_kernelcache_pages = 0;
+
+#if defined(__arm64__) && (DEVELOPMENT || DEBUG)
+	/* For testing hitting a bad ram page */
+	static int count = 0;
+	static int bad_at_cnt = -1;
+	static bool first = true;
+
+	if (first) {
+		(void)PE_parse_boot_argn("bad_static_mfree", &bad_at_cnt, sizeof(bad_at_cnt));
+		first = false;
+	}
+#endif /* defined(__arm64__) && (DEVELOPMENT || DEBUG) */
 
 	/* It is acceptable (if bad) to fail to free. */
 	if (vaddr < VM_MIN_KERNEL_ADDRESS) {
@@ -1589,6 +1628,19 @@ ml_static_mfree(
 				panic("Failed ml_static_mfree on %p", (void *) vaddr_cur);
 			}
 
+#if defined(__arm64__)
+			bool is_bad = pmap_is_bad_ram(ppn);
+#if DEVELOPMENT || DEBUG
+			is_bad |= (count++ == bad_at_cnt);
+#endif /* DEVELOPMENT || DEBUG */
+
+			if (is_bad) {
+				++bad_page_cnt;
+				vm_page_create_retired(ppn);
+				continue;
+			}
+#endif /* defined(__arm64__) */
+
 			vm_page_create(ppn, (ppn + 1));
 			freed_pages++;
 			if (vaddr_cur >= segLOWEST && vaddr_cur < end_kern) {
@@ -1602,7 +1654,7 @@ ml_static_mfree(
 	vm_page_kernelcache_count -= freed_kernelcache_pages;
 	vm_page_unlock_queues();
 #if     DEBUG
-	kprintf("ml_static_mfree: Released 0x%x pages at VA %p, size:0x%llx, last ppn: 0x%x\n", freed_pages, (void *)vaddr, (uint64_t)size, ppn);
+	kprintf("ml_static_mfree: Released 0x%x pages at VA %p, size:0x%llx, last ppn: 0x%x, +%d bad\n", freed_pages, (void *)vaddr, (uint64_t)size, ppn, bad_page_cnt);
 #endif
 }
 
@@ -1888,7 +1940,7 @@ cache_trap_error(thread_t thread, vm_map_address_t fault_addr)
 }
 
 static void
-cache_trap_recover()
+cache_trap_recover(void)
 {
 	vm_map_address_t fault_addr;
 
@@ -1901,7 +1953,8 @@ static void
 set_cache_trap_recover(thread_t thread)
 {
 #if defined(HAS_APPLE_PAC)
-	thread->recover = (vm_address_t)ptrauth_auth_and_resign(&cache_trap_recover,
+	void *fun = &cache_trap_recover;
+	thread->recover = (vm_address_t)ptrauth_auth_and_resign(fun,
 	    ptrauth_key_function_pointer, 0,
 	    ptrauth_key_function_pointer, ptrauth_blend_discriminator(&thread->recover, PAC_DISCRIMINATOR_RECOVER));
 #else /* defined(HAS_APPLE_PAC) */

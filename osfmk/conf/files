@@ -49,7 +49,6 @@ OPTIONS/mach_vm_debug		optional mach_vm_debug
 OPTIONS/mach_page_hash_stats    optional mach_page_hash_stats
 OPTIONS/mig_debug		optional mig_debug
 OPTIONS/vm_cpm			optional vm_cpm
-OPTIONS/task_swapper		optional task_swapper
 OPTIONS/stack_usage		optional stack_usage
 OPTIONS/importance_inheritance	optional importance_inheritance
 OPTIONS/importance_debug	optional importance_debug
@@ -79,8 +78,8 @@ OPTIONS/config_quiesce_counter  optional config_quiesce_counter
 #
 # UserNotification files
 #
-./UserNotification/UNDRequest.c			standard
-./UserNotification/UNDReplyServer.c		standard
+./UserNotification/UNDRequest.c			optional config_user_notification
+./UserNotification/UNDReplyServer.c		optional config_user_notification
 osfmk/UserNotification/KUNCUserNotifications.c	standard
 
 osfmk/kdp/kdp.c			optional config_kdp_interactive_debugging
@@ -120,7 +119,7 @@ osfmk/kern/build_config.c		standard
 osfmk/kern/clock.c			standard
 osfmk/kern/clock_oldops.c		standard
 osfmk/kern/coalition.c			optional config_coalitions
-osfmk/kern/counters.c			standard
+osfmk/kern/counter_common.c		standard
 osfmk/kern/cpu_quiesce.c		optional config_quiesce_counter
 osfmk/kern/debug.c			standard
 osfmk/kern/ecc_logging.c			optional config_ecc_logging
@@ -175,7 +174,6 @@ osfmk/kern/syscall_sw.c		standard
 osfmk/kern/sysdiagnose.c	optional config_sysdiagnose
 osfmk/kern/task.c			standard
 osfmk/kern/task_policy.c	standard
-osfmk/kern/task_swap.c		standard
 osfmk/kern/test_lock.c		optional development
 osfmk/kern/test_lock.c		optional debug
 osfmk/kern/test_mpsc_queue.c	optional development
@@ -192,7 +190,6 @@ osfmk/kern/ux_handler.c		standard
 osfmk/kern/waitq.c			standard
 osfmk/kern/work_interval.c		standard
 osfmk/kern/zalloc.c			standard
-osfmk/kern/zcache.c		optional config_zcache
 osfmk/kern/gzalloc.c		optional config_gzalloc
 osfmk/kern/bsd_kern.c		optional mach_bsd
 osfmk/kern/hibernate.c		optional hibernation
@@ -200,6 +197,7 @@ osfmk/kern/remote_time.c        standard
 osfmk/kern/memset_s.c		standard
 osfmk/kern/copyout_shim.c	optional copyout_shim
 osfmk/kern/suid_cred.c		standard
+osfmk/kern/task_ident.c     standard
 
 ./mach/clock_server.c			standard
 ./mach/clock_priv_server.c		standard
@@ -250,6 +248,7 @@ osfmk/voucher/ipc_pthread_priority.c		standard
 ./mach/fairplayd_notification_user.c optional config_arcade
 ./mach/arcade_upcall_user.c optional config_arcade
 ./mach/arcade_register_server.c optional config_arcade
+./mach/iocompressionstats_notification_user.c optional config_io_compression_stats
 
 #
 # For now, no external pagers

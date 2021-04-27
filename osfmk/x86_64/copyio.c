@@ -206,7 +206,7 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 			 * Size of elements in the permanent zone is not saved as a part of the
 			 * zone's info
 			 */
-			if (__improbable(src_zone && !src_zone->permanent &&
+			if (__improbable(src_zone && !src_zone->z_permanent &&
 			    kernel_buf_size < nbytes)) {
 				panic("copyio: kernel buffer %p has size %lu < nbytes %lu", kernel_addr, kernel_buf_size, nbytes);
 			}

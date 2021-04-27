@@ -59,7 +59,6 @@
 #include <vm/vm_protos.h>
 #include <vm/vm_kern.h>
 
-
 /*
  * APPLE PROTECT MEMORY PAGER
  *
@@ -150,13 +149,18 @@ const struct memory_object_pager_ops apple_protect_pager_ops = {
  */
 typedef struct apple_protect_pager {
 	/* mandatory generic header */
-	struct memory_object ap_pgr_hdr;
+	struct memory_object    ap_pgr_hdr;
 
 	/* pager-specific data */
 	queue_chain_t           pager_queue;    /* next & prev pagers */
-	struct os_refcnt        ref_count;      /* reference count */
-	boolean_t               is_ready;       /* is this pager ready ? */
-	boolean_t               is_mapped;      /* is this mem_obj mapped ? */
+#if MEMORY_OBJECT_HAS_REFCOUNT
+#define ap_pgr_hdr_ref          ap_pgr_hdr.mo_ref
+#else
+	os_ref_atomic_t         ap_pgr_hdr_ref;      /* reference count */
+#endif
+	bool                    is_ready;       /* is this pager ready ? */
+	bool                    is_mapped;      /* is this mem_obj mapped ? */
+	bool                    is_cached;      /* is this pager cached ? */
 	vm_object_t             backing_object; /* VM obj w/ encrypted data */
 	vm_object_offset_t      backing_offset;
 	vm_object_offset_t      crypto_backing_offset; /* for key... */
@@ -170,8 +174,8 @@ typedef struct apple_protect_pager {
  * List of memory objects managed by this EMM.
  * The list is protected by the "apple_protect_pager_lock" lock.
  */
-int apple_protect_pager_count = 0;              /* number of pagers */
-int apple_protect_pager_count_mapped = 0;       /* number of unmapped pagers */
+unsigned int apple_protect_pager_count = 0;        /* number of pagers */
+unsigned int apple_protect_pager_count_mapped = 0; /* number of unmapped pagers */
 queue_head_t apple_protect_pager_queue = QUEUE_HEAD_INITIALIZER(apple_protect_pager_queue);
 LCK_GRP_DECLARE(apple_protect_pager_lck_grp, "apple_protect");
 LCK_MTX_DECLARE(apple_protect_pager_lock, &apple_protect_pager_lck_grp);
@@ -179,15 +183,15 @@ LCK_MTX_DECLARE(apple_protect_pager_lock, &apple_protect_pager_lck_grp);
 /*
  * Maximum number of unmapped pagers we're willing to keep around.
  */
-int apple_protect_pager_cache_limit = 20;
+unsigned int apple_protect_pager_cache_limit = 20;
 
 /*
  * Statistics & counters.
  */
-int apple_protect_pager_count_max = 0;
-int apple_protect_pager_count_unmapped_max = 0;
-int apple_protect_pager_num_trim_max = 0;
-int apple_protect_pager_num_trim_total = 0;
+unsigned int apple_protect_pager_count_max = 0;
+unsigned int apple_protect_pager_count_unmapped_max = 0;
+unsigned int apple_protect_pager_num_trim_max = 0;
+unsigned int apple_protect_pager_num_trim_total = 0;
 
 
 
@@ -198,7 +202,8 @@ apple_protect_pager_t apple_protect_pager_create(
 	vm_object_offset_t crypto_backing_offset,
 	struct pager_crypt_info *crypt_info,
 	vm_object_offset_t crypto_start,
-	vm_object_offset_t crypto_end);
+	vm_object_offset_t crypto_end,
+	boolean_t cache_pager);
 apple_protect_pager_t apple_protect_pager_lookup(memory_object_t mem_obj);
 void apple_protect_pager_dequeue(apple_protect_pager_t pager);
 void apple_protect_pager_deallocate_internal(apple_protect_pager_t pager,
@@ -375,7 +380,7 @@ apple_protect_pager_data_request(
 
 	pager = apple_protect_pager_lookup(mem_obj);
 	assert(pager->is_ready);
-	assert(os_ref_get_count(&pager->ref_count) > 1); /* pager is alive and mapped */
+	assert(os_ref_get_count_raw(&pager->ap_pgr_hdr_ref) > 1); /* pager is alive and mapped */
 
 	PAGER_DEBUG(PAGER_PAGEIN, ("apple_protect_pager_data_request: %p, %llx, %x, %x, pager %p\n", mem_obj, offset, length, protection_required, pager));
 
@@ -402,7 +407,7 @@ apple_protect_pager_data_request(
 		retval = kr;
 		goto done;
 	}
-	dst_object = mo_control->moc_object;
+	dst_object = memory_object_control_to_vm_object(mo_control);
 	assert(dst_object != VM_OBJECT_NULL);
 
 	/*
@@ -743,7 +748,7 @@ apple_protect_pager_reference(
 	pager = apple_protect_pager_lookup(mem_obj);
 
 	lck_mtx_lock(&apple_protect_pager_lock);
-	os_ref_retain_locked(&pager->ref_count);
+	os_ref_retain_locked_raw(&pager->ap_pgr_hdr_ref, NULL);
 	lck_mtx_unlock(&apple_protect_pager_lock);
 }
 
@@ -824,7 +829,8 @@ apple_protect_pager_deallocate_internal(
 	boolean_t               locked)
 {
 	boolean_t       needs_trimming;
-	int             count_unmapped;
+	unsigned int    count_unmapped;
+	os_ref_count_t  ref_count;
 
 	if (!locked) {
 		lck_mtx_lock(&apple_protect_pager_lock);
@@ -840,7 +846,7 @@ apple_protect_pager_deallocate_internal(
 	}
 
 	/* drop a reference on this pager */
-	os_ref_count_t ref_count = os_ref_release_locked(&pager->ref_count);
+	ref_count = os_ref_release_locked_raw(&pager->ap_pgr_hdr_ref, NULL);
 
 	if (ref_count == 1) {
 		/*
@@ -943,7 +949,7 @@ apple_protect_pager_map(
 
 	lck_mtx_lock(&apple_protect_pager_lock);
 	assert(pager->is_ready);
-	assert(os_ref_get_count(&pager->ref_count) > 0); /* pager is alive */
+	assert(os_ref_get_count_raw(&pager->ap_pgr_hdr_ref) > 0); /* pager is alive */
 	if (pager->is_mapped == FALSE) {
 		/*
 		 * First mapping of this pager:  take an extra reference
@@ -951,7 +957,7 @@ apple_protect_pager_map(
 		 * are removed.
 		 */
 		pager->is_mapped = TRUE;
-		os_ref_retain_locked(&pager->ref_count);
+		os_ref_retain_locked_raw(&pager->ap_pgr_hdr_ref, NULL);
 		apple_protect_pager_count_mapped++;
 	}
 	lck_mtx_unlock(&apple_protect_pager_lock);
@@ -969,7 +975,7 @@ apple_protect_pager_last_unmap(
 	memory_object_t         mem_obj)
 {
 	apple_protect_pager_t   pager;
-	int                     count_unmapped;
+	unsigned int            count_unmapped;
 
 	PAGER_DEBUG(PAGER_ALL,
 	    ("apple_protect_pager_last_unmap: %p\n", mem_obj));
@@ -1029,7 +1035,7 @@ apple_protect_pager_lookup(
 
 	assert(mem_obj->mo_pager_ops == &apple_protect_pager_ops);
 	pager = (apple_protect_pager_t)(uintptr_t) mem_obj;
-	assert(os_ref_get_count(&pager->ref_count) > 0);
+	assert(os_ref_get_count_raw(&pager->ap_pgr_hdr_ref) > 0);
 	return pager;
 }
 
@@ -1040,7 +1046,8 @@ apple_protect_pager_create(
 	vm_object_offset_t      crypto_backing_offset,
 	struct pager_crypt_info *crypt_info,
 	vm_object_offset_t      crypto_start,
-	vm_object_offset_t      crypto_end)
+	vm_object_offset_t      crypto_end,
+	boolean_t               cache_pager)
 {
 	apple_protect_pager_t   pager, pager2;
 	memory_object_control_t control;
@@ -1064,8 +1071,16 @@ apple_protect_pager_create(
 	pager->ap_pgr_hdr.mo_control = MEMORY_OBJECT_CONTROL_NULL;
 
 	pager->is_ready = FALSE;/* not ready until it has a "name" */
-	os_ref_init_count(&pager->ref_count, NULL, 2); /* existence reference (for the cache) and another for the caller */
+	/* one reference for the caller */
+	os_ref_init_count_raw(&pager->ap_pgr_hdr_ref, NULL, 1);
 	pager->is_mapped = FALSE;
+	if (cache_pager) {
+		/* extra reference for the cache */
+		os_ref_retain_locked_raw(&pager->ap_pgr_hdr_ref, NULL);
+		pager->is_cached = true;
+	} else {
+		pager->is_cached = false;
+	}
 	pager->backing_object = backing_object;
 	pager->backing_offset = backing_offset;
 	pager->crypto_backing_offset = crypto_backing_offset;
@@ -1208,7 +1223,8 @@ apple_protect_pager_setup(
 	vm_object_offset_t      crypto_backing_offset,
 	struct pager_crypt_info *crypt_info,
 	vm_object_offset_t      crypto_start,
-	vm_object_offset_t      crypto_end)
+	vm_object_offset_t      crypto_end,
+	boolean_t               cache_pager)
 {
 	apple_protect_pager_t   pager;
 	struct pager_crypt_info *old_crypt_info, *new_crypt_info;
@@ -1295,7 +1311,7 @@ apple_protect_pager_setup(
 			crypt_info_deallocate(old_crypt_info);
 			assert(old_crypt_info->crypt_refcnt > 0);
 			/* give extra reference on pager to the caller */
-			os_ref_retain_locked(&pager->ref_count);
+			os_ref_retain_locked_raw(&pager->ap_pgr_hdr_ref, NULL);
 			break;
 		}
 	}
@@ -1335,7 +1351,8 @@ apple_protect_pager_setup(
 				crypto_backing_offset,
 				new_crypt_info,
 				crypto_start,
-				crypto_end);
+				crypto_end,
+				cache_pager);
 		}
 		if (pager == APPLE_PROTECT_PAGER_NULL) {
 			/* could not create a new pager */
@@ -1386,8 +1403,8 @@ apple_protect_pager_trim(void)
 {
 	apple_protect_pager_t   pager, prev_pager;
 	queue_head_t            trim_queue;
-	int                     num_trim;
-	int                     count_unmapped;
+	unsigned int            num_trim;
+	unsigned int            count_unmapped;
 
 	lck_mtx_lock(&apple_protect_pager_lock);
 
@@ -1407,7 +1424,8 @@ apple_protect_pager_trim(void)
 		prev_pager = (apple_protect_pager_t)
 		    queue_prev(&pager->pager_queue);
 
-		if (os_ref_get_count(&pager->ref_count) == 2 &&
+		if (pager->is_cached &&
+		    os_ref_get_count_raw(&pager->ap_pgr_hdr_ref) == 2 &&
 		    pager->is_ready &&
 		    !pager->is_mapped) {
 			/* this pager can be trimmed */
@@ -1441,6 +1459,8 @@ apple_protect_pager_trim(void)
 		    pager,
 		    apple_protect_pager_t,
 		    pager_queue);
+		assert(pager->is_cached);
+		pager->is_cached = false;
 		pager->pager_queue.next = NULL;
 		pager->pager_queue.prev = NULL;
 		/*
@@ -1448,7 +1468,8 @@ apple_protect_pager_trim(void)
 		 * has already been dequeued, but we still need to remove
 		 * a reference.
 		 */
-		os_ref_count_t __assert_only count = os_ref_release_locked(&pager->ref_count);
+		os_ref_count_t __assert_only count;
+		count = os_ref_release_locked_raw(&pager->ap_pgr_hdr_ref, NULL);
 		assert(count == 1);
 		apple_protect_pager_terminate_internal(pager);
 	}

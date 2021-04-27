@@ -103,13 +103,14 @@ extern void ipc_port_release_send(ipc_port_t);
  * kept sorted by transaction ID (xid).
  */
 static uint64_t nfs_lockxid = 0;
-static LOCKD_MSG_QUEUE nfs_pendlockq;
+static LOCKD_MSG_QUEUE nfs_pendlockq = TAILQ_HEAD_INITIALIZER(nfs_pendlockq);
 
 /* list of mounts that are (potentially) making lockd requests */
-TAILQ_HEAD(nfs_lockd_mount_list, nfsmount) nfs_lockd_mount_list;
+TAILQ_HEAD(nfs_lockd_mount_list, nfsmount) nfs_lockd_mount_list =
+    TAILQ_HEAD_INITIALIZER(nfs_lockd_mount_list);
 
-static lck_grp_t *nfs_lock_lck_grp;
-static lck_mtx_t *nfs_lock_mutex;
+static LCK_GRP_DECLARE(nfs_lock_lck_grp, "nfs_lock");
+static LCK_MTX_DECLARE(nfs_lock_mutex, &nfs_lock_lck_grp);
 
 void nfs_lockdmsg_enqueue(LOCKD_MSG_REQUEST *);
 void nfs_lockdmsg_dequeue(LOCKD_MSG_REQUEST *);
@@ -120,28 +121,15 @@ uint64_t nfs_lockxid_get(void);
 int nfs_lockd_send_request(LOCKD_MSG *, int);
 
 /*
- * initialize global nfs lock state
- */
-void
-nfs_lockinit(void)
-{
-	TAILQ_INIT(&nfs_pendlockq);
-	TAILQ_INIT(&nfs_lockd_mount_list);
-
-	nfs_lock_lck_grp = lck_grp_alloc_init("nfs_lock", LCK_GRP_ATTR_NULL);
-	nfs_lock_mutex = lck_mtx_alloc_init(nfs_lock_lck_grp, LCK_ATTR_NULL);
-}
-
-/*
  * Register a mount as (potentially) making lockd requests.
  */
 void
 nfs_lockd_mount_register(struct nfsmount *nmp)
 {
-	lck_mtx_lock(nfs_lock_mutex);
+	lck_mtx_lock(&nfs_lock_mutex);
 	TAILQ_INSERT_HEAD(&nfs_lockd_mount_list, nmp, nm_ldlink);
 	nfs_lockd_mounts++;
-	lck_mtx_unlock(nfs_lock_mutex);
+	lck_mtx_unlock(&nfs_lock_mutex);
 }
 
 /*
@@ -157,9 +145,9 @@ nfs_lockd_mount_unregister(struct nfsmount *nmp)
 	mach_port_t lockd_port = IPC_PORT_NULL;
 	kern_return_t kr;
 
-	lck_mtx_lock(nfs_lock_mutex);
+	lck_mtx_lock(&nfs_lock_mutex);
 	if (nmp->nm_ldlink.tqe_next == NFSNOLIST) {
-		lck_mtx_unlock(nfs_lock_mutex);
+		lck_mtx_unlock(&nfs_lock_mutex);
 		return;
 	}
 
@@ -174,7 +162,7 @@ nfs_lockd_mount_unregister(struct nfsmount *nmp)
 		nfs_lockd_request_sent = 0;
 	}
 
-	lck_mtx_unlock(nfs_lock_mutex);
+	lck_mtx_unlock(&nfs_lock_mutex);
 
 	if (!send_shutdown) {
 		return;
@@ -463,7 +451,7 @@ nfs3_lockd_request(
 	interruptable = NMFLAG(nmp, INTR);
 	lck_mtx_unlock(&nmp->nm_lock);
 
-	lck_mtx_lock(nfs_lock_mutex);
+	lck_mtx_lock(&nfs_lock_mutex);
 
 	/* allocate unique xid */
 	msg->lm_xid = nfs_lockxid_get();
@@ -475,9 +463,9 @@ nfs3_lockd_request(
 		nfs_lockd_request_sent = 1;
 
 		/* need to drop nfs_lock_mutex while calling nfs_lockd_send_request() */
-		lck_mtx_unlock(nfs_lock_mutex);
+		lck_mtx_unlock(&nfs_lock_mutex);
 		error = nfs_lockd_send_request(msg, interruptable);
-		lck_mtx_lock(nfs_lock_mutex);
+		lck_mtx_lock(&nfs_lock_mutex);
 		if (error && error != EAGAIN) {
 			break;
 		}
@@ -507,7 +495,7 @@ wait_for_granted:
 		while (now.tv_sec < endtime) {
 			error = error2 = 0;
 			if (!msgreq->lmr_answered) {
-				error = msleep(msgreq, nfs_lock_mutex, slpflag | PUSER, "lockd", &ts);
+				error = msleep(msgreq, &nfs_lock_mutex, slpflag | PUSER, "lockd", &ts);
 				slpflag = 0;
 			}
 			if (msgreq->lmr_answered) {
@@ -736,7 +724,7 @@ wait_for_granted:
 			 * for this mount.
 			 */
 			nfs_lockdmsg_dequeue(msgreq);
-			lck_mtx_unlock(nfs_lock_mutex);
+			lck_mtx_unlock(&nfs_lock_mutex);
 			lck_mtx_lock(&nmp->nm_lock);
 			if (nmp->nm_lockmode == NFS_LOCK_MODE_ENABLED) {
 				nmp->nm_lockmode = NFS_LOCK_MODE_DISABLED;
@@ -763,7 +751,7 @@ wait_for_granted:
 
 	nfs_lockdmsg_dequeue(msgreq);
 
-	lck_mtx_unlock(nfs_lock_mutex);
+	lck_mtx_unlock(&nfs_lock_mutex);
 
 	return error;
 }
@@ -941,7 +929,7 @@ nfslockdans(proc_t p, struct lockd_ans *ansp)
 		return EINVAL;
 	}
 
-	lck_mtx_lock(nfs_lock_mutex);
+	lck_mtx_lock(&nfs_lock_mutex);
 
 	/* try to find the lockd message by transaction id (cookie) */
 	msgreq = nfs_lockdmsg_find_by_xid(ansp->la_xid);
@@ -964,7 +952,7 @@ nfslockdans(proc_t p, struct lockd_ans *ansp)
 		}
 	}
 	if (!msgreq) {
-		lck_mtx_unlock(nfs_lock_mutex);
+		lck_mtx_unlock(&nfs_lock_mutex);
 		return EPIPE;
 	}
 
@@ -988,7 +976,7 @@ nfslockdans(proc_t p, struct lockd_ans *ansp)
 	}
 
 	msgreq->lmr_answered = 1;
-	lck_mtx_unlock(nfs_lock_mutex);
+	lck_mtx_unlock(&nfs_lock_mutex);
 	wakeup(msgreq);
 
 	return 0;
@@ -1029,7 +1017,7 @@ nfslockdnotify(proc_t p, user_addr_t argp)
 	argp += headsize;
 	saddr = (struct sockaddr *)&ln.ln_addr[0];
 
-	lck_mtx_lock(nfs_lock_mutex);
+	lck_mtx_lock(&nfs_lock_mutex);
 
 	for (i = 0; i < ln.ln_addrcount; i++) {
 		error = copyin(argp, &ln.ln_addr[0], sizeof(ln.ln_addr[0]));
@@ -1050,7 +1038,7 @@ nfslockdnotify(proc_t p, user_addr_t argp)
 		}
 	}
 
-	lck_mtx_unlock(nfs_lock_mutex);
+	lck_mtx_unlock(&nfs_lock_mutex);
 
 	return error;
 }

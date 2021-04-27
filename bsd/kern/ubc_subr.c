@@ -777,6 +777,11 @@ csblob_get_entitlements(struct cs_blob *csblob, void **out_start, size_t *out_le
 	}
 
 	csblob->csb_hashtype->cs_init(&context);
+	ptrauth_utils_auth_blob_generic(entitlements,
+	    ntohl(entitlements->length),
+	    OS_PTRAUTH_DISCRIMINATOR("cs_blob.csb_entitlements_blob_signature"),
+	    PTRAUTH_ADDR_DIVERSIFY,
+	    csblob->csb_entitlements_blob_signature);
 	csblob->csb_hashtype->cs_update(&context, entitlements, ntohl(entitlements->length));
 	csblob->csb_hashtype->cs_final(computed_hash, &context);
 
@@ -3082,6 +3087,12 @@ ubc_cs_reconstitute_code_signature(struct cs_blob const *blob, vm_size_t optiona
 
 	if (blob->csb_entitlements_blob) {
 		/* We need to add a slot for the entitlements */
+		ptrauth_utils_auth_blob_generic(blob->csb_entitlements_blob,
+		    ntohl(blob->csb_entitlements_blob->length),
+		    OS_PTRAUTH_DISCRIMINATOR("cs_blob.csb_entitlements_blob_signature"),
+		    PTRAUTH_ADDR_DIVERSIFY,
+		    blob->csb_entitlements_blob_signature);
+
 		new_blob_size += sizeof(CS_BlobIndex);
 		new_blob_size += ntohl(blob->csb_entitlements_blob->length);
 	}
@@ -3111,6 +3122,12 @@ ubc_cs_reconstitute_code_signature(struct cs_blob const *blob, vm_size_t optiona
 		new_superblob->index[0].offset = htonl((uint32_t)cd_offset);
 		new_superblob->index[1].type = htonl(CSSLOT_ENTITLEMENTS);
 		new_superblob->index[1].offset = htonl((uint32_t)ent_offset);
+
+		ptrauth_utils_auth_blob_generic(blob->csb_entitlements_blob,
+		    ntohl(blob->csb_entitlements_blob->length),
+		    OS_PTRAUTH_DISCRIMINATOR("cs_blob.csb_entitlements_blob_signature"),
+		    PTRAUTH_ADDR_DIVERSIFY,
+		    blob->csb_entitlements_blob_signature);
 
 		memcpy((void *)(new_blob_addr + ent_offset), blob->csb_entitlements_blob, ntohl(blob->csb_entitlements_blob->length));
 
@@ -3242,12 +3259,18 @@ ubc_cs_convert_to_multilevel_hash(struct cs_blob *blob)
 	}
 
 	/* New Code Directory is ready for use, swap it out in the blob structure */
-	ubc_cs_blob_deallocate(blob->csb_mem_kaddr, blob->csb_mem_size);
+	ubc_cs_blob_deallocate((vm_offset_t)blob->csb_mem_kaddr, blob->csb_mem_size);
 
 	blob->csb_mem_size = new_blob_size;
-	blob->csb_mem_kaddr = new_blob_addr;
+	blob->csb_mem_kaddr = (void *)new_blob_addr;
 	blob->csb_cd = cd;
 	blob->csb_entitlements_blob = entitlements;
+	if (blob->csb_entitlements_blob != NULL) {
+		blob->csb_entitlements_blob_signature = ptrauth_utils_sign_blob_generic(blob->csb_entitlements_blob,
+		    ntohl(blob->csb_entitlements_blob->length),
+		    OS_PTRAUTH_DISCRIMINATOR("cs_blob.csb_entitlements_blob_signature"),
+		    PTRAUTH_ADDR_DIVERSIFY);
+	}
 
 	/* The blob has some cached attributes of the Code Directory, so update those */
 
@@ -3301,7 +3324,7 @@ cs_blob_create_validated(
 	/* fill in the new blob */
 	blob->csb_mem_size = size;
 	blob->csb_mem_offset = 0;
-	blob->csb_mem_kaddr = *addr;
+	blob->csb_mem_kaddr = (void *)*addr;
 	blob->csb_flags = 0;
 	blob->csb_signer_type = CS_SIGNER_TYPE_UNKNOWN;
 	blob->csb_platform_binary = 0;
@@ -3339,6 +3362,12 @@ cs_blob_create_validated(
 
 		blob->csb_cd = cd;
 		blob->csb_entitlements_blob = entitlements; /* may be NULL, not yet validated */
+		if (blob->csb_entitlements_blob != NULL) {
+			blob->csb_entitlements_blob_signature = ptrauth_utils_sign_blob_generic(blob->csb_entitlements_blob,
+			    ntohl(blob->csb_entitlements_blob->length),
+			    OS_PTRAUTH_DISCRIMINATOR("cs_blob.csb_entitlements_blob_signature"),
+			    PTRAUTH_ADDR_DIVERSIFY);
+		}
 		blob->csb_hashtype = cs_find_md(cd->hashType);
 		if (blob->csb_hashtype == NULL || blob->csb_hashtype->cs_digest_size > sizeof(hash)) {
 			panic("validated CodeDirectory but unsupported type");
@@ -3412,8 +3441,8 @@ cs_blob_free(
 {
 	if (blob != NULL) {
 		if (blob->csb_mem_kaddr) {
-			ubc_cs_blob_deallocate(blob->csb_mem_kaddr, blob->csb_mem_size);
-			blob->csb_mem_kaddr = 0;
+			ubc_cs_blob_deallocate((vm_offset_t)blob->csb_mem_kaddr, blob->csb_mem_size);
+			blob->csb_mem_kaddr = NULL;
 		}
 		if (blob->csb_entitlements != NULL) {
 			osobject_release(blob->csb_entitlements);
@@ -3547,12 +3576,18 @@ ubc_cs_blob_add(
 			goto out;
 		}
 
-		ubc_cs_blob_deallocate(blob->csb_mem_kaddr, blob->csb_mem_size);
+		ubc_cs_blob_deallocate((vm_offset_t)blob->csb_mem_kaddr, blob->csb_mem_size);
 
-		blob->csb_mem_kaddr = new_mem_kaddr;
+		blob->csb_mem_kaddr = (void *)new_mem_kaddr;
 		blob->csb_mem_size = new_mem_size;
 		blob->csb_cd = new_cd;
 		blob->csb_entitlements_blob = new_entitlements;
+		if (blob->csb_entitlements_blob != NULL) {
+			blob->csb_entitlements_blob_signature = ptrauth_utils_sign_blob_generic(blob->csb_entitlements_blob,
+			    ntohl(blob->csb_entitlements_blob->length),
+			    OS_PTRAUTH_DISCRIMINATOR("cs_blob.csb_entitlements_blob_signature"),
+			    PTRAUTH_ADDR_DIVERSIFY);
+		}
 		blob->csb_reconstituted = true;
 	}
 #endif
@@ -4379,7 +4414,7 @@ cs_validate_hash(
 		}
 
 		/* blob data has been released */
-		kaddr = blob->csb_mem_kaddr;
+		kaddr = (vm_offset_t)blob->csb_mem_kaddr;
 		if (kaddr == 0) {
 			continue;
 		}

@@ -97,7 +97,6 @@
 #include <kern/kern_types.h>
 #include <kern/kalloc.h>
 #include <kern/cpu_data.h>
-#include <kern/counters.h>
 #include <kern/extmod_statistics.h>
 #include <kern/ipc_mig.h>
 #include <kern/ipc_tt.h>
@@ -343,7 +342,7 @@ thread_corpse_continue(void)
 {
 	thread_t thread = current_thread();
 
-	thread_terminate_internal(thread);
+	thread_terminate_internal(thread, TH_TERMINATE_OPTION_NONE);
 
 	/*
 	 * Handle the thread termination directly
@@ -708,6 +707,12 @@ thread_deallocate_complete(
 	thread->thread_magic = 0;
 #endif /* MACH_ASSERT */
 
+	lck_mtx_lock(&tasks_threads_lock);
+	assert(terminated_threads_count > 0);
+	queue_remove(&terminated_threads, thread, thread_t, threads);
+	terminated_threads_count--;
+	lck_mtx_unlock(&tasks_threads_lock);
+
 	zfree(thread_zone, thread);
 }
 
@@ -899,6 +904,8 @@ thread_terminate_queue_invoke(mpsc_queue_chain_t e,
 	lck_mtx_lock(&tasks_threads_lock);
 	queue_remove(&threads, thread, thread_t, threads);
 	threads_count--;
+	queue_enter(&terminated_threads, thread, thread_t, threads);
+	terminated_threads_count++;
 	lck_mtx_unlock(&tasks_threads_lock);
 
 	thread_deallocate(thread);
@@ -1050,10 +1057,14 @@ thread_daemon_init(void)
 	}
 }
 
-#define TH_OPTION_NONE          0x00
-#define TH_OPTION_NOCRED        0x01
-#define TH_OPTION_NOSUSP        0x02
-#define TH_OPTION_WORKQ         0x04
+__options_decl(thread_create_internal_options_t, uint32_t, {
+	TH_OPTION_NONE          = 0x00,
+	TH_OPTION_NOCRED        = 0x01,
+	TH_OPTION_NOSUSP        = 0x02,
+	TH_OPTION_WORKQ         = 0x04,
+	TH_OPTION_IMMOVABLE     = 0x08,
+	TH_OPTION_PINNED        = 0x10,
+});
 
 /*
  * Create a new thread.
@@ -1065,13 +1076,14 @@ static kern_return_t
 thread_create_internal(
 	task_t                                  parent_task,
 	integer_t                               priority,
-	thread_continue_t               continuation,
+	thread_continue_t                       continuation,
 	void                                    *parameter,
-	int                                             options,
+	thread_create_internal_options_t        options,
 	thread_t                                *out_thread)
 {
 	thread_t                                new_thread;
-	static thread_t                 first_thread;
+	static thread_t                         first_thread;
+	ipc_thread_init_options_t init_options = IPC_THREAD_INIT_NONE;
 
 	/*
 	 *	Allocate a thread and initialize static fields
@@ -1087,6 +1099,14 @@ thread_create_internal(
 
 	if (new_thread != first_thread) {
 		init_thread_from_template(new_thread);
+	}
+
+	if (options & TH_OPTION_PINNED) {
+		init_options |= IPC_THREAD_INIT_PINNED;
+	}
+
+	if (options & TH_OPTION_IMMOVABLE) {
+		init_options |= IPC_THREAD_INIT_IMMOVABLE;
 	}
 
 	os_ref_init_count(&new_thread->ref_count, &thread_refgrp, 2);
@@ -1132,7 +1152,7 @@ thread_create_internal(
 
 	lck_mtx_init(&new_thread->mutex, &thread_lck_grp, LCK_ATTR_NULL);
 
-	ipc_thread_init(new_thread);
+	ipc_thread_init(new_thread, init_options);
 
 	new_thread->continuation = continuation;
 	new_thread->parameter = parameter;
@@ -1363,14 +1383,15 @@ thread_create_internal(
 }
 
 static kern_return_t
-thread_create_internal2(
-	task_t                          task,
-	thread_t                        *new_thread,
-	boolean_t                       from_user,
-	thread_continue_t               continuation)
+thread_create_with_options_internal(
+	task_t                            task,
+	thread_t                          *new_thread,
+	boolean_t                         from_user,
+	thread_create_internal_options_t  options,
+	thread_continue_t                 continuation)
 {
 	kern_return_t           result;
-	thread_t                        thread;
+	thread_t                thread;
 
 	if (task == TASK_NULL || task == kernel_task) {
 		return KERN_INVALID_ARGUMENT;
@@ -1383,7 +1404,7 @@ thread_create_internal2(
 	}
 #endif
 
-	result = thread_create_internal(task, -1, continuation, NULL, TH_OPTION_NONE, &thread);
+	result = thread_create_internal(task, -1, continuation, NULL, options, &thread);
 	if (result != KERN_SUCCESS) {
 		return result;
 	}
@@ -1417,7 +1438,30 @@ thread_create(
 	task_t                          task,
 	thread_t                        *new_thread)
 {
-	return thread_create_internal2(task, new_thread, FALSE, (thread_continue_t)thread_bootstrap_return);
+	return thread_create_with_options_internal(task, new_thread, FALSE, TH_OPTION_NONE,
+	           (thread_continue_t)thread_bootstrap_return);
+}
+
+/*
+ * Create a thread that has its itk_self pinned
+ * Deprecated, should be cleanup once rdar://70892168 lands
+ */
+kern_return_t
+thread_create_pinned(
+	task_t                          task,
+	thread_t                        *new_thread)
+{
+	return thread_create_with_options_internal(task, new_thread, FALSE,
+	           TH_OPTION_PINNED | TH_OPTION_IMMOVABLE, (thread_continue_t)thread_bootstrap_return);
+}
+
+kern_return_t
+thread_create_immovable(
+	task_t                          task,
+	thread_t                        *new_thread)
+{
+	return thread_create_with_options_internal(task, new_thread, FALSE,
+	           TH_OPTION_IMMOVABLE, (thread_continue_t)thread_bootstrap_return);
 }
 
 kern_return_t
@@ -1425,7 +1469,8 @@ thread_create_from_user(
 	task_t                          task,
 	thread_t                        *new_thread)
 {
-	return thread_create_internal2(task, new_thread, TRUE, (thread_continue_t)thread_bootstrap_return);
+	return thread_create_with_options_internal(task, new_thread, TRUE, TH_OPTION_NONE,
+	           (thread_continue_t)thread_bootstrap_return);
 }
 
 kern_return_t
@@ -1434,7 +1479,7 @@ thread_create_with_continuation(
 	thread_t                        *new_thread,
 	thread_continue_t               continuation)
 {
-	return thread_create_internal2(task, new_thread, FALSE, continuation);
+	return thread_create_with_options_internal(task, new_thread, FALSE, TH_OPTION_NONE, continuation);
 }
 
 /*
@@ -1487,13 +1532,24 @@ thread_create_waiting_internal(
 
 kern_return_t
 thread_create_waiting(
-	task_t                  task,
-	thread_continue_t       continuation,
-	event_t                 event,
-	thread_t                *new_thread)
+	task_t                          task,
+	thread_continue_t               continuation,
+	event_t                         event,
+	th_create_waiting_options_t     options,
+	thread_t                        *new_thread)
 {
+	thread_create_internal_options_t ci_options = TH_OPTION_NONE;
+
+	assert((options & ~TH_CREATE_WAITING_OPTION_MASK) == 0);
+	if (options & TH_CREATE_WAITING_OPTION_PINNED) {
+		ci_options |= TH_OPTION_PINNED;
+	}
+	if (options & TH_CREATE_WAITING_OPTION_IMMOVABLE) {
+		ci_options |= TH_OPTION_IMMOVABLE;
+	}
+
 	return thread_create_waiting_internal(task, continuation, event,
-	           kThreadWaitNone, TH_OPTION_NONE, new_thread);
+	           kThreadWaitNone, ci_options, new_thread);
 }
 
 
@@ -1605,7 +1661,13 @@ thread_create_workq_waiting(
 	thread_continue_t   continuation,
 	thread_t            *new_thread)
 {
-	int options = TH_OPTION_NOCRED | TH_OPTION_NOSUSP | TH_OPTION_WORKQ;
+	/*
+	 * Create thread, but don't pin control port just yet, in case someone calls
+	 * task_threads() and deallocates pinned port before kernel copyout happens,
+	 * which will result in pinned port guard exception. Instead, pin and make
+	 * it immovable atomically at copyout during workq_setup_and_run().
+	 */
+	int options = TH_OPTION_NOCRED | TH_OPTION_NOSUSP | TH_OPTION_WORKQ | TH_OPTION_IMMOVABLE;
 	return thread_create_waiting_internal(task, continuation, NULL,
 	           kThreadWaitParkedWorkQueue, options, new_thread);
 }
@@ -2067,8 +2129,6 @@ thread_wire_internal(
 	if (host_priv == NULL || thread != current_thread()) {
 		return KERN_INVALID_ARGUMENT;
 	}
-
-	assert(host_priv == &realhost);
 
 	if (prev_state) {
 		*prev_state = (thread->options & TH_OPT_VMPRIV) != 0;
@@ -3163,7 +3223,7 @@ thread_port_with_flavor_notify(mach_msg_header_t *msg)
 		ip_unlock(port);
 		return;
 	}
-	thread = (thread_t)port->ip_kobject;
+	thread = (thread_t)ipc_kobject_get(port);
 	kotype = ip_kotype(port);
 	if (thread != THREAD_NULL) {
 		assert((IKOT_THREAD_READ == kotype) || (IKOT_THREAD_INSPECT == kotype));
@@ -3176,28 +3236,39 @@ thread_port_with_flavor_notify(mach_msg_header_t *msg)
 		return;
 	}
 
-	thread_mtx_lock(thread);
-	ip_lock(port);
-	require_ip_active(port);
-	/*
-	 * Check for a stale no-senders notification. A call to any function
-	 * that vends out send rights to this port could resurrect it between
-	 * this notification being generated and actually being handled here.
-	 */
-	if (port->ip_srights > 0) {
-		ip_unlock(port);
-		thread_mtx_unlock(thread);
-		thread_deallocate(thread);
-		return;
-	}
 	if (kotype == IKOT_THREAD_READ) {
 		flavor = THREAD_FLAVOR_READ;
 	} else {
 		flavor = THREAD_FLAVOR_INSPECT;
 	}
-	assert(thread->ith_self[flavor] == port);
-	thread->ith_self[flavor] = IP_NULL;
-	port->ip_kobject = IKOT_NONE;
+
+	thread_mtx_lock(thread);
+	ip_lock(port);
+	/*
+	 * If the port is no longer active, then ipc_thread_terminate() ran
+	 * and destroyed the kobject already. Just deallocate the task
+	 * ref we took and go away.
+	 *
+	 * It is also possible that several nsrequests are in flight,
+	 * only one shall NULL-out the port entry, and this is the one
+	 * that gets to dealloc the port.
+	 *
+	 * Check for a stale no-senders notification. A call to any function
+	 * that vends out send rights to this port could resurrect it between
+	 * this notification being generated and actually being handled here.
+	 */
+	if (!ip_active(port) ||
+	    thread->ith_thread_ports[flavor] != port ||
+	    port->ip_srights > 0) {
+		ip_unlock(port);
+		thread_mtx_unlock(thread);
+		thread_deallocate(thread);
+		return;
+	}
+
+	assert(thread->ith_thread_ports[flavor] == port);
+	thread->ith_thread_ports[flavor] = IP_NULL;
+	ipc_kobject_set_atomically(port, IKO_NULL, IKOT_NONE);
 	ip_unlock(port);
 	thread_mtx_unlock(thread);
 	thread_deallocate(thread);

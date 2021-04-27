@@ -91,7 +91,7 @@ cluster_type_t  thread_group_recommendation(struct thread_group *tg);
 
 typedef         void (*thread_group_iterate_fn_t)(void*, int, struct thread_group *);
 kern_return_t   thread_group_iterate_stackshot(thread_group_iterate_fn_t callout, void *arg);
-uint64_t kdp_thread_group_get_flags(struct thread_group *);
+uint32_t        thread_group_get_flags(struct thread_group *);
 boolean_t       thread_group_smp_restricted(struct thread_group *tg);
 void            thread_group_update_recommendation(struct thread_group *tg, cluster_type_t new_recommendation);
 

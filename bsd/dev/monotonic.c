@@ -60,7 +60,7 @@ static const struct cdevsw mt_cdevsw = {
 /*
  * Written at initialization, read-only thereafter.
  */
-lck_grp_t *mt_lock_grp = NULL;
+LCK_GRP_DECLARE(mt_lock_grp, MT_NODE);
 static int mt_dev_major;
 
 static mt_device_t
@@ -96,9 +96,6 @@ mt_device_assert_inuse(__assert_only mt_device_t dev)
 int
 mt_dev_init(void)
 {
-	mt_lock_grp = lck_grp_alloc_init(MT_NODE, LCK_GRP_ATTR_NULL);
-	assert(mt_lock_grp != NULL);
-
 	mt_dev_major = cdevsw_add(-1 /* allocate a major number */, &mt_cdevsw);
 	if (mt_dev_major < 0) {
 		panic("monotonic: cdevsw_add failed: %d", mt_dev_major);
@@ -123,7 +120,7 @@ mt_dev_init(void)
 			__builtin_unreachable();
 		}
 
-		lck_mtx_init(&mt_devices[i].mtd_lock, mt_lock_grp, LCK_ATTR_NULL);
+		lck_mtx_init(&mt_devices[i].mtd_lock, &mt_lock_grp, LCK_ATTR_NULL);
 	}
 
 	return 0;

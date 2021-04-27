@@ -168,6 +168,14 @@ type task_read_t = mach_port_t
 #endif	/* KERNEL_SERVER */
 		;
 
+type task_id_token_t = mach_port_t
+#if KERNEL_SERVER
+		intran: task_id_token_t convert_port_to_task_id_token(mach_port_t)
+		outtran: mach_port_t convert_task_id_token_to_port(task_id_token_t)
+		destructor: task_id_token_release(task_id_token_t)
+#endif	/* KERNEL_SERVER */
+		;
+
 type thread_t = mach_port_t
 #if	KERNEL_SERVER
 		intran: thread_t convert_port_to_thread(mach_port_t)
@@ -578,8 +586,13 @@ type exception_behavior_t	= int;
 
 type    exception_handler_t = mach_port_t;
 
+type    exception_handler_info_t = struct[2] of natural_t;
+
 type	exception_handler_array_t	=
 			array[*:32] of exception_handler_t;
+
+type    exception_handler_info_array_t =
+			array[*:32] of exception_handler_info_t;
 
 type	exception_behavior_array_t	=
 			array[*:32] of exception_behavior_t;
@@ -716,24 +729,25 @@ type dyld_kernel_process_info_t = struct[64] of MACH_MSG_TYPE_BYTE;
 #ifdef	MACH_KERNEL_PRIVATE
 simport <ipc/ipc_voucher.h>;	/* for voucher conversions */
 simport <kern/ipc_kobject.h>;	/* for null conversion */
-simport <kern/ipc_tt.h>;	/* for task/thread conversion */
-simport <kern/ipc_host.h>;	/* for host/processor/pset conversions */
+simport <kern/ipc_tt.h>;	    /* for task/thread conversion */
+simport <kern/ipc_host.h>;	    /* for host/processor/pset conversions */
 simport <kern/ipc_sync.h>;      /* for lock_set and semaphore conversions */
-simport <kern/ledger.h>;	/* for ledger conversions */
-simport <kern/processor.h>;	/* for processor conversions */
-simport <kern/sync_lock.h>;	/* for lock-set conversions */
-simport <kern/sync_sema.h>;	/* for semaphore conversions */
+simport <kern/ledger.h>;	    /* for ledger conversions */
+simport <kern/processor.h>;	    /* for processor conversions */
+simport <kern/sync_lock.h>;	    /* for lock-set conversions */
+simport <kern/sync_sema.h>;	    /* for semaphore conversions */
 simport <ipc/ipc_eventlink.h>;  /* for eventlink conversions */
 simport <vm/memory_object.h>;	/* for memory object type conversions */
-simport <vm/vm_map.h>;		/* for vm_map conversions */
+simport <vm/vm_map.h>;		    /* for vm_map conversions */
 #if CONFIG_ARCADE
-simport <kern/arcade.h>;    /* for arcade_register conversions */
+simport <kern/arcade.h>;        /* for arcade_register conversions */
 #endif
 #endif	/* MACH_KERNEL_PRIVATE */
 
-simport <kern/ipc_mig.h>;	/* pick up kernel-specific MIG things */
+simport <kern/ipc_mig.h>;	    /* pick up kernel-specific MIG things */
 
 simport <kern/suid_cred.h>;
+simport <kern/task_ident.h>;    /* for task_id_token conversions */
 #endif /* KERNEL_SERVER */
 
 import <mach/mig.h>;

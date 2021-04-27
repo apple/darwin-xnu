@@ -85,7 +85,7 @@ extern u_char krb5_mech_oid[11];
  * The client's RPCSEC_GSS context information
  */
 struct nfs_gss_clnt_ctx {
-	lck_mtx_t               *gss_clnt_mtx;
+	lck_mtx_t               gss_clnt_mtx;
 	thread_t                gss_clnt_thread;        // Thread creating context
 	TAILQ_ENTRY(nfs_gss_clnt_ctx)   gss_clnt_entries;
 	uint32_t                gss_clnt_flags;         // Flag bits - see below
@@ -135,7 +135,7 @@ struct nfs_gss_clnt_ctx {
  * The server's RPCSEC_GSS context information
  */
 struct nfs_gss_svc_ctx {
-	lck_mtx_t               *gss_svc_mtx;
+	lck_mtx_t               gss_svc_mtx;
 	LIST_ENTRY(nfs_gss_svc_ctx)     gss_svc_entries;
 	uint32_t                gss_svc_handle;         // Identifies server context to client
 	uint32_t                gss_svc_refcnt;         // Reference count

@@ -69,6 +69,9 @@
 #include <netinet/in_pcb.h>
 #include <netinet/tcp.h>
 #include <netinet/tcp_timer.h>
+#if !KERNEL
+#include <TargetConditionals.h>
+#endif
 
 #if defined(__LP64__)
 #define _TCPCB_PTR(x)                   u_int32_t
@@ -641,6 +644,8 @@ struct tcpcb {
 	uint32_t        t_comp_gencnt; /* Current compression generation-count */
 	uint32_t        t_comp_lastinc; /* Last time the gen-count was changed - should change every TCP_COMP_CHANGE_RATE ms */
 #define TCP_COMP_CHANGE_RATE    5 /* Intervals at which we change the gencnt. Means that worst-case we send one ACK every TCP_COMP_CHANGE_RATE ms */
+
+	uint32_t        t_ts_offset; /* Randomized timestamp offset to hide on-the-wire timestamp */
 
 	uuid_t          t_fsw_uuid;
 	uuid_t          t_flow_uuid;
@@ -1227,7 +1232,7 @@ struct  xtcpcb {
 	u_quad_t        xt_alignment_hack;
 };
 
-#if XNU_TARGET_OS_OSX || !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
+#if XNU_TARGET_OS_OSX || KERNEL || !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 
 struct  xtcpcb64 {
 	u_int32_t               xt_len;
@@ -1308,7 +1313,7 @@ struct  xtcpcb64 {
 	u_quad_t                xt_alignment_hack;
 };
 
-#endif /* XNU_TARGET_OS_OSX || !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR) */
+#endif /* XNU_TARGET_OS_OSX || KERNEL || !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR) */
 
 #ifdef PRIVATE
 
@@ -1497,6 +1502,7 @@ extern uint32_t tcp_do_autorcvbuf;
 extern uint32_t tcp_autorcvbuf_max;
 extern int tcp_recv_bg;
 extern int tcp_do_ack_compression;
+extern int tcp_randomize_timestamps;
 /*
  * Dummy value used for when there is no flow and we want to ensure that compression
  * can happen.

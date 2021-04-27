@@ -68,6 +68,9 @@
 #include <sys/un.h>
 #include <sys/ucred.h>
 #include <sys/socketvar.h>
+#if !KERNEL && PRIVATE
+#include <TargetConditionals.h>
+#endif
 
 /*
  * Protocol control block for an active
@@ -204,7 +207,7 @@ struct  xunpcb {
 	u_quad_t                        xu_alignment_hack;
 };
 
-#if XNU_TARGET_OS_OSX || !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
+#if XNU_TARGET_OS_OSX || KERNEL || !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 
 struct xunpcb64_list_entry {
 	u_int64_t   le_next;
@@ -238,7 +241,7 @@ struct xunpcb64 {
 	struct xsocket64        xu_socket;
 };
 
-#endif /* XNU_TARGET_OS_OSX || !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR) */
+#endif /* XNU_TARGET_OS_OSX || KERNEL || !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR) */
 
 #pragma pack()
 

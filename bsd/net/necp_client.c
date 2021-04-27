@@ -1484,11 +1484,12 @@ static void
 necp_client_add_interface_option_if_needed(struct necp_client *client,
     uint32_t interface_index,
     uint32_t interface_generation,
-    uuid_t *nexus_agent)
+    uuid_t *nexus_agent,
+    bool network_provider)
 {
-	if (interface_index == IFSCOPE_NONE ||
+	if ((interface_index == IFSCOPE_NONE && !network_provider) ||
 	    (client->interface_option_count != 0 && !client->allow_multiple_flows)) {
-		// Interface not set, or client not allowed to use this mode
+		// Interface or agent not set, or client not allowed to use this mode
 		return;
 	}
 
@@ -1913,7 +1914,8 @@ necp_client_add_browse_interface_options(struct necp_client *client,
 			    (flags & NETAGENT_FLAG_SUPPORTS_BROWSE) &&
 			    (!(flags & NETAGENT_FLAG_SPECIFIC_USE_ONLY) ||
 			    necp_netagent_is_required(parsed_parameters, &ifp->if_agentids[i]))) {
-				necp_client_add_interface_option_if_needed(client, ifp->if_index, ifnet_get_generation(ifp), &ifp->if_agentids[i]);
+				necp_client_add_interface_option_if_needed(client, ifp->if_index, ifnet_get_generation(ifp),
+				    &ifp->if_agentids[i], (flags & NETAGENT_FLAG_NETWORK_PROVIDER));
 
 				// Finding one is enough
 				break;
@@ -3531,6 +3533,15 @@ necp_update_client_result(proc_t proc,
 		    client->result, sizeof(client->result));
 	}
 
+	for (int i = 0; i < NAT64_MAX_NUM_PREFIXES; i++) {
+		if (result.nat64_prefixes[i].prefix_len != 0) {
+			cursor = necp_buffer_write_tlv_if_different(cursor, NECP_CLIENT_RESULT_NAT64,
+			    sizeof(result.nat64_prefixes), result.nat64_prefixes, &updated,
+			    client->result, sizeof(client->result));
+			break;
+		}
+	}
+
 	if (result.mss_recommended != 0) {
 		cursor = necp_buffer_write_tlv_if_different(cursor, NECP_CLIENT_RESULT_RECOMMENDED_MSS,
 		    sizeof(result.mss_recommended), &result.mss_recommended, &updated,
@@ -3616,7 +3627,7 @@ necp_update_client_result(proc_t proc,
 			if (necp_ifnet_matches_parameters(multi_interface, parsed_parameters, 0, NULL, true, false)) {
 				// Add multipath interface flows for kernel MPTCP
 				necp_client_add_interface_option_if_needed(client, multi_interface->if_index,
-				    ifnet_get_generation(multi_interface), NULL);
+				    ifnet_get_generation(multi_interface), NULL, false);
 
 				// Add nexus agents for multipath
 				necp_client_add_agent_interface_options(client, parsed_parameters, multi_interface);
@@ -3631,7 +3642,7 @@ necp_update_client_result(proc_t proc,
 
 				// Add interface option in case it is not a nexus
 				necp_client_add_interface_option_if_needed(client, direct_interface->if_index,
-				    ifnet_get_generation(direct_interface), NULL);
+				    ifnet_get_generation(direct_interface), NULL, false);
 			}
 		} else {
 			// Get listener interface options from global list
@@ -5635,7 +5646,8 @@ necp_client_add_flow(struct necp_fd_data *fd_data, struct necp_client_action_arg
 		goto done;
 	}
 
-	if (uap->buffer == 0 || buffer_size < sizeof(struct necp_client_add_flow)) {
+	if (uap->buffer == 0 || buffer_size < sizeof(struct necp_client_add_flow) ||
+	    buffer_size > sizeof(struct necp_client_add_flow_default) * 4) {
 		error = EINVAL;
 		NECPLOG(LOG_ERR, "necp_client_add_flow invalid buffer (length %zu)", buffer_size);
 		goto done;

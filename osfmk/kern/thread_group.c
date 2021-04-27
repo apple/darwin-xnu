@@ -812,8 +812,8 @@ thread_group_vm_add(void)
 	thread_set_thread_group(current_thread(), thread_group_find_by_id_and_retain(THREAD_GROUP_VM), false);
 }
 
-uint64_t
-kdp_thread_group_get_flags(struct thread_group *tg)
+uint32_t
+thread_group_get_flags(struct thread_group *tg)
 {
 	return tg->tg_flags;
 }

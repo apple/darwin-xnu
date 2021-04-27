@@ -1148,6 +1148,10 @@ DebuggerXCall(
 		INTERRUPT_MASKED_DEBUG_START(current_thread()->machine.int_handler_addr, current_thread()->machine.int_type);
 	}
 
+#if defined(__arm64__)
+	current_thread()->machine.kpcb = NULL;
+#endif /* defined(__arm64__) */
+
 	/* Any cleanup for our pushed context should go here */
 }
 

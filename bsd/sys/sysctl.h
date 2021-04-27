@@ -83,18 +83,17 @@
 #include <sys/time.h>
 #include <sys/ucred.h>
 #else
-#ifndef XNU_KERNEL_PRIVATE
+#ifdef XNU_KERNEL_PRIVATE
+#include <kern/startup.h>
+#include <libkern/section_keywords.h>
+#else
 #include <libkern/sysctl.h>
 #include <os/base.h>
-#endif
+#endif /* XNU_KERNEL_PRIVATE */
+#endif /* KERNEL */
 
-#endif
 #include <sys/proc.h>
 #include <sys/vm.h>
-
-#ifdef XNU_KERNEL_PRIVATE
-#include <sys/linker_set.h>
-#endif
 
 /*
  * Definitions for sysctl call.  The sysctl call uses a hierarchical name
@@ -146,25 +145,29 @@ struct ctlname {
 	int     ctl_type;       /* type of name */
 };
 
-#define CTLTYPE         0xf     /* Mask for the type */
-#define CTLTYPE_NODE    1       /* name is a node */
-#define CTLTYPE_INT     2       /* name describes an integer */
-#define CTLTYPE_STRING  3       /* name describes a string */
-#define CTLTYPE_QUAD    4       /* name describes a 64-bit number */
-#define CTLTYPE_OPAQUE  5       /* name describes a structure */
-#define CTLTYPE_STRUCT  CTLTYPE_OPAQUE  /* name describes a structure */
+#define CTLTYPE             0xf             /* Mask for the type */
+#define CTLTYPE_NODE        1               /* name is a node */
+#define CTLTYPE_INT         2               /* name describes an integer */
+#define CTLTYPE_STRING      3               /* name describes a string */
+#define CTLTYPE_QUAD        4               /* name describes a 64-bit number */
+#define CTLTYPE_OPAQUE      5               /* name describes a structure */
+#define CTLTYPE_STRUCT      CTLTYPE_OPAQUE  /* name describes a structure */
 
-#define CTLFLAG_RD      0x80000000      /* Allow reads of variable */
-#define CTLFLAG_WR      0x40000000      /* Allow writes to the variable */
-#define CTLFLAG_RW      (CTLFLAG_RD|CTLFLAG_WR)
-#define CTLFLAG_NOLOCK  0x20000000      /* XXX Don't Lock */
-#define CTLFLAG_ANYBODY 0x10000000      /* All users can set this var */
-#define CTLFLAG_SECURE  0x08000000      /* Permit set only if securelevel<=0 */
-#define CTLFLAG_MASKED  0x04000000      /* deprecated variable, do not display */
-#define CTLFLAG_NOAUTO  0x02000000      /* do not auto-register */
-#define CTLFLAG_KERN    0x01000000      /* valid inside the kernel */
-#define CTLFLAG_LOCKED  0x00800000      /* node will handle locking itself */
-#define CTLFLAG_OID2    0x00400000      /* struct sysctl_oid has version info */
+#define CTLFLAG_RD          0x80000000      /* Allow reads of variable */
+#define CTLFLAG_WR          0x40000000      /* Allow writes to the variable */
+#define CTLFLAG_RW          (CTLFLAG_RD|CTLFLAG_WR)
+#define CTLFLAG_NOLOCK      0x20000000      /* XXX Don't Lock */
+#define CTLFLAG_ANYBODY     0x10000000      /* All users can set this var */
+#define CTLFLAG_SECURE      0x08000000      /* Permit set only if securelevel<=0 */
+#define CTLFLAG_MASKED      0x04000000      /* deprecated variable, do not display */
+#define CTLFLAG_NOAUTO      0x02000000      /* do not auto-register */
+#define CTLFLAG_KERN        0x01000000      /* valid inside the kernel */
+#define CTLFLAG_LOCKED      0x00800000      /* node will handle locking itself */
+#define CTLFLAG_OID2        0x00400000      /* struct sysctl_oid has version info */
+#if XNU_KERNEL_PRIVATE
+#define CTLFLAG_PERMANENT   0x00200000      /* permanent sysctl_oid */
+#endif
+#define CTLFLAG_EXPERIMENT 0x00100000 /* Allows writing w/ the trial experiment entitlement. */
 
 /*
  * USE THIS instead of a hardwired number from the categories below
@@ -179,11 +182,22 @@ struct ctlname {
  * in I/O-Kit. In this case, you have to call sysctl_register_oid()
  * manually - just like in a KEXT.
  */
-#define OID_AUTO        (-1)
-#define OID_AUTO_START 100 /* conventional */
+#define OID_AUTO              (-1)
+#if XNU_KERNEL_PRIVATE
+/*
+ * Used to allow for most of the core kernel sysctl OIDs to be in immutable
+ * memory. The nodes that can be extensible have a fake first node with this
+ * particular oid_number which hangs a second mutable list from this node.
+ *
+ * This node is always first when it is used
+ */
+#define OID_MUTABLE_ANCHOR    (INT_MIN)
+#endif
+#define OID_AUTO_START        100 /* conventional */
 
 #ifdef KERNEL
-#define SYSCTL_HANDLER_ARGS (struct sysctl_oid *oidp, void *arg1, int arg2, \
+#define SYSCTL_HANDLER_ARGS \
+	(struct sysctl_oid *oidp __unused, void *arg1 __unused, int arg2 __unused, \
 	struct sysctl_req *req)
 
 
@@ -286,7 +300,6 @@ int sysctl_io_opaque(struct sysctl_req *req, void *pValue, size_t valueSize, int
 void sysctl_register_oid(struct sysctl_oid *oidp);
 void sysctl_unregister_oid(struct sysctl_oid *oidp);
 
-void sysctl_load_devicetree_entries(void);
 #define nvram_osenvironment "osenvironment"
 void sysctl_set_osenvironment(unsigned int size, const void* value);
 void sysctl_unblock_osenvironment(void);
@@ -300,11 +313,6 @@ __END_DECLS
 #define SYSCTL_DECL(name)                                       \
 	extern struct sysctl_oid_list sysctl_##name##_children
 
-#ifdef XNU_KERNEL_PRIVATE
-#define SYSCTL_LINKER_SET_ENTRY LINKER_SET_ENTRY
-#else
-#define SYSCTL_LINKER_SET_ENTRY(a, b)
-#endif
 /*
  * Macros to define sysctl entries.  Which to use?  Pure data that are
  * returned without modification, SYSCTL_<data type> is for you, like
@@ -334,65 +342,172 @@ __END_DECLS
 
 
 /* This constructs a "raw" MIB oid. */
-#define SYSCTL_STRUCT_INIT(parent, nbr, name, kind, a1, a2, handler, fmt, descr) \
-	{                                                                                               \
-	        &sysctl_##parent##_children, { NULL },                  \
-	        nbr, (int)(kind|CTLFLAG_OID2), a1, (int)(a2), #name, handler, fmt, descr, SYSCTL_OID_VERSION, 0 \
+#define SYSCTL_STRUCT_INIT(parent, nbr, name, kind, a1, a2, fn, fmt, desc) {    \
+	    .oid_parent     = &sysctl_##parent##_children,                      \
+	    .oid_number     = nbr,                                              \
+	    .oid_kind       = (int)(kind | CTLFLAG_OID2),                       \
+	    .oid_arg1       = a1,                                               \
+	    .oid_arg2       = (int)(a2),                                        \
+	    .oid_name       = #name,                                            \
+	    .oid_handler    = fn,                                               \
+	    .oid_fmt        = fmt,                                              \
+	    .oid_descr      = desc,                                             \
+	    .oid_version    = SYSCTL_OID_VERSION,                               \
 	}
 
+#define __SYSCTL_OID(parent, nbr, name, kind, a1, a2, handler, fmt, descr) \
+	struct sysctl_oid sysctl_##parent##_##name = SYSCTL_STRUCT_INIT(\
+	    parent, nbr, name, kind, a1, a2, handler, fmt, descr)
+
+#if XNU_KERNEL_PRIVATE
+
+/*
+ * Core kernel registers sysctls before lockdown and protects those entries
+ * in immutable memory.
+ *
+ * When a node needs to support dynamic extension after lockdown, it needs to be
+ * declared with SYSCTL_EXTENSIBLE_NODE() to insert a dummy "OID_MUTABLE_ANCHOR"
+ * node in this node chain which will allow extensibility.
+ *
+ * OIDs that are to be inserted dynamically based on system properties that
+ * aren't known at compile time, have three options, in increasing order of
+ * unsafety:
+ *
+ * - The OID can use the CTLFLAG_NOAUTO flag. Such entries aren't inserted to
+ *   the sysctl tree automatically but will be made read-only at lock down.
+ *
+ *   Such entries must be inserted in the STARTUP_SUB_SYSCTL "Middle" phase
+ *   using sysctl_register_oid_early().
+ *
+ * - The OID can be always registered and test whether it is ready to operate.
+ *   When it is not, it must return ENOENT which simulates an absent entry.
+ *
+ *   This however has the downside that the entry is still resolvable as an MIB
+ *   or listed in `sysctl -a` when it isn't masked.
+ *
+ *   This is acceptable for sysctls that will become valid quickly during boot
+ *   (but after lockdown).
+ *
+ * - SYSCTL_OID_MANUAL / SYSCTL_NODE_MANUAL can be used for completely
+ *   dynamic/manual oid registration. Such nodes must be registered with
+ *   sysctl_register_oid() after lockdown.
+ *
+ *   This is the least preferred solution.
+ */
+
+__BEGIN_DECLS
+void sysctl_register_oid_early(struct sysctl_oid *oidp);
+__END_DECLS
+
+#define SYSCTL_OID_MANUAL(parent, nbr, name, kind, a1, a2, handler, fmt, descr) \
+	__XNU_PRIVATE_EXTERN                                                    \
+	__SYSCTL_OID(parent, nbr, name, kind, a1, a2, handler, fmt, descr)
+
+#define SYSCTL_NODE_MANUAL(parent, nbr, name, access, handler, descr)           \
+	struct sysctl_oid_list sysctl_##parent##_##name##_children;             \
+	__XNU_PRIVATE_EXTERN                                                    \
+	__SYSCTL_OID(parent, nbr, name, CTLTYPE_NODE|access,                    \
+	    &sysctl_##parent##_##name##_children, 0, handler, "N", descr);
+
+#define SYSCTL_OID(parent, nbr, name, kind, a1, a2, handler, fmt, descr)        \
+	__security_const_late __XNU_PRIVATE_EXTERN                              \
+	__SYSCTL_OID(parent, nbr, name, CTLFLAG_PERMANENT|kind,                 \
+	    a1, a2, handler, fmt, descr);                                       \
+	__STARTUP_ARG(sysctl_##parent, _##name,                                 \
+	    SYSCTL, STARTUP_RANK_SECOND, sysctl_register_oid_early,             \
+	    &sysctl_##parent##_##name)
+
+#define __SYSCTL_NODE(parent, nbr, name, access, handler, descr)                \
+	__security_const_late                                                   \
+	struct sysctl_oid_list sysctl_##parent##_##name##_children;             \
+	__security_const_late __XNU_PRIVATE_EXTERN                              \
+	__SYSCTL_OID(parent, nbr, name, CTLFLAG_PERMANENT|CTLTYPE_NODE|access,  \
+	    &sysctl_##parent##_##name##_children, 0, handler, "N", descr);      \
+	__STARTUP_ARG(sysctl_##parent, _##name,                                 \
+	    SYSCTL, STARTUP_RANK_FIRST, sysctl_register_oid_early,              \
+	    &sysctl_##parent##_##name)
+
+#define __SYSCTL_EXTENSION_NODE(name)                                           \
+	static __security_read_write                                            \
+	struct sysctl_oid_list sysctl_##name##_children_mutable;                \
+	static __security_const_late                                            \
+	struct sysctl_oid sysctl_##name##_wranchor = {                          \
+	    .oid_parent     = &sysctl_##name##_children,                        \
+	    .oid_number     = OID_MUTABLE_ANCHOR,                               \
+	    .oid_kind       = CTLFLAG_OID2 | CTLFLAG_PERMANENT,                 \
+	    .oid_arg1       = &sysctl_##name##_children_mutable,                \
+	    .oid_name       = "__anchor__(" #name ")",                          \
+	    .oid_version    = SYSCTL_OID_VERSION,                               \
+	};                                                                      \
+	__STARTUP_ARG(sysctl_##name, _wranchor,                                 \
+	    SYSCTL, STARTUP_RANK_LAST, sysctl_register_oid_early,               \
+	    &sysctl_##name##_wranchor)
+
+#define SYSCTL_NODE(parent, nbr, name, access, handler, descr)                  \
+	__XNU_PRIVATE_EXTERN                                                    \
+	__SYSCTL_NODE(parent, nbr, name, access, handler, descr)
+
+#define SYSCTL_EXTENSIBLE_NODE(parent, nbr, name, access, handler, descr)       \
+	__SYSCTL_NODE(parent, nbr, name, access, handler, descr);               \
+	__SYSCTL_EXTENSION_NODE(parent##_##name)
+#else
 #define SYSCTL_OID(parent, nbr, name, kind, a1, a2, handler, fmt, descr) \
-	struct sysctl_oid sysctl_##parent##_##name = SYSCTL_STRUCT_INIT(parent, nbr, name, kind, a1, a2, handler, fmt, descr); \
-	SYSCTL_LINKER_SET_ENTRY(__sysctl_set, sysctl_##parent##_##name)
+	__SYSCTL_OID(parent, nbr, name, kind, a1, a2, handler, fmt, descr)
 
 /* This constructs a node from which other oids can hang. */
-#define SYSCTL_NODE(parent, nbr, name, access, handler, descr)              \
-	struct sysctl_oid_list sysctl_##parent##_##name##_children;         \
-	SYSCTL_OID(parent, nbr, name, CTLTYPE_NODE|access,                  \
-	           (void*)&sysctl_##parent##_##name##_children, 0, handler, \
-	           "N", descr)
+#define SYSCTL_NODE(parent, nbr, name, access, handler, descr)                  \
+	struct sysctl_oid_list sysctl_##parent##_##name##_children;             \
+	SYSCTL_OID(parent, nbr, name, CTLTYPE_NODE|access,                      \
+	    &sysctl_##parent##_##name##_children, 0, handler, "N", descr)
+#endif /* XNU_KERNEL_PRIVATE */
 
 /* Oid for a string.  len can be 0 to indicate '\0' termination. */
 #define SYSCTL_STRING(parent, nbr, name, access, arg, len, descr) \
 	SYSCTL_OID(parent, nbr, name, CTLTYPE_STRING|access, \
-	        arg, len, sysctl_handle_string, "A", descr)
+	    arg, len, sysctl_handle_string, "A", descr)
 
 #define SYSCTL_COMPAT_INT(parent, nbr, name, access, ptr, val, descr) \
 	SYSCTL_OID(parent, nbr, name, CTLTYPE_INT|access, \
-	       ptr, val, sysctl_handle_int, "I", descr)
+	    ptr, val, sysctl_handle_int, "I", descr)
 
 #define SYSCTL_COMPAT_UINT(parent, nbr, name, access, ptr, val, descr) \
 	SYSCTL_OID(parent, nbr, name, CTLTYPE_INT|access, \
-	        ptr, val, sysctl_handle_int, "IU", descr)
+	    ptr, val, sysctl_handle_int, "IU", descr)
 
 /* Oid for an int.  If ptr is NULL, val is returned. */
 #define SYSCTL_INT(parent, nbr, name, access, ptr, val, descr) \
 	SYSCTL_OID(parent, nbr, name, CTLTYPE_INT|access, \
-	       ptr, val, sysctl_handle_int, "I", descr); \
-	typedef char _sysctl_##parent##_##name##_size_check[(__builtin_constant_p(ptr) || sizeof(*(ptr)) == sizeof(int)) ? 0 : -1]
+	    ptr, val, sysctl_handle_int, "I", descr); \
+	_Static_assert(__builtin_constant_p(ptr) || sizeof(*(ptr)) == sizeof(int), \
+	    "must be integer sized");
 
 /* Oid for an unsigned int.  If ptr is NULL, val is returned. */
 #define SYSCTL_UINT(parent, nbr, name, access, ptr, val, descr) \
 	SYSCTL_OID(parent, nbr, name, CTLTYPE_INT|access, \
-	        ptr, val, sysctl_handle_int, "IU", descr); \
-	typedef char _sysctl_##parent##_##name##_size_check[(__builtin_constant_p(ptr) || sizeof(*(ptr)) == sizeof(unsigned int)) ? 0 : -1]
+	    ptr, val, sysctl_handle_int, "IU", descr); \
+	_Static_assert(__builtin_constant_p(ptr) || sizeof(*(ptr)) == sizeof(unsigned int), \
+	    "must be integer sized");
 
 /* Oid for a long.  The pointer must be non NULL. */
 #define SYSCTL_LONG(parent, nbr, name, access, ptr, descr) \
 	SYSCTL_OID(parent, nbr, name, CTLTYPE_INT|access, \
-	        ptr, 0, sysctl_handle_long, "L", descr); \
-	typedef char _sysctl_##parent##_##name##_size_check[(__builtin_constant_p(ptr) || sizeof(*(ptr)) == sizeof(long)) ? 0 : -1]
+	    ptr, 0, sysctl_handle_long, "L", descr); \
+	_Static_assert(__builtin_constant_p(ptr) || sizeof(*(ptr)) == sizeof(long), \
+	    "must be long sized");
 
 /* Oid for a unsigned long.  The pointer must be non NULL. */
 #define SYSCTL_ULONG(parent, nbr, name, access, ptr, descr) \
 	SYSCTL_OID(parent, nbr, name, CTLTYPE_INT|access, \
-	        ptr, 0, sysctl_handle_long, "LU", descr); \
-	typedef char _sysctl_##parent##_##name##_size_check[(__builtin_constant_p(ptr) || sizeof(*(ptr)) == sizeof(unsigned long)) ? 0 : -1]
+	    ptr, 0, sysctl_handle_long, "LU", descr); \
+	_Static_assert(__builtin_constant_p(ptr) || sizeof(*(ptr)) == sizeof(unsigned long), \
+	    "must be long sized");
 
 /* Oid for a quad.  The pointer must be non NULL. */
 #define SYSCTL_QUAD(parent, nbr, name, access, ptr, descr) \
 	SYSCTL_OID(parent, nbr, name, CTLTYPE_QUAD|access, \
-	        ptr, 0, sysctl_handle_quad, "Q", descr); \
-	typedef char _sysctl_##parent##_##name##_size_check[(__builtin_constant_p(ptr) || sizeof(*(ptr)) == sizeof(long long)) ? 0 : -1]
+	    ptr, 0, sysctl_handle_quad, "Q", descr); \
+	_Static_assert(__builtin_constant_p(ptr) || sizeof(*(ptr)) == sizeof(long long), \
+	    "must be long long sized");
 
 /* Oid for an opaque object.  Specified by a pointer and a length. */
 #define SYSCTL_OPAQUE(parent, nbr, name, access, ptr, len, fmt, descr) \
@@ -402,8 +517,8 @@ __END_DECLS
 /* Oid for a struct.  Specified by a pointer and a type. */
 #define SYSCTL_STRUCT(parent, nbr, name, access, ptr, type, descr) \
 	SYSCTL_OID(parent, nbr, name, CTLTYPE_OPAQUE|access, \
-	        ptr, sizeof(struct type), sysctl_handle_opaque, \
-	        "S," #type, descr)
+	    ptr, sizeof(struct type), sysctl_handle_opaque, \
+	    "S," #type, descr)
 
 /*
  * Oid for a procedure.  Specified by a pointer and an arg.
@@ -412,8 +527,111 @@ __END_DECLS
  */
 #define SYSCTL_PROC(parent, nbr, name, access, ptr, arg, handler, fmt, descr) \
 	SYSCTL_OID(parent, nbr, name, access, \
-	        ptr, arg, handler, fmt, descr)
+	    ptr, arg, handler, fmt, descr)
 
+/*
+ * The EXPERIMENT macros below expose values for on-device experimentation (A/B testing) via Trial.
+ * These values will be set shortly after boot by the KRExperiments framework based on any
+ * active experiments on the device.
+ * Values exposed via these macros are still normal sysctls and can be set by the superuser in the
+ * development or debug kernel. However, on the release kernel they can ONLY be set by processes
+ * with the com.apple.private.write-kr-experiment-factors entitlement.
+ * In addition, for numeric types, special macros are provided that enforce a valid range for the value (inclusive)
+ * to ensure that an errant experiment can't set a totally unexpected value. These macros also track which
+ * values have been modified via sycstl(3) so that they can be inspected with the showexperiments lldb macro.
+ */
+
+struct experiment_spec {
+	void *ptr; /* ptr to numeric experiment factor. */
+	uint64_t min_value; /* Min value that can be set via sysctl(3) (inclusive). */
+	uint64_t max_value; /* Max value that can be set via sysctl(3) (inclusive). */
+	uint64_t original_value; /* First value that was overwritten via sysctl(3). */
+	_Atomic bool modified; /* Has this value ever been overwritten via sysctl(3)? */
+};
+
+/*
+ * The handlers for the numeric types can be easily parameterized by type.
+ * So they're defined via an X macro.
+ */
+#define experiment_factor_numeric_types \
+    X(uint, unsigned int) \
+    X(int, int) \
+    X(ulong, unsigned long) \
+    X(long, long) \
+    X(uint64, uint64_t) \
+    X(int64, int64_t)
+
+#define X(experiment_factor_typename, _) \
+int experiment_factor_##experiment_factor_typename##_handler SYSCTL_HANDLER_ARGS;
+
+experiment_factor_numeric_types
+#undef X
+
+#define __EXPERIMENT_FACTOR_SPEC(parent, name, p, min, max) \
+	struct experiment_spec experiment_##parent##_##name = { \
+	        .ptr = p, \
+	        .min_value = min, \
+	        .max_value = max, \
+	        .original_value = 0, \
+	        .modified = false \
+	}
+
+#define EXPERIMENT_FACTOR_UINT(parent, name, ptr, min, max, descr) \
+	__EXPERIMENT_FACTOR_SPEC(parent, name, ptr, min, max); \
+	_Static_assert(sizeof(*(ptr)) == sizeof(unsigned int), "must be integer sized"); \
+	SYSCTL_PROC(parent, OID_AUTO, name, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_ANYBODY | CTLFLAG_EXPERIMENT, &experiment_##parent##_##name, 1, &experiment_factor_uint_handler, "IU", descr);
+
+#define EXPERIMENT_FACTOR_INT(parent, name, ptr, min, max, descr) \
+	__EXPERIMENT_FACTOR_SPEC(parent, name, ptr, min, max); \
+	_Static_assert(sizeof(*(ptr)) == sizeof(int), "must be integer sized"); \
+	SYSCTL_PROC(parent, OID_AUTO, name, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_ANYBODY | CTLFLAG_EXPERIMENT, &experiment_##parent##_##name, 1, &experiment_factor_int_handler, "I", descr);
+
+#define EXPERIMENT_FACTOR_ULONG(parent, name, ptr, min, max, descr) \
+	__EXPERIMENT_FACTOR_SPEC(parent, name, ptr, min, max); \
+	_Static_assert(sizeof(*(ptr)) == sizeof(unsigned long), "must be long sized"); \
+	SYSCTL_PROC(parent, OID_AUTO, name, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_ANYBODY | CTLFLAG_EXPERIMENT, &experiment_##parent##_##name, 1, &experiment_factor_ulong_handler, "LU", descr);
+
+#define EXPERIMENT_FACTOR_LONG(parent, name, ptr, min, max, descr) \
+	__EXPERIMENT_FACTOR_SPEC(parent, name, ptr, min, max); \
+	_Static_assert(sizeof(*(ptr)) == sizeof(long), "must be long sized"); \
+	SYSCTL_PROC(parent, OID_AUTO, name, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_ANYBODY | CTLFLAG_EXPERIMENT, &experiment_##parent##_##name, 1, &experiment_factor_long_handler, "L", descr);
+
+#define EXPERIMENT_FACTOR_UINT64(parent, name, ptr, min, max, descr) \
+	__EXPERIMENT_FACTOR_SPEC(parent, name, ptr, min, max); \
+	_Static_assert(sizeof(*(ptr)) == sizeof(uint64_t), "must be 8 bytes"); \
+	SYSCTL_PROC(parent, OID_AUTO, name, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_ANYBODY | CTLFLAG_EXPERIMENT, &experiment_##parent##_##name, 1, &experiment_factor_uint64_handler, "QU", descr);
+
+#define EXPERIMENT_FACTOR_INT64(parent, name, ptr, min, max, descr) \
+	__EXPERIMENT_FACTOR_SPEC(parent, name, ptr, min, max); \
+	_Static_assert(sizeof(*(ptr)) == sizeof(int64_t), "must be 8 bytes"); \
+	SYSCTL_PROC(parent, OID_AUTO, name, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_ANYBODY | CTLFLAG_EXPERIMENT, &experiment_##parent##_##name, 1, &experiment_factor_int64_handler, "Q", descr);
+
+/*
+ * Calls an user provided handler to read / write this factor.
+ * Entitlement checking will still be done by sysctl, but it's the callers responsibility to validate any new values.
+ * This factor will not be printed out via the showexperiments lldb macro.
+ */
+#define EXPERIMENT_FACTOR_PROC(parent, name, access, ptr, arg, handler, fmt, descr) \
+	_Static_assert(arg != 1, "arg can not be 1") \
+	SYSCTL_PROC(parent, OID_AUTO, name, access | CTLFLAG_ANYBODY | CTLFLAG_EXPERIMENT, ptr, arg, handler, fmt, descr);
+
+#ifdef XNU_KERNEL_PRIVATE
+/*
+ * Sysctl handler for reading a simple counter.
+ * Using this directly is not recommended. Use the SYSCTL_SCALABLE_COUNTER macro
+ */
+int scalable_counter_sysctl_handler SYSCTL_HANDLER_ARGS;
+
+/*!
+ * @macro SYSCTL_SCALABLE_COUNTER
+ *
+ * @abstract
+ * Provides a sysctl for reading the value of a percpu counter.
+ */
+#define SYSCTL_SCALABLE_COUNTER(parent, name, counter, descr) \
+SYSCTL_PROC(parent, OID_AUTO, name, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED, \
+    (void *)(&counter), 0, &scalable_counter_sysctl_handler, "Q", descr);
+#endif /* XNU_KERNEL_PRIVATE */
 
 extern struct sysctl_oid_list sysctl__children;
 SYSCTL_DECL(_kern);
@@ -1172,16 +1390,8 @@ extern char     macosproductversion[];
 extern char     macosversion[];
 #endif
 
-struct linker_set;
-
-void    sysctl_register_set(const char *set);
-void    sysctl_unregister_set(const char *set);
 void    sysctl_mib_init(void);
-
-int sysctl_int(user_addr_t, size_t *, user_addr_t, size_t, int *);
-int sysctl_quad(user_addr_t, size_t *, user_addr_t, size_t, quad_t *);
-
-void sysctl_early_init(void);
+void    hvg_bsd_init(void);
 
 #endif /* BSD_KERNEL_PRIVATE */
 #else   /* !KERNEL */

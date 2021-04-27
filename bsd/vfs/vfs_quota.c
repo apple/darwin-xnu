@@ -79,15 +79,11 @@
 
 
 /* vars for quota file lock */
-lck_grp_t       * qf_lck_grp;
-lck_grp_attr_t  * qf_lck_grp_attr;
-lck_attr_t      * qf_lck_attr;
+static LCK_GRP_DECLARE(qf_lck_grp, "quota file");
 
 /* vars for quota list lock */
-lck_grp_t       * quota_list_lck_grp;
-lck_grp_attr_t  * quota_list_lck_grp_attr;
-lck_attr_t      * quota_list_lck_attr;
-lck_mtx_t       * quota_list_mtx_lock;
+static LCK_GRP_DECLARE(quota_list_lck_grp, "quuota list");
+static LCK_MTX_DECLARE(quota_list_mtx_lock, &quota_list_lck_grp);
 
 /* Routines to lock and unlock the quota global data */
 static int dq_list_lock(void);
@@ -132,41 +128,6 @@ static void qf_rele(struct quotafile *);
 
 
 /*
- * Initialize locks for the quota system.
- */
-void
-dqinit(void)
-{
-	/*
-	 * Allocate quota list lock group attribute and group
-	 */
-	quota_list_lck_grp_attr = lck_grp_attr_alloc_init();
-	quota_list_lck_grp = lck_grp_alloc_init("quota list", quota_list_lck_grp_attr);
-
-	/*
-	 * Allocate qouta list lock attribute
-	 */
-	quota_list_lck_attr = lck_attr_alloc_init();
-
-	/*
-	 * Allocate quota list lock
-	 */
-	quota_list_mtx_lock = lck_mtx_alloc_init(quota_list_lck_grp, quota_list_lck_attr);
-
-
-	/*
-	 * allocate quota file lock group attribute and group
-	 */
-	qf_lck_grp_attr = lck_grp_attr_alloc_init();
-	qf_lck_grp = lck_grp_alloc_init("quota file", qf_lck_grp_attr);
-
-	/*
-	 * Allocate quota file lock attribute
-	 */
-	qf_lck_attr = lck_attr_alloc_init();
-}
-
-/*
  * Report whether dqhashinit has been run.
  */
 int
@@ -199,7 +160,7 @@ static volatile int dq_list_lock_cnt = 0;
 static int
 dq_list_lock(void)
 {
-	lck_mtx_lock(quota_list_mtx_lock);
+	lck_mtx_lock(&quota_list_mtx_lock);
 	return ++dq_list_lock_cnt;
 }
 
@@ -218,7 +179,7 @@ dq_list_lock_val(void)
 void
 dq_list_unlock(void)
 {
-	lck_mtx_unlock(quota_list_mtx_lock);
+	lck_mtx_unlock(&quota_list_mtx_lock);
 }
 
 
@@ -230,7 +191,7 @@ dq_lock_internal(struct dquot *dq)
 {
 	while (dq->dq_lflags & DQ_LLOCK) {
 		dq->dq_lflags |= DQ_LWANT;
-		msleep(&dq->dq_lflags, quota_list_mtx_lock, PVFS, "dq_lock_internal", NULL);
+		msleep(&dq->dq_lflags, &quota_list_mtx_lock, PVFS, "dq_lock_internal", NULL);
 	}
 	dq->dq_lflags |= DQ_LLOCK;
 }
@@ -253,21 +214,21 @@ dq_unlock_internal(struct dquot *dq)
 void
 dqlock(struct dquot *dq)
 {
-	lck_mtx_lock(quota_list_mtx_lock);
+	lck_mtx_lock(&quota_list_mtx_lock);
 
 	dq_lock_internal(dq);
 
-	lck_mtx_unlock(quota_list_mtx_lock);
+	lck_mtx_unlock(&quota_list_mtx_lock);
 }
 
 void
 dqunlock(struct dquot *dq)
 {
-	lck_mtx_lock(quota_list_mtx_lock);
+	lck_mtx_lock(&quota_list_mtx_lock);
 
 	dq_unlock_internal(dq);
 
-	lck_mtx_unlock(quota_list_mtx_lock);
+	lck_mtx_unlock(&quota_list_mtx_lock);
 }
 
 
@@ -288,7 +249,7 @@ qf_get(struct quotafile *qfp, int type)
 			}
 			if ((qfp->qf_qflags & QTF_CLOSING)) {
 				qfp->qf_qflags |= QTF_WANTED;
-				msleep(&qfp->qf_qflags, quota_list_mtx_lock, PVFS, "qf_get", NULL);
+				msleep(&qfp->qf_qflags, &quota_list_mtx_lock, PVFS, "qf_get", NULL);
 			}
 		}
 		if (qfp->qf_vp != NULLVP) {
@@ -308,7 +269,7 @@ qf_get(struct quotafile *qfp, int type)
 
 		while ((qfp->qf_qflags & QTF_OPENING) || qfp->qf_refcnt) {
 			qfp->qf_qflags |= QTF_WANTED;
-			msleep(&qfp->qf_qflags, quota_list_mtx_lock, PVFS, "qf_get", NULL);
+			msleep(&qfp->qf_qflags, &quota_list_mtx_lock, PVFS, "qf_get", NULL);
 		}
 		if (qfp->qf_vp == NULLVP) {
 			qfp->qf_qflags &= ~QTF_CLOSING;
@@ -405,7 +366,7 @@ dqfileinit(struct quotafile *qfp)
 	qfp->qf_vp = NULLVP;
 	qfp->qf_qflags = 0;
 
-	lck_mtx_init(&qfp->qf_lock, qf_lck_grp, qf_lck_attr);
+	lck_mtx_init(&qfp->qf_lock, &qf_lck_grp, LCK_ATTR_NULL);
 }
 
 

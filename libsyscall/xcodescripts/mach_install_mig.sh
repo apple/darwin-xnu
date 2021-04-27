@@ -33,7 +33,9 @@ cd $OBJROOT
 MIG=`xcrun -sdk "$SDKROOT" -find mig`
 MIGCC=`xcrun -sdk "$SDKROOT" -find cc`
 export MIGCC
-MIG_DEFINES="-DLIBSYSCALL_INTERFACE"
+[ -n "$DRIVERKITROOT" ] && MIG_DRIVERKIT_DEFINES="-DDRIVERKIT"
+MIG_DEFINES="-DLIBSYSCALL_INTERFACE $MIG_DRIVERKIT_DEFINES"
+MIG_PRIVATE_DEFINES="-DPRIVATE -D_OPEN_SOURCE_ -D__OPEN_SOURCE__"
 MIG_HEADER_OBJ="$OBJROOT/mig_hdr/include/mach"
 MIG_HEADER_DST="$BUILT_PRODUCTS_DIR/mig_hdr/include/mach"
 MIG_PRIVATE_HEADER_DST="$BUILT_PRODUCTS_DIR/mig_hdr/local/include/mach"
@@ -41,8 +43,7 @@ SERVER_HEADER_DST="$BUILT_PRODUCTS_DIR/mig_hdr/include/servers"
 MACH_HEADER_DST="$BUILT_PRODUCTS_DIR/mig_hdr/include/mach"
 MACH_PRIVATE_HEADER_DST="$BUILT_PRODUCTS_DIR/mig_hdr/local/include/mach"
 MIG_INTERNAL_HEADER_DST="$BUILT_PRODUCTS_DIR/internal_hdr/include/mach"
-MIG_INCFLAGS="-I${SDKROOT}/${SDK_INSTALL_HEADERS_ROOT}/usr/include -I${SDKROOT}/${SDK_INSTALL_HEADERS_ROOT}/usr/local/include"
-MIG_PRIVATE_DEFS_INCFLAGS="-I${SDKROOT}/${SDK_INSTALL_HEADERS_ROOT}/System/Library/Frameworks/System.framework/PrivateHeaders"
+MIG_INCFLAGS="-I${SRCROOT}/../osfmk"
 SRC="$SRCROOT/mach"
 FILTER_MIG="$SRCROOT/xcodescripts/filter_mig.awk"
 
@@ -96,6 +97,7 @@ fi
 
 MIGS_INTERNAL="mach_port.defs
 	mach_vm.defs
+	task.defs
 	thread_act.defs
 	vm_map.defs"
 
@@ -161,7 +163,7 @@ mkdir -p $MIG_PRIVATE_HEADER_DST
 
 for mig in $MIGS_PRIVATE $MIGS_DUAL_PUBLIC_PRIVATE; do
 	MIG_NAME=`basename $mig .defs`
-	$MIG -novouchers -arch $MACHINE_ARCH -cc $MIGCC -header "$MIG_PRIVATE_HEADER_DST/$MIG_NAME.h" $MIG_DEFINES $MIG_INCFLAGS $MIG_PRIVATE_DEFS_INCFLAGS $SRC/$mig
+	$MIG -novouchers -arch $MACHINE_ARCH -cc $MIGCC -header "$MIG_PRIVATE_HEADER_DST/$MIG_NAME.h" $MIG_DEFINES $MIG_PRIVATE_DEFINES $MIG_INCFLAGS $SRC/$mig
 	if [ ! -e "$MIG_HEADER_DST/$MIG_NAME.h" ]; then
 		echo "#error $MIG_NAME.h unsupported." > "$MIG_HEADER_DST/$MIG_NAME.h"
 	fi

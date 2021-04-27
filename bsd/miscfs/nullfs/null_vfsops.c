@@ -221,10 +221,7 @@ nullfs_mount(struct mount * mp, __unused vnode_t devvp, user_addr_t user_data, v
 	vnode_ref(vp);
 	vnode_put(vp);
 
-	error = nullfs_init_lck(&xmp->nullm_lock);
-	if (error) {
-		goto error;
-	}
+	nullfs_init_lck(&xmp->nullm_lock);
 
 	xmp->nullm_rootvp = vp;
 

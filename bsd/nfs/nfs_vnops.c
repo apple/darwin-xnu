@@ -4481,13 +4481,13 @@ again_relock:
 	}
 
 	/* lock the node while we remove the file */
-	lck_mtx_lock(nfs_node_hash_mutex);
+	lck_mtx_lock(&nfs_node_hash_mutex);
 	while (np->n_hflag & NHLOCKED) {
 		np->n_hflag |= NHLOCKWANT;
-		msleep(np, nfs_node_hash_mutex, PINOD, "nfs_remove", NULL);
+		msleep(np, &nfs_node_hash_mutex, PINOD, "nfs_remove", NULL);
 	}
 	np->n_hflag |= NHLOCKED;
-	lck_mtx_unlock(nfs_node_hash_mutex);
+	lck_mtx_unlock(&nfs_node_hash_mutex);
 
 	if (!namedattrs) {
 		nfs_dulookup_init(dul, dnp, cnp->cn_nameptr, cnp->cn_namelen, ctx);
@@ -4510,13 +4510,13 @@ again:
 	if (!inuse || (np->n_sillyrename && (nvattr->nva_nlink > 1))) {
 		if (!inuse && !flushed) { /* flush all the buffers first */
 			/* unlock the node */
-			lck_mtx_lock(nfs_node_hash_mutex);
+			lck_mtx_lock(&nfs_node_hash_mutex);
 			np->n_hflag &= ~NHLOCKED;
 			if (np->n_hflag & NHLOCKWANT) {
 				np->n_hflag &= ~NHLOCKWANT;
 				wakeup(np);
 			}
-			lck_mtx_unlock(nfs_node_hash_mutex);
+			lck_mtx_unlock(&nfs_node_hash_mutex);
 			nfs_node_clear_busy2(dnp, np);
 			error = nfs_vinvalbuf(vp, V_SAVE, ctx, 1);
 			FSDBG(260, np, np->n_size, np->n_vattr.nva_size, 0xf00d0011);
@@ -4569,13 +4569,13 @@ again:
 			 * again if another object gets created with the same filehandle
 			 * before this vnode gets reclaimed
 			 */
-			lck_mtx_lock(nfs_node_hash_mutex);
+			lck_mtx_lock(&nfs_node_hash_mutex);
 			if (np->n_hflag & NHHASHED) {
 				LIST_REMOVE(np, n_hash);
 				np->n_hflag &= ~NHHASHED;
 				FSDBG(266, 0, np, np->n_flag, 0xb1eb1e);
 			}
-			lck_mtx_unlock(nfs_node_hash_mutex);
+			lck_mtx_unlock(&nfs_node_hash_mutex);
 			/* clear flags now: won't get nfs_vnop_inactive for recycled vnode */
 			/* clear all flags other than these */
 			nfs_node_lock_force(np);
@@ -4613,13 +4613,13 @@ again:
 	}
 out:
 	/* unlock the node */
-	lck_mtx_lock(nfs_node_hash_mutex);
+	lck_mtx_lock(&nfs_node_hash_mutex);
 	np->n_hflag &= ~NHLOCKED;
 	if (np->n_hflag & NHLOCKWANT) {
 		np->n_hflag &= ~NHLOCKWANT;
 		wakeup(np);
 	}
-	lck_mtx_unlock(nfs_node_hash_mutex);
+	lck_mtx_unlock(&nfs_node_hash_mutex);
 	nfs_node_clear_busy2(dnp, np);
 	if (setsize) {
 		ubc_setsize(vp, 0);
@@ -4758,13 +4758,13 @@ nfs_vnop_rename(
 
 	if (tvp && (tvp != fvp)) {
 		/* lock the node while we rename over the existing file */
-		lck_mtx_lock(nfs_node_hash_mutex);
+		lck_mtx_lock(&nfs_node_hash_mutex);
 		while (tnp->n_hflag & NHLOCKED) {
 			tnp->n_hflag |= NHLOCKWANT;
-			msleep(tnp, nfs_node_hash_mutex, PINOD, "nfs_rename", NULL);
+			msleep(tnp, &nfs_node_hash_mutex, PINOD, "nfs_rename", NULL);
 		}
 		tnp->n_hflag |= NHLOCKED;
-		lck_mtx_unlock(nfs_node_hash_mutex);
+		lck_mtx_unlock(&nfs_node_hash_mutex);
 		locked = 1;
 	}
 
@@ -4819,7 +4819,7 @@ nfs_vnop_rename(
 		tvprecycle = (!error && !vnode_isinuse(tvp, 0) &&
 		    (nfs_getattrcache(tnp, nvattr, 0) || (nvattr->nva_nlink == 1)));
 		nfs_node_unlock(tnp);
-		lck_mtx_lock(nfs_node_hash_mutex);
+		lck_mtx_lock(&nfs_node_hash_mutex);
 		if (tvprecycle && (tnp->n_hflag & NHHASHED)) {
 			/*
 			 * remove nfsnode from hash now so we can't accidentally find it
@@ -4830,7 +4830,7 @@ nfs_vnop_rename(
 			tnp->n_hflag &= ~NHHASHED;
 			FSDBG(266, 0, tnp, tnp->n_flag, 0xb1eb1e);
 		}
-		lck_mtx_unlock(nfs_node_hash_mutex);
+		lck_mtx_unlock(&nfs_node_hash_mutex);
 	}
 
 	/* purge the old name cache entries and enter the new one */
@@ -4878,13 +4878,13 @@ out:
 	nfs_getattr(tdnp, NULL, ctx, NGA_CACHED);
 	if (locked) {
 		/* unlock node */
-		lck_mtx_lock(nfs_node_hash_mutex);
+		lck_mtx_lock(&nfs_node_hash_mutex);
 		tnp->n_hflag &= ~NHLOCKED;
 		if (tnp->n_hflag & NHLOCKWANT) {
 			tnp->n_hflag &= ~NHLOCKWANT;
 			wakeup(tnp);
 		}
-		lck_mtx_unlock(nfs_node_hash_mutex);
+		lck_mtx_unlock(&nfs_node_hash_mutex);
 	}
 	nfs_node_clear_busy4(fdnp, fnp, tdnp, tnp);
 	FREE(nvattr, M_TEMP);
@@ -5561,13 +5561,13 @@ nfsmout:
 		 * again if another object gets created with the same filehandle
 		 * before this vnode gets reclaimed
 		 */
-		lck_mtx_lock(nfs_node_hash_mutex);
+		lck_mtx_lock(&nfs_node_hash_mutex);
 		if (np->n_hflag & NHHASHED) {
 			LIST_REMOVE(np, n_hash);
 			np->n_hflag &= ~NHHASHED;
 			FSDBG(266, 0, np, np->n_flag, 0xb1eb1e);
 		}
-		lck_mtx_unlock(nfs_node_hash_mutex);
+		lck_mtx_unlock(&nfs_node_hash_mutex);
 	}
 	NFS_ZFREE(nfs_req_zone, req);
 	FREE(dul, M_TEMP);
@@ -5857,8 +5857,8 @@ out:
  * Invalidate cached directory information, except for the actual directory
  * blocks (which are invalidated separately).
  */
-void
-nfs_invaldir(nfsnode_t dnp)
+static void
+nfs_invaldir_cookies(nfsnode_t dnp)
 {
 	if (vnode_vtype(NFSTOV(dnp)) != VDIR) {
 		return;
@@ -5871,6 +5871,13 @@ nfs_invaldir(nfsnode_t dnp)
 	dnp->n_cookiecache->free = 0;
 	dnp->n_cookiecache->mru = -1;
 	memset(dnp->n_cookiecache->next, -1, NFSNUMCOOKIES);
+}
+
+void
+nfs_invaldir(nfsnode_t dnp)
+{
+
+	nfs_invaldir_cookies(dnp);
 }
 
 /*
@@ -6037,7 +6044,7 @@ nfs_dir_cookie_to_lbn(nfsnode_t dnp, uint64_t cookie, int *ptc, uint64_t *lbnp)
 	dpptc = NULL;
 	found = 0;
 
-	lck_mtx_lock(nfs_buf_mutex);
+	lck_mtx_lock(&nfs_buf_mutex);
 	/*
 	 * Scan the list of buffers, keeping them in order.
 	 * Note that itercomplete inserts each of the remaining buffers
@@ -6099,7 +6106,7 @@ nfs_dir_cookie_to_lbn(nfsnode_t dnp, uint64_t cookie, int *ptc, uint64_t *lbnp)
 		}
 		nfs_buf_itercomplete(dnp, &blist, NBI_CLEAN);
 	}
-	lck_mtx_unlock(nfs_buf_mutex);
+	lck_mtx_unlock(&nfs_buf_mutex);
 	if (found) {
 		OSAddAtomic64(1, &nfsstats.direofcache_hits);
 		return 0;
@@ -6250,7 +6257,7 @@ nfs_dir_buf_cache_lookup(nfsnode_t dnp, nfsnode_t *npp, struct componentname *cn
 		lbn = nextlbn;
 	}
 
-	lck_mtx_lock(nfs_buf_mutex);
+	lck_mtx_lock(&nfs_buf_mutex);
 	if (found) {
 		dnp->n_lastdbl = lbn;
 		goto done;
@@ -6323,7 +6330,7 @@ nfs_dir_buf_cache_lookup(nfsnode_t dnp, nfsnode_t *npp, struct componentname *cn
 	}
 
 done:
-	lck_mtx_unlock(nfs_buf_mutex);
+	lck_mtx_unlock(&nfs_buf_mutex);
 
 	if (!error && found && !purge) {
 		error = nfs_nget(NFSTOMP(dnp), dnp, cnp, fh->fh_data,
@@ -6402,7 +6409,7 @@ nfs3_readdir_rpc(nfsnode_t dnp, struct nfsbuf *bp, vfs_context_t ctx)
 	nmrsize = nmp->nm_rsize;
 	bigcookies = nmp->nm_state & NFSSTA_BIGCOOKIES;
 	fh = zalloc(nfs_fhandle_zone);
-noplus:
+resend:
 	rdirplus = ((nfsvers > NFS_VER2) && NMFLAG(nmp, RDIRPLUS)) ? 1 : 0;
 
 	if ((lockerror = nfs_node_lock(dnp))) {
@@ -6483,7 +6490,9 @@ noplus:
 			lck_mtx_lock(&nmp->nm_lock);
 			NFS_BITMAP_CLR(nmp->nm_flags, NFS_MFLAG_RDIRPLUS);
 			lck_mtx_unlock(&nmp->nm_lock);
-			goto noplus;
+			nfsm_chain_cleanup(&nmreq);
+			nfsm_chain_cleanup(&nmrep);
+			goto resend;
 		}
 		nfsmout_if(error);
 
@@ -7758,7 +7767,9 @@ nfs_vnop_ioctl(
 		if (!auth_is_kerberized(mp->nm_auth)) {
 			return ENOTSUP;
 		}
-		error = nfs_gss_clnt_ctx_remove(mp, vfs_context_ucred(ctx));
+		if ((error = nfs_gss_clnt_ctx_remove(mp, vfs_context_ucred(ctx))) == ENOENT) {
+			error = 0;
+		}
 		break;
 	case NFS_IOC_SET_CRED:
 	case NFS_IOC_SET_CRED64:
@@ -8298,11 +8309,11 @@ nfs_vnop_pageout(
 			xsize = f_offset + size - off;
 		}
 		lbn = (daddr64_t)(off / biosize);
-		lck_mtx_lock(nfs_buf_mutex);
+		lck_mtx_lock(&nfs_buf_mutex);
 		if ((bp = nfs_buf_incore(np, lbn))) {
 			FSDBG(323, off, bp, bp->nb_lflags, bp->nb_flags);
 			if (nfs_buf_acquire(bp, NBAC_NOWAIT, 0, 0)) {
-				lck_mtx_unlock(nfs_buf_mutex);
+				lck_mtx_unlock(&nfs_buf_mutex);
 				nfs_data_unlock_noupdate(np);
 				/* no panic. just tell vm we are busy */
 				if (!nofreeupl) {
@@ -8352,7 +8363,7 @@ nfs_vnop_pageout(
 					nfsbufdelwricnt++;
 					nfs_buf_drop(bp);
 					nfs_buf_delwri_push(1);
-					lck_mtx_unlock(nfs_buf_mutex);
+					lck_mtx_unlock(&nfs_buf_mutex);
 					nfs_data_unlock_noupdate(np);
 					if (!nofreeupl) {
 						ubc_upl_abort_range(pl, pl_offset, size, 0);
@@ -8371,12 +8382,12 @@ nfs_vnop_pageout(
 					FSDBG(323, bp, bp->nb_dirtyoff, bp->nb_dirtyend, 0xd00dee00);
 					/* we're leaving this block dirty */
 					nfs_buf_drop(bp);
-					lck_mtx_unlock(nfs_buf_mutex);
+					lck_mtx_unlock(&nfs_buf_mutex);
 					continue;
 				}
 			}
 			nfs_buf_remfree(bp);
-			lck_mtx_unlock(nfs_buf_mutex);
+			lck_mtx_unlock(&nfs_buf_mutex);
 			SET(bp->nb_flags, NB_INVAL);
 			nfs_node_lock_force(np);
 			if (ISSET(bp->nb_flags, NB_NEEDCOMMIT)) {
@@ -8387,7 +8398,7 @@ nfs_vnop_pageout(
 			nfs_node_unlock(np);
 			nfs_buf_release(bp, 1);
 		} else {
-			lck_mtx_unlock(nfs_buf_mutex);
+			lck_mtx_unlock(&nfs_buf_mutex);
 		}
 	}
 

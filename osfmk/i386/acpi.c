@@ -347,6 +347,12 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	init_fpu();
 	clear_ts();
 
+
+#if HYPERVISOR
+	/* Notify hypervisor that we are about to resume */
+	hv_resume();
+#endif
+
 	IOCPURunPlatformActiveActions();
 
 	KDBG(IOKDBG_CODE(DBG_HIBERNATE, 0) | DBG_FUNC_END, start, elapsed,
@@ -360,7 +366,6 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 
 	/* Restart timer interrupts */
 	rtc_timer_start();
-
 
 #if MONOTONIC
 	mt_cpu_up(cdp);

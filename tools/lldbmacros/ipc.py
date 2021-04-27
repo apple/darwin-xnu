@@ -1242,14 +1242,14 @@ def IterateAllPorts(tasklist, func, ctx, include_psets, follow_busyports, should
             func(t, space, ctx, taskports_idx, 0, t.itk_debug_control, 17)
         if unsigned(t.itk_task_access) > 0:
             func(t, space, ctx, taskports_idx, 0, t.itk_task_access, 17)
-        if unsigned(t.itk_self[1]) > 0: ## task read port
-            func(t, space, ctx, taskports_idx, 0, t.itk_self[1], 17)
-        if unsigned(t.itk_self[2]) > 0: ## task inspect port
-            func(t, space, ctx, taskports_idx, 0, t.itk_self[2], 17)
+        if unsigned(t.itk_task_ports[1]) > 0: ## task read port
+            func(t, space, ctx, taskports_idx, 0, t.itk_task_ports[1], 17)
+        if unsigned(t.itk_task_ports[2]) > 0: ## task inspect port
+            func(t, space, ctx, taskports_idx, 0, t.itk_task_ports[2], 17)
 
         ## Task name port (not a send right, just a naked ref); TASK_FLAVOR_NAME = 3
-        if unsigned(t.itk_self[3]) > 0:
-            func(t, space, ctx, taskports_idx, 0, t.itk_self[3], 0)
+        if unsigned(t.itk_task_ports[3]) > 0:
+            func(t, space, ctx, taskports_idx, 0, t.itk_task_ports[3], 0)
 
         ## task resume port is a receive right to resume the task
         if unsigned(t.itk_resume) > 0:

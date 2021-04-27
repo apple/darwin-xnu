@@ -62,12 +62,14 @@ vm_address_t     percpu_base_cur;
 cpu_data_t       PERCPU_DATA(cpu_data);
 cpu_data_entry_t CpuDataEntries[MAX_CPUS];
 
-static lck_grp_t cpu_lck_grp;
-static lck_rw_t cpu_state_lock;
+static LCK_GRP_DECLARE(cpu_lck_grp, "cpu_lck_grp");
+static LCK_RW_DECLARE(cpu_state_lock, &cpu_lck_grp);
 
 unsigned int    real_ncpus = 1;
 boolean_t       idle_enable = FALSE;
 uint64_t        wake_abstime = 0x0ULL;
+
+extern uint64_t xcall_ack_timeout_abstime;
 
 #if defined(HAS_IPI)
 extern unsigned int gFastIPI;
@@ -427,6 +429,11 @@ cpu_signal_internal(cpu_data_t *target_proc,
 	}
 
 	if ((signal == SIGPxcall) || (signal == SIGPxcallImm)) {
+		uint64_t start_mabs_time, max_mabs_time, current_mabs_time;
+		current_mabs_time = start_mabs_time = mach_absolute_time();
+		max_mabs_time = xcall_ack_timeout_abstime + current_mabs_time;
+		assert(max_mabs_time > current_mabs_time);
+
 		do {
 			current_signals = target_proc->cpu_signal;
 			if ((current_signals & SIGPdisabled) == SIGPdisabled) {
@@ -447,7 +454,20 @@ cpu_signal_internal(cpu_data_t *target_proc,
 			if (!swap_success && (current_proc->cpu_signal & signal)) {
 				cpu_handle_xcall(current_proc);
 			}
-		} while (!swap_success);
+		} while (!swap_success && ((current_mabs_time = mach_absolute_time()) < max_mabs_time));
+
+		/*
+		 * If we time out while waiting for the target CPU to respond, it's possible that no
+		 * other CPU is available to handle the watchdog interrupt that would eventually trigger
+		 * a panic. To prevent this from happening, we just panic here to flag this condition.
+		 */
+		if (__improbable(current_mabs_time >= max_mabs_time)) {
+			uint64_t end_time_ns, xcall_ack_timeout_ns;
+			absolutetime_to_nanoseconds(current_mabs_time - start_mabs_time, &end_time_ns);
+			absolutetime_to_nanoseconds(xcall_ack_timeout_abstime, &xcall_ack_timeout_ns);
+			panic("CPU%u has failed to respond to cross-call after %llu nanoseconds (timeout = %llu ns)",
+			    target_proc->cpu_number, end_time_ns, xcall_ack_timeout_ns);
+		}
 
 		if (signal == SIGPxcallImm) {
 			target_proc->cpu_imm_xcall_p0 = p0;
@@ -823,13 +843,6 @@ ml_cpu_can_exit(__unused int cpu_id)
 	}
 #endif
 	return false;
-}
-
-void
-ml_cpu_init_state(void)
-{
-	lck_grp_init(&cpu_lck_grp, "cpu_lck_grp", LCK_GRP_ATTR_NULL);
-	lck_rw_init(&cpu_state_lock, &cpu_lck_grp, LCK_ATTR_NULL);
 }
 
 #ifdef USE_APPLEARMSMP

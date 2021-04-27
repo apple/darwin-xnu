@@ -71,7 +71,12 @@ extern boolean_t vm_swap_files_pinned(void);
 extern mach_port_name_t ipc_port_copyout_send(
 	ipc_port_t      sright,
 	ipc_space_t     space);
+extern mach_port_name_t ipc_port_copyout_send_pinned(
+	ipc_port_t      sright,
+	ipc_space_t     space);
 extern task_t port_name_to_task(
+	mach_port_name_t name);
+extern task_t port_name_to_task_read(
 	mach_port_name_t name);
 extern task_t port_name_to_task_name(
 	mach_port_name_t name);
@@ -96,6 +101,7 @@ extern void consider_machine_adjust(void);
 extern vm_map_offset_t get_map_min(vm_map_t);
 extern vm_map_offset_t get_map_max(vm_map_t);
 extern vm_map_size_t get_vmmap_size(vm_map_t);
+extern int get_task_page_size(task_t);
 #if CONFIG_COREDUMP
 extern int get_vmmap_entries(vm_map_t);
 #endif
@@ -178,7 +184,8 @@ extern memory_object_t apple_protect_pager_setup(
 	vm_object_offset_t      crypto_backing_offset,
 	struct pager_crypt_info *crypt_info,
 	vm_object_offset_t      crypto_start,
-	vm_object_offset_t      crypto_end);
+	vm_object_offset_t      crypto_end,
+	boolean_t               cache_pager);
 #endif  /* CONFIG_CODE_DECRYPTION */
 
 struct vm_shared_region_slide_info;
@@ -589,6 +596,20 @@ extern int macx_backing_store_compaction(int flags);
 extern unsigned int mach_vm_ctl_page_free_wanted(void);
 
 extern int no_paging_space_action(void);
+
+/*
+ * counts updated by revalidate_text_page()
+ */
+extern unsigned int vmtc_total;        /* total # of text page corruptions detected */
+extern unsigned int vmtc_undiagnosed;  /* of that what wasn't diagnosed */
+extern unsigned int vmtc_not_eligible; /* failed to correct, due to page attributes */
+extern unsigned int vmtc_copyin_fail;  /* of undiagnosed, copyin failure count */
+extern unsigned int vmtc_not_found;    /* of diagnosed, no error found - code signing error? */
+extern unsigned int vmtc_one_bit_flip; /* of diagnosed, single bit errors */
+#define MAX_TRACK_POWER2 9             /* of diagnosed, counts of 1, 2, 4,... bytes corrupted */
+extern unsigned int vmtc_byte_counts[MAX_TRACK_POWER2 + 1];
+
+extern kern_return_t revalidate_text_page(task_t, vm_map_offset_t);
 
 #define VM_TOGGLE_CLEAR         0
 #define VM_TOGGLE_SET           1

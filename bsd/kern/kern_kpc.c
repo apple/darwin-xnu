@@ -62,9 +62,8 @@ typedef int (*setint_t)(int);
 
 static int kpc_initted = 0;
 
-static lck_grp_attr_t *sysctl_lckgrp_attr = NULL;
-static lck_grp_t *sysctl_lckgrp = NULL;
-static lck_mtx_t sysctl_lock;
+static LCK_GRP_DECLARE(sysctl_lckgrp, "kpc");
+static LCK_MTX_DECLARE(sysctl_lock, &sysctl_lckgrp);
 
 /*
  * Another element is needed to hold the CPU number when getting counter values.
@@ -76,10 +75,6 @@ typedef int (*setget_func_t)(int);
 void
 kpc_init(void)
 {
-	sysctl_lckgrp_attr = lck_grp_attr_alloc_init();
-	sysctl_lckgrp = lck_grp_alloc_init("kpc", sysctl_lckgrp_attr);
-	lck_mtx_init(&sysctl_lock, sysctl_lckgrp, LCK_ATTR_NULL);
-
 	kpc_arch_init();
 
 	kpc_initted = 1;

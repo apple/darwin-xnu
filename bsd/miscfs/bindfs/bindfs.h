@@ -127,8 +127,6 @@ struct vnodeop_desc_fake {
 __BEGIN_DECLS
 
 int bindfs_init(struct vfsconf * vfsp);
-int bindfs_init_lck(lck_mtx_t * lck);
-int bindfs_destroy_lck(lck_mtx_t * lck);
 int bindfs_destroy(void);
 int bind_nodeget(
 	struct mount * mp, struct vnode * lowervp, struct vnode * dvp, struct vnode ** vpp, struct componentname * cnp, int root);

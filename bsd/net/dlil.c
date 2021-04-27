@@ -4838,7 +4838,19 @@ skip_clat:
 			}
 			goto next;
 		}
-		if ((m->m_flags & M_PROMISC) != 0) {
+		/*
+		 * A VLAN interface receives VLAN-tagged packets by attaching
+		 * its PF_VLAN protocol to a parent interface. When a VLAN
+		 * interface is a member of a bridge, the parent interface
+		 * receives VLAN-tagged M_PROMISC packets. A VLAN-tagged
+		 * M_PROMISC packet must be processed by the VLAN protocol
+		 * so that it can be sent up the stack via
+		 * dlil_input_packet_list(). That allows the bridge interface's
+		 * input filter, attached to the VLAN interface, to process
+		 * the packet.
+		 */
+		if (protocol_family != PF_VLAN &&
+		    (m->m_flags & M_PROMISC) != 0) {
 			m_freem(m);
 			goto next;
 		}
@@ -5319,8 +5331,7 @@ preout_again:
 		if ((raw != 0) && (ifp->if_family == IFNET_FAMILY_ETHERNET)) {
 			uint8_t vlan_encap_len = 0;
 
-			if ((old_proto_family == PF_VLAN) &&
-			    ((m->m_pkthdr.csum_flags & CSUM_VLAN_TAG_VALID) == 0)) {
+			if ((m->m_pkthdr.csum_flags & CSUM_VLAN_ENCAP_PRESENT) != 0) {
 				vlan_encap_len = ETHER_VLAN_ENCAP_LEN;
 			}
 			m->m_pkthdr.pkt_hdr = mtod(m, char *) + ETHER_HDR_LEN + vlan_encap_len;

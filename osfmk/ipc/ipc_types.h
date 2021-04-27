@@ -63,10 +63,16 @@ typedef struct ipc_kmsg *ipc_kmsg_t;
 typedef uint8_t sync_qos_count_t;
 
 typedef uint64_t ipc_label_t;
-#define IPC_LABEL_NONE     ((ipc_label_t)0x0)
-#define IPC_LABEL_DEXT     ((ipc_label_t)0x1)
-#define IPC_LABEL_PLATFORM ((ipc_label_t)0x2)
-#define IPC_LABEL_SPECIAL  ((ipc_label_t)0x3)
+#define IPC_LABEL_NONE          ((ipc_label_t)0x0000)
+#define IPC_LABEL_DEXT          ((ipc_label_t)0x0001)
+#define IPC_LABEL_PLATFORM      ((ipc_label_t)0x0002)
+#define IPC_LABEL_SPECIAL       ((ipc_label_t)0x0003)
+#define IPC_LABEL_SPACE_MASK    ((ipc_label_t)0x00ff)
+
+#define IPC_LABEL_SUBST_TASK    ((ipc_label_t)0x0100)
+#define IPC_LABEL_SUBST_THREAD  ((ipc_label_t)0x0200)
+#define IPC_LABEL_SUBST_ONCE    ((ipc_label_t)0x0300)
+#define IPC_LABEL_SUBST_MASK    ((ipc_label_t)0xff00)
 
 typedef struct ipc_kobject_label *ipc_kobject_label_t;
 

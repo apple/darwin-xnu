@@ -512,7 +512,7 @@ lck_spin_init(
 /*
  * arm_usimple_lock is a lck_spin_t without a group or attributes
  */
-void inline
+MARK_AS_HIBERNATE_TEXT void inline
 arm_usimple_lock_init(simple_lock_t lck, __unused unsigned short initial_value)
 {
 	lck->type = LCK_SPIN_TYPE;

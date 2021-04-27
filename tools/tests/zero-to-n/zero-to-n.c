@@ -38,6 +38,7 @@
 #include <sysexits.h>
 #include <sys/sysctl.h>
 #include <getopt.h>
+#include <libproc.h>
 
 #include <spawn.h>
 #include <spawn_private.h>
@@ -56,10 +57,11 @@
 #include <stdatomic.h>
 
 #include <os/tsd.h>
+#include <os/lock.h>
 #include <TargetConditionals.h>
 
 typedef enum wake_type { WAKE_BROADCAST_ONESEM, WAKE_BROADCAST_PERTHREAD, WAKE_CHAIN, WAKE_HOP } wake_type_t;
-typedef enum my_policy_type { MY_POLICY_REALTIME, MY_POLICY_TIMESHARE, MY_POLICY_FIXEDPRI } my_policy_type_t;
+typedef enum my_policy_type { MY_POLICY_REALTIME, MY_POLICY_TIMESHARE, MY_POLICY_TIMESHARE_NO_SMT, MY_POLICY_FIXEDPRI } my_policy_type_t;
 
 #define mach_assert_zero(error)        do { if ((error) != 0) { fprintf(stderr, "[FAIL] error %d (%s) ", (error), mach_error_string(error)); assert(error == 0); } } while (0)
 #define mach_assert_zero_t(tid, error) do { if ((error) != 0) { fprintf(stderr, "[FAIL] Thread %d error %d (%s) ", (tid), (error), mach_error_string(error)); assert(error == 0); } } while (0)
@@ -229,7 +231,7 @@ static void
 create_churn_threads()
 {
 	if (g_churn_count == 0) {
-		g_churn_count = g_numcpus - 1;
+		g_churn_count = g_test_rt_smt ? g_numcpus : g_numcpus - 1;
 	}
 
 	errno_t err;
@@ -417,6 +419,8 @@ parse_thread_policy(const char *str)
 {
 	if (strcmp(str, "timeshare") == 0) {
 		return MY_POLICY_TIMESHARE;
+	} else if (strcmp(str, "timeshare_no_smt") == 0) {
+		return MY_POLICY_TIMESHARE_NO_SMT;
 	} else if (strcmp(str, "realtime") == 0) {
 		return MY_POLICY_REALTIME;
 	} else if (strcmp(str, "fixed") == 0) {
@@ -470,6 +474,9 @@ thread_setup(uint32_t my_id)
 	switch (g_policy) {
 	case MY_POLICY_TIMESHARE:
 		break;
+	case MY_POLICY_TIMESHARE_NO_SMT:
+		proc_setthread_no_smt();
+		break;
 	case MY_POLICY_REALTIME:
 		/* Hard-coded realtime parameters (similar to what Digi uses) */
 		pol.period      = 100000;
@@ -509,6 +516,20 @@ thread_setup(uint32_t my_id)
 	return 0;
 }
 
+time_value_t
+get_thread_runtime(void)
+{
+	thread_basic_info_data_t info;
+	mach_msg_type_number_t info_count = THREAD_BASIC_INFO_COUNT;
+	thread_info(pthread_mach_thread_np(pthread_self()), THREAD_BASIC_INFO, (thread_info_t)&info, &info_count);
+
+	time_value_add(&info.user_time, &info.system_time);
+
+	return info.user_time;
+}
+
+time_value_t worker_threads_total_runtime = {};
+
 /*
  * Wait for a wakeup, potentially wake up another of the "0-N" threads,
  * and notify the main thread when done.
@@ -516,6 +537,8 @@ thread_setup(uint32_t my_id)
 static void*
 worker_thread(void *arg)
 {
+	static os_unfair_lock runtime_lock = OS_UNFAIR_LOCK_INIT;
+
 	uint32_t my_id = (uint32_t)(uintptr_t)arg;
 	kern_return_t kr;
 
@@ -736,6 +759,11 @@ worker_thread(void *arg)
 		mach_assert_zero_t(my_id, kr);
 	}
 
+	time_value_t runtime = get_thread_runtime();
+	os_unfair_lock_lock(&runtime_lock);
+	time_value_add(&worker_threads_total_runtime, &runtime);
+	os_unfair_lock_unlock(&runtime_lock);
+
 	return 0;
 }
 
@@ -774,6 +802,29 @@ compute_stats(uint64_t *values, uint64_t count, float *averagep, uint64_t *maxp,
 	*stddevp = _dev;
 }
 
+typedef struct {
+	natural_t sys;
+	natural_t user;
+	natural_t idle;
+} cpu_time_t;
+
+void
+record_cpu_time(cpu_time_t *cpu_time)
+{
+	host_cpu_load_info_data_t load;
+	mach_msg_type_number_t count = HOST_CPU_LOAD_INFO_COUNT;
+	kern_return_t kr = host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, (int *)&load, &count);
+	mach_assert_zero_t(0, kr);
+
+	natural_t total_system_time = load.cpu_ticks[CPU_STATE_SYSTEM];
+	natural_t total_user_time = load.cpu_ticks[CPU_STATE_USER] + load.cpu_ticks[CPU_STATE_NICE];
+	natural_t total_idle_time = load.cpu_ticks[CPU_STATE_IDLE];
+
+	cpu_time->sys = total_system_time;
+	cpu_time->user = total_user_time;
+	cpu_time->idle = total_idle_time;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -787,6 +838,7 @@ main(int argc, char **argv)
 	float           avg, stddev;
 
 	bool test_fail = false;
+	bool test_warn = false;
 
 	for (int i = 0; i < argc; i++) {
 		if (strcmp(argv[i], "--switched_apptype") == 0) {
@@ -1026,6 +1078,11 @@ main(int argc, char **argv)
 		usleep(g_iteration_sleeptime_us);
 	}
 
+	cpu_time_t start_time;
+	cpu_time_t finish_time;
+
+	record_cpu_time(&start_time);
+
 	/* Go! */
 	for (uint32_t i = 0; i < g_iterations; i++) {
 		uint32_t j;
@@ -1100,6 +1157,8 @@ main(int argc, char **argv)
 		}
 	}
 
+	record_cpu_time(&finish_time);
+
 	/* Rejoin threads */
 	for (uint32_t i = 0; i < g_numthreads; i++) {
 		ret = pthread_join(threads[i], NULL);
@@ -1115,6 +1174,9 @@ main(int argc, char **argv)
 	if (g_churn_pri) {
 		join_churn_threads();
 	}
+
+	uint32_t cpu_idle_time = (finish_time.idle - start_time.idle) * 10;
+	uint32_t worker_threads_runtime = worker_threads_total_runtime.seconds * 1000 + worker_threads_total_runtime.microseconds / 1000;
 
 	compute_stats(worst_latencies_ns, g_iterations, &avg, &max, &min, &stddev);
 	printf("Results (from a stop):\n");
@@ -1171,6 +1233,7 @@ main(int argc, char **argv)
 				    secondary ? " SECONDARY" : "",
 				    fail ? " FAIL" : "");
 			}
+			test_warn |= (secondary || fail);
 			test_fail |= fail;
 			fail_count += fail;
 		}
@@ -1178,6 +1241,17 @@ main(int argc, char **argv)
 		if (test_fail && (g_iterations >= 100) && (fail_count <= g_iterations / 100)) {
 			printf("99%% or better success rate\n");
 			test_fail = 0;
+		}
+	}
+
+	if (g_test_rt_smt && (g_each_spin_duration_ns >= 200000) && !test_warn) {
+		printf("cpu_idle_time=%dms worker_threads_runtime=%dms\n", cpu_idle_time, worker_threads_runtime);
+		if (cpu_idle_time < worker_threads_runtime / 4) {
+			printf("FAIL cpu_idle_time unexpectedly small\n");
+			test_fail = 1;
+		} else if (cpu_idle_time > worker_threads_runtime * 2) {
+			printf("FAIL cpu_idle_time unexpectedly large\n");
+			test_fail = 1;
 		}
 	}
 
@@ -1247,7 +1321,7 @@ static void __attribute__((noreturn))
 usage()
 {
 	errx(EX_USAGE, "Usage: %s <threads> <chain | hop | broadcast-single-sem | broadcast-per-thread> "
-	    "<realtime | timeshare | fixed> <iterations>\n\t\t"
+	    "<realtime | timeshare | timeshare_no_smt | fixed> <iterations>\n\t\t"
 	    "[--trace <traceworthy latency in ns>] "
 	    "[--verbose] [--spin-one] [--spin-all] [--spin-time <nanos>] [--affinity]\n\t\t"
 	    "[--no-sleep] [--drop-priority] [--churn-pri <pri>] [--churn-count <n>]\n\t\t"

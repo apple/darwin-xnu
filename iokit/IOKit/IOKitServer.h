@@ -169,6 +169,7 @@ extern io_object_t iokit_lookup_uext_ref_current_task(mach_port_name_t name);
 
 extern void iokit_retain_port( ipc_port_t port );
 extern void iokit_release_port( ipc_port_t port );
+extern void iokit_make_port_send( ipc_port_t port );
 extern void iokit_release_port_send( ipc_port_t port );
 
 extern void iokit_lock_port(ipc_port_t port);

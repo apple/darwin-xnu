@@ -79,7 +79,8 @@ LLDBMACROS_PYTHON_FILES = $(LLDBMACROS_USERDEBUG_FILES) \
 	pgtrace.py \
 	xnutriage.py \
 	zonetriage.py \
-	sysreg.py
+	sysreg.py \
+	counter.py
 
 ifneq ($(PLATFORM),MacOSX)
 	LLDBMACROS_PYTHON_FILES+= \

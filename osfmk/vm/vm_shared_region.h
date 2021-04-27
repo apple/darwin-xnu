@@ -58,7 +58,7 @@ extern int shared_region_debug;
 
 extern int shared_region_trace_level;
 
-extern struct vm_shared_region *init_task_shared_region;
+extern struct vm_shared_region *primary_system_shared_region;
 
 #define SHARED_REGION_TRACE_NONE_LVL            0 /* no trace */
 #define SHARED_REGION_TRACE_ERROR_LVL           1 /* trace abnormal events */
@@ -276,12 +276,6 @@ extern vm_shared_region_t vm_shared_region_trim_and_get(
 	struct task             *task);
 extern void vm_shared_region_deallocate(
 	struct vm_shared_region *shared_region);
-extern mach_vm_offset_t vm_shared_region_base_address(
-	struct vm_shared_region *shared_region);
-extern mach_vm_size_t vm_shared_region_size(
-	struct vm_shared_region *shared_region);
-extern ipc_port_t vm_shared_region_mem_entry(
-	struct vm_shared_region *shared_region);
 extern vm_map_t vm_shared_region_vm_map(
 	struct vm_shared_region *shared_region);
 extern void vm_shared_region_set(
@@ -295,7 +289,8 @@ extern vm_shared_region_t vm_shared_region_lookup(
 	boolean_t               reslide);
 extern kern_return_t vm_shared_region_start_address(
 	struct vm_shared_region *shared_region,
-	mach_vm_offset_t        *start_address);
+	mach_vm_offset_t        *start_address,
+	task_t                  task);
 extern void vm_shared_region_undo_mappings(
 	vm_map_t sr_map,
 	mach_vm_offset_t sr_base_address,

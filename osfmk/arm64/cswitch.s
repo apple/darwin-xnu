@@ -201,6 +201,19 @@
 #endif
 
 
+#if CSWITCH_ROP_KEYS
+	ldr		\new_key, [\thread, TH_ROP_PID]
+	REPROGRAM_ROP_KEYS	Lskip_rop_keys_\@, \new_key, \cpudatap, \tmp_key
+	mov		\wsync, #1
+Lskip_rop_keys_\@:
+#endif /* CSWITCH_ROP_KEYS */
+
+#if CSWITCH_JOP_KEYS
+	ldr		\new_key, [\thread, TH_JOP_PID]
+	REPROGRAM_JOP_KEYS	Lskip_jop_keys_\@, \new_key, \cpudatap, \tmp_key
+	mov		\wsync, #1
+Lskip_jop_keys_\@:
+#endif /* CSWITCH_JOP_KEYS */
 
 	cbz		\wsync, 1f
 	isb 	sy

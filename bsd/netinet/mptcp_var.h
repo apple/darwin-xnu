@@ -93,10 +93,8 @@ struct mptses {
 #define __mpte_dst_v4 mpte_u_dst._mpte_dst_v4
 #define __mpte_dst_v6 mpte_u_dst._mpte_dst_v6
 
-	struct sockaddr_in mpte_dst_v4_nat64;
-
-	struct sockaddr_in mpte_dst_unicast_v4;
-	struct sockaddr_in6 mpte_dst_unicast_v6;
+	struct sockaddr_in      mpte_sub_dst_v4;
+	struct sockaddr_in6     mpte_sub_dst_v6;
 
 	uint16_t        mpte_alternate_port;    /* Alternate port for subflow establishment (network-byte-order) */
 
@@ -205,6 +203,12 @@ mptcp_subflow_cwnd_space(struct socket *so)
 	return MIN(cwnd, sbspace(&so->so_snd));
 }
 
+static inline bool
+mptcp_subflows_need_backup_flag(struct mptses *mpte)
+{
+	return mpte->mpte_svctype < MPTCP_SVCTYPE_AGGREGATE ||
+	       mpte->mpte_svctype == MPTCP_SVCTYPE_PURE_HANDOVER;
+}
 
 /*
  * MPTCP socket options
@@ -639,7 +643,6 @@ extern void mptcp_ask_symptoms(struct mptses *mpte);
 extern void mptcp_control_register(void);
 extern int mptcp_is_wifi_unusable_for_session(struct mptses *mpte);
 extern boolean_t symptoms_is_wifi_lossy(void);
-extern void mptcp_ask_for_nat64(struct ifnet *ifp);
 extern void mptcp_session_necp_cb(void *, int, uint32_t, uint32_t, bool *);
 extern struct sockaddr *mptcp_get_session_dst(struct mptses *mpte,
     boolean_t has_v6, boolean_t has_v4);

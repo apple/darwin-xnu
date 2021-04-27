@@ -81,7 +81,6 @@
 #include <mach/vm_prot.h>
 #include <mach/vm_inherit.h>
 #include <mach/kern_return.h>
-#include <mach/memory_object_control.h>
 
 #include <vm/vm_map.h>
 #include <vm/vm_protos.h>
@@ -204,27 +203,12 @@ static const struct fileops pshmops = {
 /*
  * Everything here is protected by a single mutex.
  */
-static lck_grp_t       *psx_shm_subsys_lck_grp;
-static lck_grp_attr_t  *psx_shm_subsys_lck_grp_attr;
-static lck_attr_t      *psx_shm_subsys_lck_attr;
-static lck_mtx_t        psx_shm_subsys_mutex;
+static LCK_GRP_DECLARE(psx_shm_subsys_lck_grp, "posix shared memory");
+static LCK_MTX_DECLARE(psx_shm_subsys_mutex, &psx_shm_subsys_lck_grp);
 
 #define PSHM_SUBSYS_LOCK() lck_mtx_lock(& psx_shm_subsys_mutex)
 #define PSHM_SUBSYS_UNLOCK() lck_mtx_unlock(& psx_shm_subsys_mutex)
 #define PSHM_SUBSYS_ASSERT_HELD()  LCK_MTX_ASSERT(&psx_shm_subsys_mutex, LCK_MTX_ASSERT_OWNED)
-
-
-__private_extern__ void
-pshm_lock_init( void )
-{
-	psx_shm_subsys_lck_grp_attr = lck_grp_attr_alloc_init();
-
-	psx_shm_subsys_lck_grp =
-	    lck_grp_alloc_init("posix shared memory", psx_shm_subsys_lck_grp_attr);
-
-	psx_shm_subsys_lck_attr = lck_attr_alloc_init();
-	lck_mtx_init(&psx_shm_subsys_mutex, psx_shm_subsys_lck_grp, psx_shm_subsys_lck_attr);
-}
 
 /*
  * Lookup an entry in the cache. Only the name is used from "look".
@@ -358,7 +342,7 @@ shm_open(proc_t p, struct shm_open_args *uap, int32_t *retval)
 	 * Allocate data structures we need. We parse the userspace name into
 	 * a pshm_info_t, even when we don't need to O_CREAT.
 	 */
-	MALLOC(new_pinfo, pshm_info_t *, sizeof(pshm_info_t), M_SHM, M_WAITOK | M_ZERO);
+	new_pinfo = kheap_alloc(KM_SHM, sizeof(pshm_info_t), Z_WAITOK | Z_ZERO);
 	if (new_pinfo == NULL) {
 		error = ENOSPC;
 		goto bad;
@@ -392,7 +376,8 @@ shm_open(proc_t p, struct shm_open_args *uap, int32_t *retval)
 	/*
 	 * Will need a new pnode for the file pointer
 	 */
-	MALLOC(new_pnode, pshmnode_t *, sizeof(pshmnode_t), M_SHM, M_WAITOK | M_ZERO);
+	new_pnode = kheap_alloc(KM_SHM, sizeof(pshmnode_t),
+	    Z_WAITOK | Z_ZERO);
 	if (new_pnode == NULL) {
 		error = ENOSPC;
 		goto bad;
@@ -516,9 +501,7 @@ bad:
 	/*
 	 * Delete any allocated unused data structures.
 	 */
-	if (new_pnode != NULL) {
-		FREE(new_pnode, M_SHM);
-	}
+	kheap_free(KM_SHM, new_pnode, sizeof(pshmnode_t));
 
 	if (fp != NULL) {
 		fp_free(p, indx, fp);
@@ -531,7 +514,7 @@ done:
 			mac_posixshm_label_destroy(&new_pinfo->pshm_hdr);
 		}
 #endif
-		FREE(new_pinfo, M_SHM);
+		kheap_free(KM_SHM, new_pinfo, sizeof(pshm_info_t));
 	}
 	return error;
 }
@@ -628,7 +611,7 @@ pshm_truncate(
 		}
 
 		/* get a list entry to track the memory object */
-		MALLOC(pshmobj, pshm_mobj_t *, sizeof(pshm_mobj_t), M_SHM, M_WAITOK);
+		pshmobj = kheap_alloc(KM_SHM, sizeof(pshm_mobj_t), Z_WAITOK);
 		if (pshmobj == NULL) {
 			kret = KERN_NO_SPACE;
 			mach_memory_entry_port_release(mem_object);
@@ -666,7 +649,7 @@ out:
 		SLIST_REMOVE_HEAD(&pinfo->pshm_mobjs, pshmo_next);
 		PSHM_SUBSYS_UNLOCK();
 		mach_memory_entry_port_release(pshmobj->pshmo_memobject);
-		FREE(pshmobj, M_SHM);
+		kheap_free(KM_SHM, pshmobj, sizeof(pshm_mobj_t));
 		PSHM_SUBSYS_LOCK();
 	}
 	pinfo->pshm_flags &= ~PSHM_ALLOCATING;
@@ -987,7 +970,8 @@ shm_unlink(proc_t p, struct shm_unlink_args *uap, __unused int32_t *retval)
 	/*
 	 * Get the name from user args.
 	 */
-	MALLOC(name_pinfo, pshm_info_t *, sizeof(pshm_info_t), M_SHM, M_WAITOK | M_ZERO);
+	name_pinfo = kheap_alloc(KHEAP_TEMP, sizeof(pshm_info_t),
+	    Z_WAITOK | Z_ZERO);
 	if (name_pinfo == NULL) {
 		error = ENOSPC;
 		goto bad;
@@ -1031,9 +1015,7 @@ shm_unlink(proc_t p, struct shm_unlink_args *uap, __unused int32_t *retval)
 bad_unlock:
 	PSHM_SUBSYS_UNLOCK();
 bad:
-	if (name_pinfo != NULL) {
-		FREE(name_pinfo, M_SHM);
-	}
+	kheap_free(KHEAP_TEMP, name_pinfo, sizeof(pshm_info_t));
 	return error;
 }
 
@@ -1080,11 +1062,11 @@ pshm_deref(pshm_info_t *pinfo)
 		while ((pshmobj = SLIST_FIRST(&pinfo->pshm_mobjs)) != NULL) {
 			SLIST_REMOVE_HEAD(&pinfo->pshm_mobjs, pshmo_next);
 			mach_memory_entry_port_release(pshmobj->pshmo_memobject);
-			FREE(pshmobj, M_SHM);
+			kheap_free(KM_SHM, pshmobj, sizeof(pshm_mobj_t));
 		}
 
 		/* free the pinfo itself */
-		FREE(pinfo, M_SHM);
+		kheap_free(KM_SHM, pinfo, sizeof(pshm_info_t));
 
 		PSHM_SUBSYS_LOCK();
 	}
@@ -1110,9 +1092,7 @@ pshm_closefile(struct fileglob *fg, __unused vfs_context_t ctx)
 	}
 
 	PSHM_SUBSYS_UNLOCK();
-	if (pnode != NULL) {
-		FREE(pnode, M_SHM);
-	}
+	kheap_free(KM_SHM, pnode, sizeof(pshmnode_t));
 
 	return error;
 }

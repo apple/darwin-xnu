@@ -122,7 +122,7 @@ nfs4_init_clientid(struct nfsmount *nmp)
 	static uint8_t en0addr[6];
 	static uint8_t en0addr_set = 0;
 
-	lck_mtx_lock(nfs_global_mutex);
+	lck_mtx_lock(&nfs_global_mutex);
 	if (!en0addr_set) {
 		ifnet_t interface = NULL;
 		error = ifnet_find_by_name("en0", &interface);
@@ -139,7 +139,7 @@ nfs4_init_clientid(struct nfsmount *nmp)
 			ifnet_release(interface);
 		}
 	}
-	lck_mtx_unlock(nfs_global_mutex);
+	lck_mtx_unlock(&nfs_global_mutex);
 
 	MALLOC(ncip, struct nfs_client_id *, sizeof(struct nfs_client_id), M_TEMP, M_WAITOK);
 	if (!ncip) {
@@ -185,7 +185,7 @@ nfs4_init_clientid(struct nfsmount *nmp)
 	}
 
 	/* make sure the ID is unique, and add it to the sorted list */
-	lck_mtx_lock(nfs_global_mutex);
+	lck_mtx_lock(&nfs_global_mutex);
 	TAILQ_FOREACH(ncip2, &nfsclientids, nci_link) {
 		if (ncip->nci_idlen > ncip2->nci_idlen) {
 			continue;
@@ -220,7 +220,7 @@ nfs4_init_clientid(struct nfsmount *nmp)
 		TAILQ_INSERT_TAIL(&nfsclientids, ncip, nci_link);
 	}
 	nmp->nm_longid = ncip;
-	lck_mtx_unlock(nfs_global_mutex);
+	lck_mtx_unlock(&nfs_global_mutex);
 
 	return 0;
 }
@@ -468,7 +468,12 @@ out:
 		interval = 1;
 	}
 	lck_mtx_unlock(&nmp->nm_lock);
-	nfs_interval_timer_start(nmp->nm_renew_timer, interval * 1000);
+
+	lck_mtx_lock(&nmp->nm_timer_lock);
+	if (nmp->nm_renew_timer) {
+		nfs_interval_timer_start(nmp->nm_renew_timer, interval * 1000);
+	}
+	lck_mtx_unlock(&nmp->nm_timer_lock);
 }
 
 /*

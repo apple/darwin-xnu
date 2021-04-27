@@ -206,6 +206,7 @@ const char * fbt_blacklist[] =
 	CLOSURE(prf)
 	CLOSURE(proc_best_name)
 	CLOSURE(proc_is64bit)
+	X86_ONLY(proc_require)
 	CRITICAL(rbtrace_bt)
 	CRITICAL(register_cpu_setup_func)
 	CRITICAL(ret64_iret)
@@ -241,6 +242,11 @@ const char * fbt_blacklist[] =
 	CRITICAL(uread)
 	CRITICAL(uwrite)
 	CRITICAL(vstart)
+	X86_ONLY(zone_has_index)
+	X86_ONLY(zone_id_require)
+	X86_ONLY(zone_id_require_panic)
+	X86_ONLY(zone_range_contains)
+	X86_ONLY(zone_require_panic)
 };
 #define BLACKLIST_COUNT (sizeof(fbt_blacklist)/sizeof(fbt_blacklist[0]))
 

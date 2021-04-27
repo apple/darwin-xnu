@@ -166,8 +166,8 @@ static boolean_t uio_array_is_valid(struct uio **, u_int);
 static int recv_msg_array_is_valid(struct recv_msg_elem *, u_int);
 static int internalize_recv_msghdr_array(const void *, int, int,
     u_int, struct user_msghdr_x *, struct recv_msg_elem *);
-static u_int externalize_recv_msghdr_array(void *, int, int, u_int,
-    const struct user_msghdr_x *, struct recv_msg_elem *);
+static u_int externalize_recv_msghdr_array(struct proc *, struct socket *, void *, u_int,
+    struct user_msghdr_x *, struct recv_msg_elem *, int *);
 static struct recv_msg_elem *alloc_recv_msg_array(u_int count);
 static void free_recv_msg_array(struct recv_msg_elem *, u_int);
 
@@ -1307,7 +1307,7 @@ sendit(struct proc *p, struct socket *so, struct user_msghdr *mp, uio_t uiop,
 		*retval = (int)(len - uio_resid(uiop));
 	}
 bad:
-	if (to != NULL && want_free) {
+	if (want_free) {
 		FREE(to, M_SONAME);
 	}
 out:
@@ -1540,6 +1540,9 @@ sendmsg_x(struct proc *p, struct sendmsg_x_args *uap, user_ssize_t *retval)
 
 	KERNEL_DEBUG(DBG_FNC_SENDMSG_X | DBG_FUNC_START, 0, 0, 0, 0, 0);
 
+	size_of_msghdr = IS_64BIT_PROCESS(p) ?
+	    sizeof(struct user64_msghdr_x) : sizeof(struct user32_msghdr_x);
+
 	if (uap->flags & MSG_SKIPCFIL) {
 		error = EPERM;
 		goto out;
@@ -1569,28 +1572,25 @@ sendmsg_x(struct proc *p, struct sendmsg_x_args *uap, user_ssize_t *retval)
 		uap->cnt = somaxsendmsgx;
 	}
 
-	user_msg_x = _MALLOC(uap->cnt * sizeof(struct user_msghdr_x),
-	    M_TEMP, M_WAITOK | M_ZERO);
+	user_msg_x = kheap_alloc(KHEAP_TEMP,
+	    uap->cnt * sizeof(struct user_msghdr_x), Z_WAITOK | Z_ZERO);
 	if (user_msg_x == NULL) {
-		DBG_PRINTF("%s _MALLOC() user_msg_x failed\n", __func__);
+		DBG_PRINTF("%s kheap_alloc user_msg_x failed\n", __func__);
 		error = ENOMEM;
 		goto out;
 	}
-	uiop = _MALLOC(uap->cnt * sizeof(struct uio *),
-	    M_TEMP, M_WAITOK | M_ZERO);
+	uiop = kheap_alloc(KHEAP_TEMP,
+	    uap->cnt * sizeof(struct uio *), Z_WAITOK | Z_ZERO);
 	if (uiop == NULL) {
-		DBG_PRINTF("%s _MALLOC() uiop failed\n", __func__);
+		DBG_PRINTF("%s kheap_alloc uiop failed\n", __func__);
 		error = ENOMEM;
 		goto out;
 	}
 
-	size_of_msghdr = IS_64BIT_PROCESS(p) ?
-	    sizeof(struct user64_msghdr_x) : sizeof(struct user32_msghdr_x);
-
-	umsgp = _MALLOC(uap->cnt * size_of_msghdr,
-	    M_TEMP, M_WAITOK | M_ZERO);
+	umsgp = kheap_alloc(KHEAP_TEMP,
+	    uap->cnt * size_of_msghdr, Z_WAITOK | Z_ZERO);
 	if (umsgp == NULL) {
-		printf("%s _MALLOC() user_msg_x failed\n", __func__);
+		printf("%s kheap_alloc user_msg_x failed\n", __func__);
 		error = ENOMEM;
 		goto out;
 	}
@@ -1720,16 +1720,14 @@ out:
 	if (need_drop) {
 		file_drop(uap->s);
 	}
-	if (umsgp != NULL) {
-		_FREE(umsgp, M_TEMP);
-	}
+	kheap_free(KHEAP_TEMP, umsgp, uap->cnt * size_of_msghdr);
 	if (uiop != NULL) {
 		free_uio_array(uiop, uap->cnt);
-		_FREE(uiop, M_TEMP);
+		kheap_free(KHEAP_TEMP, uiop,
+		    uap->cnt * sizeof(struct uio *));
 	}
-	if (user_msg_x != NULL) {
-		_FREE(user_msg_x, M_TEMP);
-	}
+	kheap_free(KHEAP_TEMP, user_msg_x,
+	    uap->cnt * sizeof(struct user_msghdr_x));
 
 	KERNEL_DEBUG(DBG_FNC_SENDMSG_X | DBG_FUNC_END, error, 0, 0, 0, 0);
 
@@ -1965,9 +1963,7 @@ recvit(struct proc *p, int s, struct user_msghdr *mp, uio_t uiop,
 		    &mp->msg_controllen, &mp->msg_flags, so);
 	}
 out:
-	if (fromsa) {
-		FREE(fromsa, M_SONAME);
-	}
+	FREE(fromsa, M_SONAME);
 	if (control) {
 		m_freem(control);
 	}
@@ -2199,6 +2195,9 @@ recvmsg_x(struct proc *p, struct recvmsg_x_args *uap, user_ssize_t *retval)
 
 	KERNEL_DEBUG(DBG_FNC_RECVMSG_X | DBG_FUNC_START, 0, 0, 0, 0, 0);
 
+	size_of_msghdr = IS_64BIT_PROCESS(p) ?
+	    sizeof(struct user64_msghdr_x) : sizeof(struct user32_msghdr_x);
+
 	error = file_socket(uap->s, &so);
 	if (error) {
 		goto out;
@@ -2207,6 +2206,12 @@ recvmsg_x(struct proc *p, struct recvmsg_x_args *uap, user_ssize_t *retval)
 	if (so == NULL) {
 		error = EBADF;
 		goto out;
+	}
+	/*
+	 * Support only a subset of message flags
+	 */
+	if (uap->flags & ~(MSG_PEEK | MSG_WAITALL | MSG_DONTWAIT | MSG_NEEDSA |  MSG_NBIO)) {
+		return EOPNOTSUPP;
 	}
 	/*
 	 * Input parameter range check
@@ -2219,10 +2224,10 @@ recvmsg_x(struct proc *p, struct recvmsg_x_args *uap, user_ssize_t *retval)
 		uap->cnt = somaxrecvmsgx;
 	}
 
-	user_msg_x = _MALLOC(uap->cnt * sizeof(struct user_msghdr_x),
-	    M_TEMP, M_WAITOK | M_ZERO);
+	user_msg_x = kheap_alloc(KHEAP_TEMP,
+	    uap->cnt * sizeof(struct user_msghdr_x), Z_WAITOK | Z_ZERO);
 	if (user_msg_x == NULL) {
-		DBG_PRINTF("%s _MALLOC() user_msg_x failed\n", __func__);
+		DBG_PRINTF("%s kheap_alloc user_msg_x failed\n", __func__);
 		error = ENOMEM;
 		goto out;
 	}
@@ -2232,12 +2237,11 @@ recvmsg_x(struct proc *p, struct recvmsg_x_args *uap, user_ssize_t *retval)
 		error = ENOMEM;
 		goto out;
 	}
-	size_of_msghdr = IS_64BIT_PROCESS(p) ?
-	    sizeof(struct user64_msghdr_x) : sizeof(struct user32_msghdr_x);
 
-	umsgp = _MALLOC(uap->cnt * size_of_msghdr, M_TEMP, M_WAITOK | M_ZERO);
+	umsgp = kheap_alloc(KHEAP_TEMP,
+	    uap->cnt * size_of_msghdr, Z_WAITOK | Z_ZERO);
 	if (umsgp == NULL) {
-		DBG_PRINTF("%s _MALLOC() umsgp failed\n", __func__);
+		DBG_PRINTF("%s kheap_alloc umsgp failed\n", __func__);
 		error = ENOMEM;
 		goto out;
 	}
@@ -2318,7 +2322,7 @@ recvmsg_x(struct proc *p, struct recvmsg_x_args *uap, user_ssize_t *retval)
 			    &recv_msg_elem->controlp : NULL;
 
 			error = so->so_proto->pr_usrreqs->pru_soreceive(so, psa,
-			    auio, (struct mbuf **)0, controlp, &flags);
+			    auio, (struct mbuf **)NULL, controlp, &flags);
 			if (error) {
 				break;
 			}
@@ -2327,16 +2331,17 @@ recvmsg_x(struct proc *p, struct recvmsg_x_args *uap, user_ssize_t *retval)
 			 */
 			recv_msg_elem->which |= SOCK_MSG_DATA;
 			/*
+			 * Set the messages flags for this packet
+			 */
+			flags &= ~MSG_DONTWAIT;
+			recv_msg_elem->flags = flags;
+			/*
 			 * Stop on partial copy
 			 */
-			if (flags & (MSG_RCVMORE | MSG_TRUNC)) {
+			if (recv_msg_elem->flags & (MSG_RCVMORE | MSG_TRUNC)) {
 				break;
 			}
 		}
-		if ((uap->flags & MSG_DONTWAIT) == 0) {
-			flags &= ~MSG_DONTWAIT;
-		}
-		uap->flags = flags;
 	}
 
 	len_after = recv_msg_array_resid(recv_msg_array, uap->cnt);
@@ -2350,9 +2355,11 @@ recvmsg_x(struct proc *p, struct recvmsg_x_args *uap, user_ssize_t *retval)
 		}
 	}
 
-	uiocnt = externalize_recv_msghdr_array(umsgp,
-	    IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32,
-	    UIO_READ, uap->cnt, user_msg_x, recv_msg_array);
+	uiocnt = externalize_recv_msghdr_array(p, so, umsgp,
+	    uap->cnt, user_msg_x, recv_msg_array, &error);
+	if (error != 0) {
+		goto out;
+	}
 
 	error = copyout(umsgp, uap->msgp, uap->cnt * size_of_msghdr);
 	if (error) {
@@ -2361,40 +2368,14 @@ recvmsg_x(struct proc *p, struct recvmsg_x_args *uap, user_ssize_t *retval)
 	}
 	*retval = (int)(uiocnt);
 
-	for (i = 0; i < uap->cnt; i++) {
-		struct user_msghdr_x *mp = user_msg_x + i;
-		struct recv_msg_elem *recv_msg_elem = recv_msg_array + i;
-		struct sockaddr *fromsa = recv_msg_elem->psa;
-
-		if (mp->msg_name) {
-			error = copyout_sa(fromsa, mp->msg_name,
-			    &mp->msg_namelen);
-			if (error) {
-				goto out;
-			}
-		}
-		if (mp->msg_control) {
-			error = copyout_control(p, recv_msg_elem->controlp,
-			    mp->msg_control, &mp->msg_controllen,
-			    &mp->msg_flags, so);
-			if (error) {
-				goto out;
-			}
-		}
-	}
 out:
 	if (need_drop) {
 		file_drop(uap->s);
 	}
-	if (umsgp != NULL) {
-		_FREE(umsgp, M_TEMP);
-	}
-	if (recv_msg_array != NULL) {
-		free_recv_msg_array(recv_msg_array, uap->cnt);
-	}
-	if (user_msg_x != NULL) {
-		_FREE(user_msg_x, M_TEMP);
-	}
+	kheap_free(KHEAP_TEMP, umsgp, uap->cnt * size_of_msghdr);
+	free_recv_msg_array(recv_msg_array, uap->cnt);
+	kheap_free(KHEAP_TEMP, user_msg_x,
+	    uap->cnt * sizeof(struct user_msghdr_x));
 
 	KERNEL_DEBUG(DBG_FNC_RECVMSG_X | DBG_FUNC_END, error, 0, 0, 0, 0);
 
@@ -2633,9 +2614,7 @@ getsockname(__unused struct proc *p, struct getsockname_args *uap,
 gotnothing:
 	error = copyout((caddr_t)&len, uap->alen, sizeof(socklen_t));
 bad:
-	if (sa) {
-		FREE(sa, M_SONAME);
-	}
+	FREE(sa, M_SONAME);
 out:
 	file_drop(uap->fdes);
 	return error;
@@ -2722,9 +2701,7 @@ getpeername(__unused struct proc *p, struct getpeername_args *uap,
 gotnothing:
 	error = copyout((caddr_t)&len, uap->alen, sizeof(socklen_t));
 bad:
-	if (sa) {
-		FREE(sa, M_SONAME);
-	}
+	FREE(sa, M_SONAME);
 out:
 	file_drop(uap->fdes);
 	return error;
@@ -3092,48 +3069,60 @@ externalize_user_msghdr_array(void *dst, int spacetype, int direction,
 }
 
 u_int
-externalize_recv_msghdr_array(void *dst, int spacetype, int direction,
-    u_int count, const struct user_msghdr_x *src,
-    struct recv_msg_elem *recv_msg_array)
+externalize_recv_msghdr_array(struct proc *p, struct socket *so, void *dst,
+    u_int count, struct user_msghdr_x *src,
+    struct recv_msg_elem *recv_msg_array, int *ret_error)
 {
 	u_int i;
-	int seenlast = 0;
 	u_int retcnt = 0;
+	int spacetype = IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32;
+
+	*ret_error = 0;
 
 	for (i = 0; i < count; i++) {
-		const struct user_msghdr_x *user_msg = src + i;
+		struct user_msghdr_x *user_msg = src + i;
 		struct recv_msg_elem *recv_msg_elem = recv_msg_array + i;
-		user_ssize_t len;
+		user_ssize_t len = 0;
+		int error;
 
 		len = user_msg->msg_datalen - uio_resid(recv_msg_elem->uio);
 
-		if (direction == UIO_READ) {
-			if ((recv_msg_elem->which & SOCK_MSG_DATA) == 0) {
-				seenlast = 1;
-			}
-		} else {
-			if (user_msg->msg_datalen != 0 && len == 0) {
-				seenlast = 1;
-			}
-		}
-
-		if (seenlast == 0) {
+		if ((recv_msg_elem->which & SOCK_MSG_DATA)) {
 			retcnt++;
+
+
+			if (recv_msg_elem->which & SOCK_MSG_SA) {
+				error = copyout_sa(recv_msg_elem->psa, user_msg->msg_name,
+				    &user_msg->msg_namelen);
+				if (error != 0) {
+					*ret_error = error;
+					return 0;
+				}
+			}
+			if (recv_msg_elem->which & SOCK_MSG_CONTROL) {
+				error = copyout_control(p, recv_msg_elem->controlp,
+				    user_msg->msg_control, &user_msg->msg_controllen,
+				    &recv_msg_elem->flags, so);
+				if (error != 0) {
+					*ret_error = error;
+					return 0;
+				}
+			}
 		}
 
 		if (spacetype == UIO_USERSPACE64) {
-			struct user64_msghdr_x *msghdr64;
+			struct user64_msghdr_x *msghdr64 = ((struct user64_msghdr_x *)dst) + i;
 
-			msghdr64 = ((struct user64_msghdr_x *)dst) + i;
-
-			msghdr64->msg_flags = user_msg->msg_flags;
+			msghdr64->msg_namelen = user_msg->msg_namelen;
+			msghdr64->msg_controllen = user_msg->msg_controllen;
+			msghdr64->msg_flags = recv_msg_elem->flags;
 			msghdr64->msg_datalen = len;
 		} else {
-			struct user32_msghdr_x *msghdr32;
+			struct user32_msghdr_x *msghdr32 = ((struct user32_msghdr_x *)dst) + i;
 
-			msghdr32 = ((struct user32_msghdr_x *)dst) + i;
-
-			msghdr32->msg_flags = user_msg->msg_flags;
+			msghdr32->msg_namelen = user_msg->msg_namelen;
+			msghdr32->msg_controllen = user_msg->msg_controllen;
+			msghdr32->msg_flags = recv_msg_elem->flags;
 			msghdr32->msg_datalen = (user32_size_t)len;
 		}
 	}
@@ -3201,33 +3190,29 @@ uio_array_is_valid(struct uio **uiop, u_int count)
 struct recv_msg_elem *
 alloc_recv_msg_array(u_int count)
 {
-	struct recv_msg_elem *recv_msg_array;
-
-	recv_msg_array = _MALLOC(count * sizeof(struct recv_msg_elem),
-	    M_TEMP, M_WAITOK | M_ZERO);
-
-	return recv_msg_array;
+	return kheap_alloc(KHEAP_TEMP,
+	           count * sizeof(struct recv_msg_elem), Z_WAITOK | Z_ZERO);
 }
 
 void
 free_recv_msg_array(struct recv_msg_elem *recv_msg_array, u_int count)
 {
-	u_int i;
-
-	for (i = 0; i < count; i++) {
+	if (recv_msg_array == NULL) {
+		return;
+	}
+	for (uint32_t i = 0; i < count; i++) {
 		struct recv_msg_elem *recv_msg_elem = recv_msg_array + i;
 
 		if (recv_msg_elem->uio != NULL) {
 			uio_free(recv_msg_elem->uio);
 		}
-		if (recv_msg_elem->psa != NULL) {
-			_FREE(recv_msg_elem->psa, M_TEMP);
-		}
+		_FREE(recv_msg_elem->psa, M_TEMP);
 		if (recv_msg_elem->controlp != NULL) {
 			m_freem(recv_msg_elem->controlp);
 		}
 	}
-	_FREE(recv_msg_array, M_TEMP);
+	kheap_free(KHEAP_TEMP, recv_msg_array,
+	    count * sizeof(struct recv_msg_elem));
 }
 
 

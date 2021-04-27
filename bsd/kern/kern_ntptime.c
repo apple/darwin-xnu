@@ -187,20 +187,18 @@ static l_fp time_freq;
 static int64_t time_adjtime;
 static int updated;
 
-static lck_spin_t * ntp_lock;
-static lck_grp_t * ntp_lock_grp;
-static lck_attr_t * ntp_lock_attr;
-static lck_grp_attr_t   *ntp_lock_grp_attr;
+static LCK_GRP_DECLARE(ntp_lock_grp, "ntp_lock");
+static LCK_SPIN_DECLARE(ntp_lock, &ntp_lock_grp);
 
 #define NTP_LOCK(enable) \
 	        enable =  ml_set_interrupts_enabled(FALSE); \
-	        lck_spin_lock(ntp_lock);
+	        lck_spin_lock(&ntp_lock);
 
 #define NTP_UNLOCK(enable) \
-	        lck_spin_unlock(ntp_lock);\
+	        lck_spin_unlock(&ntp_lock);\
 	        ml_set_interrupts_enabled(enable);
 
-#define NTP_ASSERT_LOCKED()     LCK_SPIN_ASSERT(ntp_lock, LCK_ASSERT_OWNED)
+#define NTP_ASSERT_LOCKED()     LCK_SPIN_ASSERT(&ntp_lock, LCK_ASSERT_OWNED)
 
 static timer_call_data_t ntp_loop_update;
 static uint64_t ntp_loop_deadline;
@@ -831,17 +829,5 @@ init_ntp_loop(void)
 void
 ntp_init(void)
 {
-	L_CLR(time_offset);
-	L_CLR(time_freq);
-
-	ntp_lock_grp_attr = lck_grp_attr_alloc_init();
-	ntp_lock_grp =  lck_grp_alloc_init("ntp_lock", ntp_lock_grp_attr);
-	ntp_lock_attr = lck_attr_alloc_init();
-	ntp_lock = lck_spin_alloc_init(ntp_lock_grp, ntp_lock_attr);
-
-	updated = 0;
-
 	init_ntp_loop();
 }
-
-SYSINIT(ntpclocks, SI_SUB_CLOCKS, SI_ORDER_MIDDLE, ntp_init, NULL);

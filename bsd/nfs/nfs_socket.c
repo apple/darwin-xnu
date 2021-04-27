@@ -90,6 +90,7 @@
 #include <sys/tprintf.h>
 #include <libkern/OSAtomic.h>
 
+#include <sys/reboot.h>
 #include <sys/time.h>
 #include <kern/clock.h>
 #include <kern/task.h>
@@ -113,6 +114,11 @@
 
 #define NFS_SOCK_DBG(...) NFS_DBG(NFS_FAC_SOCK, 7, ## __VA_ARGS__)
 #define NFS_SOCK_DUMP_MBUF(msg, mb) if (NFS_IS_DBG(NFS_FAC_SOCK, 15)) nfs_dump_mbuf(__func__, __LINE__, (msg), (mb))
+
+#ifndef SUN_LEN
+#define SUN_LEN(su) \
+	(sizeof(*(su)) - sizeof((su)->sun_path) + strnlen((su)->sun_path, sizeof((su)->sun_path)))
+#endif /* SUN_LEN */
 
 /* XXX */
 boolean_t       current_thread_aborted(void);
@@ -552,17 +558,27 @@ nfs_socket_create(
 
 	switch (sa->sa_family) {
 	case AF_INET:
-	case AF_INET6:
-		if (sa->sa_family == AF_INET) {
-			sinaddr = &((struct sockaddr_in*)sa)->sin_addr;
-		} else {
-			sinaddr = &((struct sockaddr_in6*)sa)->sin6_addr;
+		if (sa->sa_len != sizeof(struct sockaddr_in)) {
+			return EINVAL;
 		}
+		sinaddr = &((struct sockaddr_in*)sa)->sin_addr;
+		if (inet_ntop(sa->sa_family, sinaddr, naddr, sizeof(naddr)) != naddr) {
+			strlcpy(naddr, "<unknown>", sizeof(naddr));
+		}
+		break;
+	case AF_INET6:
+		if (sa->sa_len != sizeof(struct sockaddr_in6)) {
+			return EINVAL;
+		}
+		sinaddr = &((struct sockaddr_in6*)sa)->sin6_addr;
 		if (inet_ntop(sa->sa_family, sinaddr, naddr, sizeof(naddr)) != naddr) {
 			strlcpy(naddr, "<unknown>", sizeof(naddr));
 		}
 		break;
 	case AF_LOCAL:
+		if (sa->sa_len != sizeof(struct sockaddr_un) && sa->sa_len != SUN_LEN((struct sockaddr_un *)sa)) {
+			return EINVAL;
+		}
 		strlcpy(naddr, ((struct sockaddr_un *)sa)->sun_path, sizeof(naddr));
 		break;
 	default:
@@ -586,7 +602,7 @@ nfs_socket_create(
 		}
 		return ENOMEM;
 	}
-	lck_mtx_init(&nso->nso_lock, nfs_request_grp, LCK_ATTR_NULL);
+	lck_mtx_init(&nso->nso_lock, &nfs_request_grp, LCK_ATTR_NULL);
 	nso->nso_sotype = sotype;
 	if (nso->nso_sotype == SOCK_STREAM) {
 		nfs_rpc_record_state_init(&nso->nso_rrs);
@@ -673,7 +689,7 @@ nfs_socket_destroy(struct nfs_socket *nso)
 	if (nso->nso_sotype == SOCK_STREAM) {
 		nfs_rpc_record_state_cleanup(&nso->nso_rrs);
 	}
-	lck_mtx_destroy(&nso->nso_lock, nfs_request_grp);
+	lck_mtx_destroy(&nso->nso_lock, &nfs_request_grp);
 	if (nso->nso_saddr) {
 		FREE(nso->nso_saddr, M_SONAME);
 	}
@@ -1988,7 +2004,7 @@ nfs_reconnect(struct nfsmount *nmp)
 	 * as needing a resend.  (Though nfs_need_reconnect() probably
 	 * marked them all already.)
 	 */
-	lck_mtx_lock(nfs_request_mutex);
+	lck_mtx_lock(&nfs_request_mutex);
 	TAILQ_FOREACH(rq, &nfs_reqq, r_chain) {
 		if (rq->r_nmp == nmp) {
 			lck_mtx_lock(&rq->r_mtx);
@@ -2003,7 +2019,7 @@ nfs_reconnect(struct nfsmount *nmp)
 			lck_mtx_unlock(&rq->r_mtx);
 		}
 	}
-	lck_mtx_unlock(nfs_request_mutex);
+	lck_mtx_unlock(&nfs_request_mutex);
 	return 0;
 }
 
@@ -2061,7 +2077,7 @@ nfs_need_reconnect(struct nfsmount *nmp)
 	 * Loop through outstanding request list and
 	 * mark all requests as needing a resend.
 	 */
-	lck_mtx_lock(nfs_request_mutex);
+	lck_mtx_lock(&nfs_request_mutex);
 	TAILQ_FOREACH(rq, &nfs_reqq, r_chain) {
 		if (rq->r_nmp == nmp) {
 			lck_mtx_lock(&rq->r_mtx);
@@ -2076,7 +2092,7 @@ nfs_need_reconnect(struct nfsmount *nmp)
 			lck_mtx_unlock(&rq->r_mtx);
 		}
 	}
-	lck_mtx_unlock(nfs_request_mutex);
+	lck_mtx_unlock(&nfs_request_mutex);
 }
 
 
@@ -2445,7 +2461,7 @@ nfs4_mount_callback_setup(struct nfsmount *nmp)
 	int error, on = 1;
 	in_port_t port;
 
-	lck_mtx_lock(nfs_global_mutex);
+	lck_mtx_lock(&nfs_global_mutex);
 	if (nfs4_cb_id == 0) {
 		TAILQ_INIT(&nfs4_cb_mounts);
 		TAILQ_INIT(&nfs4_cb_socks);
@@ -2459,7 +2475,7 @@ nfs4_mount_callback_setup(struct nfsmount *nmp)
 	TAILQ_INSERT_HEAD(&nfs4_cb_mounts, nmp, nm_cblink);
 
 	if (nfs4_cb_so) {
-		lck_mtx_unlock(nfs_global_mutex);
+		lck_mtx_unlock(&nfs_global_mutex);
 		return;
 	}
 
@@ -2575,7 +2591,7 @@ ipv6_bind_again:
 fail:
 	if (error) {
 		nfs4_cb_so = nfs4_cb_so6 = NULL;
-		lck_mtx_unlock(nfs_global_mutex);
+		lck_mtx_unlock(&nfs_global_mutex);
 		if (so) {
 			sock_shutdown(so, SHUT_RDWR);
 			sock_close(so);
@@ -2585,7 +2601,7 @@ fail:
 			sock_close(so6);
 		}
 	} else {
-		lck_mtx_unlock(nfs_global_mutex);
+		lck_mtx_unlock(&nfs_global_mutex);
 	}
 }
 
@@ -2604,19 +2620,19 @@ nfs4_mount_callback_shutdown(struct nfsmount *nmp)
 	struct nfs4_cb_sock_list cb_socks;
 	struct timespec ts = { .tv_sec = 1, .tv_nsec = 0 };
 
-	lck_mtx_lock(nfs_global_mutex);
+	lck_mtx_lock(&nfs_global_mutex);
 	if (nmp->nm_cbid == 0) {
-		lck_mtx_unlock(nfs_global_mutex);
+		lck_mtx_unlock(&nfs_global_mutex);
 		return;
 	}
 	TAILQ_REMOVE(&nfs4_cb_mounts, nmp, nm_cblink);
 	/* wait for any callbacks in progress to complete */
 	while (nmp->nm_cbrefs) {
-		msleep(&nmp->nm_cbrefs, nfs_global_mutex, PSOCK, "cbshutwait", &ts);
+		msleep(&nmp->nm_cbrefs, &nfs_global_mutex, PSOCK, "cbshutwait", &ts);
 	}
 	nmp->nm_cbid = 0;
 	if (--nfs4_cb_so_usecount) {
-		lck_mtx_unlock(nfs_global_mutex);
+		lck_mtx_unlock(&nfs_global_mutex);
 		return;
 	}
 	so = nfs4_cb_so;
@@ -2624,7 +2640,7 @@ nfs4_mount_callback_shutdown(struct nfsmount *nmp)
 	nfs4_cb_so = nfs4_cb_so6 = NULL;
 	TAILQ_INIT(&cb_socks);
 	TAILQ_CONCAT(&cb_socks, &nfs4_cb_socks, ncbs_link);
-	lck_mtx_unlock(nfs_global_mutex);
+	lck_mtx_unlock(&nfs_global_mutex);
 	if (so) {
 		sock_shutdown(so, SHUT_RDWR);
 		sock_close(so);
@@ -2654,10 +2670,10 @@ nfs4_callback_timer(__unused void *param0, __unused void *param1)
 	struct timeval now;
 
 loop:
-	lck_mtx_lock(nfs_global_mutex);
+	lck_mtx_lock(&nfs_global_mutex);
 	if (TAILQ_EMPTY(&nfs4_cb_socks)) {
 		nfs4_callback_timer_on = 0;
-		lck_mtx_unlock(nfs_global_mutex);
+		lck_mtx_unlock(&nfs_global_mutex);
 		return;
 	}
 	microuptime(&now);
@@ -2667,7 +2683,7 @@ loop:
 			continue;
 		}
 		TAILQ_REMOVE(&nfs4_cb_socks, ncbsp, ncbs_link);
-		lck_mtx_unlock(nfs_global_mutex);
+		lck_mtx_unlock(&nfs_global_mutex);
 		sock_shutdown(ncbsp->ncbs_so, SHUT_RDWR);
 		sock_close(ncbsp->ncbs_so);
 		nfs_rpc_record_state_cleanup(&ncbsp->ncbs_rrs);
@@ -2677,7 +2693,7 @@ loop:
 	nfs4_callback_timer_on = 1;
 	nfs_interval_timer_start(nfs4_callback_timer_call,
 	    NFS4_CB_TIMER_PERIOD * 1000);
-	lck_mtx_unlock(nfs_global_mutex);
+	lck_mtx_unlock(&nfs_global_mutex);
 }
 
 /*
@@ -2741,7 +2757,7 @@ nfs4_cb_accept(socket_t so, __unused void *arg, __unused int waitflag)
 	microuptime(&now);
 	ncbsp->ncbs_stamp = now.tv_sec;
 
-	lck_mtx_lock(nfs_global_mutex);
+	lck_mtx_lock(&nfs_global_mutex);
 
 	/* add it to the list */
 	TAILQ_INSERT_HEAD(&nfs4_cb_socks, ncbsp, ncbs_link);
@@ -2772,7 +2788,7 @@ nfs4_cb_accept(socket_t so, __unused void *arg, __unused int waitflag)
 		nfs_interval_timer_start(nfs4_callback_timer_call, 500);
 	}
 
-	lck_mtx_unlock(nfs_global_mutex);
+	lck_mtx_unlock(&nfs_global_mutex);
 }
 
 /*
@@ -2788,14 +2804,14 @@ nfs4_cb_rcv(socket_t so, void *arg, __unused int waitflag)
 	mbuf_t m;
 	int error = 0, recv = 1;
 
-	lck_mtx_lock(nfs_global_mutex);
+	lck_mtx_lock(&nfs_global_mutex);
 	while (ncbsp->ncbs_flags & NCBSOCK_UPCALL) {
 		/* wait if upcall is already in progress */
 		ncbsp->ncbs_flags |= NCBSOCK_UPCALLWANT;
-		msleep(ncbsp, nfs_global_mutex, PSOCK, "cbupcall", &ts);
+		msleep(ncbsp, &nfs_global_mutex, PSOCK, "cbupcall", &ts);
 	}
 	ncbsp->ncbs_flags |= NCBSOCK_UPCALL;
-	lck_mtx_unlock(nfs_global_mutex);
+	lck_mtx_unlock(&nfs_global_mutex);
 
 	/* loop while we make error-free progress */
 	while (!error && recv) {
@@ -2819,9 +2835,9 @@ nfs4_cb_rcv(socket_t so, void *arg, __unused int waitflag)
 		ncbsp->ncbs_stamp = now.tv_sec;
 	}
 
-	lck_mtx_lock(nfs_global_mutex);
+	lck_mtx_lock(&nfs_global_mutex);
 	ncbsp->ncbs_flags &= ~NCBSOCK_UPCALL;
-	lck_mtx_unlock(nfs_global_mutex);
+	lck_mtx_unlock(&nfs_global_mutex);
 	wakeup(ncbsp);
 }
 
@@ -2924,7 +2940,7 @@ nfs4_cb_handler(struct nfs_callback_socket *ncbsp, mbuf_t mreq)
 			goto nfsmout;
 		}
 		/* match the callback ID to a registered mount */
-		lck_mtx_lock(nfs_global_mutex);
+		lck_mtx_lock(&nfs_global_mutex);
 		TAILQ_FOREACH(nmp, &nfs4_cb_mounts, nm_cblink) {
 			if (nmp->nm_cbid != cbid) {
 				continue;
@@ -2941,7 +2957,7 @@ nfs4_cb_handler(struct nfs_callback_socket *ncbsp, mbuf_t mreq)
 		if (nmp) {
 			nmp->nm_cbrefs++;
 		}
-		lck_mtx_unlock(nfs_global_mutex);
+		lck_mtx_unlock(&nfs_global_mutex);
 		if (!nmp) {
 			/* if no mount match, just drop socket. */
 			error = EPERM;
@@ -3087,12 +3103,12 @@ nfs4_cb_handler(struct nfs_callback_socket *ncbsp, mbuf_t mreq)
 		nfsm_chain_null(&nmrep);
 
 		/* drop the callback reference on the mount */
-		lck_mtx_lock(nfs_global_mutex);
+		lck_mtx_lock(&nfs_global_mutex);
 		nmp->nm_cbrefs--;
 		if (!nmp->nm_cbid) {
 			wakeup(&nmp->nm_cbrefs);
 		}
-		lck_mtx_unlock(nfs_global_mutex);
+		lck_mtx_unlock(&nfs_global_mutex);
 		break;
 	}
 
@@ -3857,7 +3873,7 @@ nfs_request_match_reply(struct nfsmount *nmp, mbuf_t mrep)
 	 * Loop through the request list to match up the reply
 	 * Iff no match, just drop it.
 	 */
-	lck_mtx_lock(nfs_request_mutex);
+	lck_mtx_lock(&nfs_request_mutex);
 	TAILQ_FOREACH(req, &nfs_reqq, r_chain) {
 		if (req->r_nmrep.nmc_mhead || (rxid != R_XID32(req->r_xid))) {
 			continue;
@@ -3933,7 +3949,7 @@ nfs_request_match_reply(struct nfsmount *nmp, mbuf_t mrep)
 		}
 #endif /* CONFIG_NFS_GSS */
 		lck_mtx_unlock(&req->r_mtx);
-		lck_mtx_unlock(nfs_request_mutex);
+		lck_mtx_unlock(&nfs_request_mutex);
 		/* if it's an async RPC with a callback, queue it up */
 		if (asyncioq) {
 			nfs_asyncio_finish(req);
@@ -3943,7 +3959,7 @@ nfs_request_match_reply(struct nfsmount *nmp, mbuf_t mrep)
 
 	if (!req) {
 		/* not matched to a request, so drop it. */
-		lck_mtx_unlock(nfs_request_mutex);
+		lck_mtx_unlock(&nfs_request_mutex);
 		OSAddAtomic64(1, &nfsstats.rpcunexpected);
 		mbuf_freem(mrep);
 	}
@@ -4089,7 +4105,7 @@ nfs_request_create(
 		panic("nfs_request: invalid NFSv4 RPC request %d\n", procnum);
 	}
 
-	lck_mtx_init(&req->r_mtx, nfs_request_grp, LCK_ATTR_NULL);
+	lck_mtx_init(&req->r_mtx, &nfs_request_grp, LCK_ATTR_NULL);
 	req->r_nmp = nmp;
 	nmp->nm_ref++;
 	req->r_np = np;
@@ -4161,12 +4177,12 @@ nfs_request_destroy(struct nfsreq *req)
 		 * Still on an async I/O queue?
 		 * %%% But which one, we may be on a local iod.
 		 */
-		lck_mtx_lock(nfsiod_mutex);
+		lck_mtx_lock(&nfsiod_mutex);
 		if (nmp && req->r_achain.tqe_next != NFSREQNOLIST) {
 			TAILQ_REMOVE(&nmp->nm_iodq, req, r_achain);
 			req->r_achain.tqe_next = NFSREQNOLIST;
 		}
-		lck_mtx_unlock(nfsiod_mutex);
+		lck_mtx_unlock(&nfsiod_mutex);
 	}
 
 	lck_mtx_lock(&req->r_mtx);
@@ -4233,7 +4249,7 @@ nfs_request_destroy(struct nfsreq *req)
 	if (nmp) {
 		nfs_mount_rele(nmp);
 	}
-	lck_mtx_destroy(&req->r_mtx, nfs_request_grp);
+	lck_mtx_destroy(&req->r_mtx, &nfs_request_grp);
 	if (req->r_flags & R_ALLOCATED) {
 		NFS_ZFREE(nfs_req_zone, req);
 	}
@@ -4330,11 +4346,11 @@ nfs_request_send(struct nfsreq *req, int wait)
 	req->r_flags |= R_SENDING;
 	lck_mtx_unlock(&req->r_mtx);
 
-	lck_mtx_lock(nfs_request_mutex);
+	lck_mtx_lock(&nfs_request_mutex);
 
 	nmp = req->r_nmp;
 	if (nfs_mount_gone(nmp)) {
-		lck_mtx_unlock(nfs_request_mutex);
+		lck_mtx_unlock(&nfs_request_mutex);
 		return ENXIO;
 	}
 
@@ -4372,7 +4388,7 @@ nfs_request_send(struct nfsreq *req, int wait)
 		nfs_interval_timer_start(nfs_request_timer_call,
 		    NFS_REQUESTDELAY);
 	}
-	lck_mtx_unlock(nfs_request_mutex);
+	lck_mtx_unlock(&nfs_request_mutex);
 
 	/* Send the request... */
 	return nfs_send(req, wait);
@@ -5191,16 +5207,16 @@ nfs_softterm(struct nfsreq *req)
 void
 nfs_reqdequeue(struct nfsreq *req)
 {
-	lck_mtx_lock(nfs_request_mutex);
+	lck_mtx_lock(&nfs_request_mutex);
 	while (req->r_lflags & RL_BUSY) {
 		req->r_lflags |= RL_WAITING;
-		msleep(&req->r_lflags, nfs_request_mutex, PSOCK, "reqdeq", NULL);
+		msleep(&req->r_lflags, &nfs_request_mutex, PSOCK, "reqdeq", NULL);
 	}
 	if (req->r_lflags & RL_QUEUED) {
 		TAILQ_REMOVE(&nfs_reqq, req, r_chain);
 		req->r_lflags &= ~RL_QUEUED;
 	}
-	lck_mtx_unlock(nfs_request_mutex);
+	lck_mtx_unlock(&nfs_request_mutex);
 }
 
 /*
@@ -5265,11 +5281,11 @@ nfs_request_timer(__unused void *param0, __unused void *param1)
 	TAILQ_INIT(&nfs_mount_poke_queue);
 
 restart:
-	lck_mtx_lock(nfs_request_mutex);
+	lck_mtx_lock(&nfs_request_mutex);
 	req = TAILQ_FIRST(&nfs_reqq);
 	if (req == NULL) {      /* no requests - turn timer off */
 		nfs_request_timer_on = 0;
-		lck_mtx_unlock(nfs_request_mutex);
+		lck_mtx_unlock(&nfs_request_mutex);
 		return;
 	}
 
@@ -5399,7 +5415,7 @@ restart:
 					TAILQ_REMOVE(&nfs_mount_poke_queue, nmp, nm_pokeq);
 				}
 				/* Release our lock state, so we can become a zombie */
-				lck_mtx_unlock(nfs_request_mutex);
+				lck_mtx_unlock(&nfs_request_mutex);
 
 				/*
 				 * Note nfs_mount_make zombie(nmp) must be
@@ -5407,7 +5423,7 @@ restart:
 				 * work we release nm_lock in
 				 * nfs_make_mount_zombie with out acquiring any
 				 * other locks. (Later, in nfs_mount_zombie we
-				 * will acquire nfs_request_mutex, r_mtx,
+				 * will acquire &nfs_request_mutex, r_mtx,
 				 * nm_lock in that order). So we should not be
 				 * introducing deadlock here. We take a reference
 				 * on the mount so that its still there when we
@@ -5508,7 +5524,7 @@ restart:
 		lck_mtx_unlock(&req->r_mtx);
 	}
 
-	lck_mtx_unlock(nfs_request_mutex);
+	lck_mtx_unlock(&nfs_request_mutex);
 
 	/* poke any sockets */
 	while ((nmp = TAILQ_FIRST(&nfs_mount_poke_queue))) {
@@ -5535,6 +5551,7 @@ nfs_noremotehang(thread_t thd)
  * This is used to determine if we need to bail on a mount.
  * ETIMEDOUT is returned if there has been a soft timeout.
  * EINTR is returned if there is a signal pending that is not being ignored
+ * ESHUTDOWN is return if the system is in shutdown.
  * and the mount is interruptable, or if we are a thread that is in the process
  * of cancellation (also SIGKILL posted).
  */
@@ -5547,6 +5564,11 @@ nfs_sigintr(struct nfsmount *nmp, struct nfsreq *req, thread_t thd, int nmplocke
 
 	if (!nmp) {
 		return ENXIO;
+	}
+
+	if (get_system_inshutdown()) {
+		NFS_SOCK_DBG("Shutdown in progress\n");
+		return ESHUTDOWN;
 	}
 
 	if (req && (req->r_flags & R_SOFTTERM)) {
@@ -6685,9 +6707,9 @@ dorecs:
 		int wake = (slp->ns_flag & SLP_WORKTODO);
 		lck_rw_done(&slp->ns_rwlock);
 		if (wake && nfsd_thread_count) {
-			lck_mtx_lock(nfsd_mutex);
+			lck_mtx_lock(&nfsd_mutex);
 			nfsrv_wakenfsd(slp);
-			lck_mtx_unlock(nfsd_mutex);
+			lck_mtx_unlock(&nfsd_mutex);
 		}
 	}
 }

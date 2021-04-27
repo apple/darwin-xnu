@@ -111,6 +111,8 @@ vm_offset_t            segLINKB;
 static unsigned long   segSizeLINK;
 static vm_offset_t     segKLDB;
 static unsigned long   segSizeKLD;
+static vm_offset_t     segKLDDATAB;
+static unsigned long   segSizeKLDDATA;
 static vm_offset_t     segLASTB;
 static vm_offset_t     segLASTDATACONSTB;
 static unsigned long   segSizeLASTDATACONST;
@@ -330,6 +332,7 @@ arm_vm_prot_init(boot_args * args)
 	arm_vm_page_granular_RNX((vm_offset_t)&fiqstack_high_guard, PAGE_MAX_SIZE, TRUE);
 
 	arm_vm_page_granular_ROX(segKLDB, segSizeKLD, force_coarse_physmap);
+	arm_vm_page_granular_RNX(segKLDDATAB, segSizeKLDDATA, force_coarse_physmap);
 	arm_vm_page_granular_RWNX(segLINKB, segSizeLINK, force_coarse_physmap);
 	arm_vm_page_granular_RWNX(segLASTB, segSizeLAST, FALSE); // __LAST may be empty, but we cannot assume this
 	if (segLASTDATACONSTB) {
@@ -481,6 +484,7 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	segDATAB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__DATA", &segSizeDATA);
 	segLINKB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__LINKEDIT", &segSizeLINK);
 	segKLDB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__KLD", &segSizeKLD);
+	segKLDDATAB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__KLDDATA", &segSizeKLDDATA);
 	segLASTB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__LAST", &segSizeLAST);
 	segLASTDATACONSTB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__LASTDATA_CONST", &segSizeLASTDATACONST);
 	segPRELINKTEXTB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__PRELINK_TEXT", &segSizePRELINKTEXT);

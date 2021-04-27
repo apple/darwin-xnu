@@ -239,6 +239,12 @@ public:
 
 	static void initialize();
 
+	inline static bool
+	isEnabled()
+	{
+		return enabled;
+	}
+
 	static void onKextLoad(OSKext *kext, kmod_info_t *kmod_info);
 	static void onKextUnload(OSKext *kext);
 	static void onClassAdded(OSKext *parentKext, OSMetaClass *metaClass);

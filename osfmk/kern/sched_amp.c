@@ -670,40 +670,6 @@ sched_amp_thread_group_recommendation_change(struct thread_group *tg, cluster_ty
 }
 
 #if DEVELOPMENT || DEBUG
-extern int32_t sysctl_get_bound_cpuid(void);
-int32_t
-sysctl_get_bound_cpuid(void)
-{
-	int32_t cpuid = -1;
-	thread_t self = current_thread();
-
-	processor_t processor = self->bound_processor;
-	if (processor == NULL) {
-		cpuid = -1;
-	} else {
-		cpuid = processor->cpu_id;
-	}
-
-	return cpuid;
-}
-
-extern void sysctl_thread_bind_cpuid(int32_t cpuid);
-void
-sysctl_thread_bind_cpuid(int32_t cpuid)
-{
-	if (cpuid < 0 || cpuid >= MAX_SCHED_CPUS) {
-		return;
-	}
-
-	processor_t processor = processor_array[cpuid];
-	if (processor == PROCESSOR_NULL) {
-		return;
-	}
-
-	thread_bind(processor);
-
-	thread_block(THREAD_CONTINUE_NULL);
-}
 
 extern char sysctl_get_bound_cluster_type(void);
 char
@@ -765,6 +731,6 @@ sysctl_task_set_cluster_type(char cluster_type)
 
 	thread_block(THREAD_CONTINUE_NULL);
 }
-#endif
+#endif /* DEVELOPMENT || DEBUG */
 
-#endif
+#endif /* __AMP__ */

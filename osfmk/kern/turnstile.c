@@ -3188,47 +3188,36 @@ turnstile_stats_update(
 static uint64_t
 kdp_turnstile_traverse_inheritor_chain(struct turnstile *ts, uint64_t *flags, uint8_t *hops)
 {
+	uint8_t unknown_hops;
+
 	if (waitq_held(&ts->ts_waitq)) {
 		*flags |= STACKSHOT_TURNSTILE_STATUS_LOCKED_WAITQ;
 		return 0;
 	}
 
 	*hops = *hops + 1;
+	unknown_hops = *hops;
 
 	/*
-	 * If we found a send turnstile, try to get the task that the turnstile's
-	 * port is in the ipc space of
+	 * If a turnstile is inheriting our priority, recurse.  If we get back *exactly* UNKNOWN,
+	 * continue on, since we may be able to give a more specific answer.  To
+	 * give an accurate hops count, we reset *hops, saving the recursive value in
+	 * unknown_hops to use if we can't give a better answer.
 	 */
-	if (turnstile_is_send_turnstile(ts)) {
-		task_t dest_task = TASK_NULL;
-		ipc_port_t port = (ipc_port_t)ts->ts_proprietor;
-
-		if (port && ip_active(port)) {
-			if (ip_lock_held_kdp(port)) {
-				*flags |= STACKSHOT_TURNSTILE_STATUS_HELD_IPLOCK;
-
-				return 0;
-			} else {
-				if (port->ip_receiver_name != 0) {
-					if (port->ip_receiver) {
-						ipc_space_t space = (ipc_space_t) port->ip_receiver;
-
-						dest_task = space->is_task;
-					} else {
-						return 0;
-					}
-				}
-			}
-		}
-
-		if (dest_task != TASK_NULL) {
-			*flags |= STACKSHOT_TURNSTILE_STATUS_BLOCKED_ON_TASK;
-			return pid_from_task(dest_task);
-		}
-	}
-
 	if (ts->ts_inheritor_flags & TURNSTILE_INHERITOR_TURNSTILE) {
-		return kdp_turnstile_traverse_inheritor_chain(ts->ts_inheritor, flags, hops);
+		uint8_t pre_hops = *hops;
+		uint64_t ret = kdp_turnstile_traverse_inheritor_chain(ts->ts_inheritor, flags, hops);
+		/*
+		 * Note that while flags is usually |=ed, we're checking with != here to
+		 * make sure we only replace *exactly* UNKNOWN
+		 */
+		if (ret != 0 || *flags != STACKSHOT_TURNSTILE_STATUS_UNKNOWN) {
+			return ret;
+		}
+		/* restore original hops value, saving the new one if we fall through to unknown */
+		unknown_hops = *hops;
+		*hops = pre_hops;
+		*flags = 0;
 	}
 
 	if (ts->ts_inheritor_flags & TURNSTILE_INHERITOR_THREAD) {
@@ -3239,6 +3228,30 @@ kdp_turnstile_traverse_inheritor_chain(struct turnstile *ts, uint64_t *flags, ui
 	if (ts->ts_inheritor_flags & TURNSTILE_INHERITOR_WORKQ) {
 		*flags |= STACKSHOT_TURNSTILE_STATUS_WORKQUEUE;
 		return VM_KERNEL_UNSLIDE_OR_PERM(ts->ts_inheritor);
+	}
+
+	/*
+	 * If we found a send turnstile, try to get the task that the turnstile's
+	 * port is in the ipc space of
+	 */
+	if (turnstile_is_send_turnstile(ts)) {
+		ipc_port_t port = (ipc_port_t)ts->ts_proprietor;
+
+		if (port && ip_active(port)) {
+			if (ip_lock_held_kdp(port)) {
+				*flags |= STACKSHOT_TURNSTILE_STATUS_HELD_IPLOCK;
+				return 0;
+			}
+			if (port->ip_receiver_name != 0 && port->ip_receiver) {
+				ipc_space_t space = (ipc_space_t) port->ip_receiver;
+				task_t dest_task = space->is_task;
+
+				if (dest_task != TASK_NULL) {
+					*flags |= STACKSHOT_TURNSTILE_STATUS_BLOCKED_ON_TASK;
+					return pid_from_task(dest_task);
+				}
+			}
+		}
 	}
 
 	if (turnstile_is_receive_turnstile(ts)) {
@@ -3260,6 +3273,7 @@ kdp_turnstile_traverse_inheritor_chain(struct turnstile *ts, uint64_t *flags, ui
 		}
 	}
 
+	*hops = unknown_hops;
 	*flags |= STACKSHOT_TURNSTILE_STATUS_UNKNOWN;
 	return 0;
 }

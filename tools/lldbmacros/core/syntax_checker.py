@@ -15,6 +15,11 @@ import re
 
 tabs_search_rex = re.compile("^\s*\t+",re.MULTILINE|re.DOTALL)
 
+def find_non_ascii(s):
+    for c in s:
+        if ord(c) >= 0x80: return True
+    return False
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print >>sys.stderr, "Error: Unknown arguments"
@@ -30,13 +35,16 @@ if __name__ == "__main__":
         fh = open(fname)
         strdata = fh.readlines()
         lineno = 0
-        tab_check_status = True
+        syntax_fail = False
         for linedata in strdata:
             lineno += 1
             if len(tabs_search_rex.findall(linedata)) > 0 :
                 print >>sys.stderr, "Error: Found a TAB character at %s:%d" % (fname, lineno)
-                tab_check_status = False
-        if tab_check_status == False:
+                syntax_fail = True
+	    if find_non_ascii(linedata):
+                print >>sys.stderr, "Error: Found a non ascii character at %s:%d" % (fname, lineno)
+                syntax_fail = True
+        if syntax_fail:
             print >>sys.stderr, "Error: Syntax check failed. Please fix the errors and try again."
             sys.exit(1)
         #now check for error in compilation

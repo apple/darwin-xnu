@@ -236,7 +236,7 @@ typedef struct crypto_ctx {
 	uint32_t etype;
 	uint32_t flags;
 	size_t mpad;             /* Message padding */
-	lck_mtx_t *lock;
+	lck_mtx_t lock;
 	lucid_context_t gss_ctx;  /* Back pointer to lucid context */
 	void *key;   /* Points to session key from lucid context */
 	const struct ccdigest_info *di;

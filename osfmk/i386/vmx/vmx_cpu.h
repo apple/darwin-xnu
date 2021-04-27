@@ -60,7 +60,6 @@ typedef struct vmx_cpu {
 	void            *vmxon_region;  /* the logical address of the VMXON region page */
 } vmx_cpu_t;
 
-void vmx_init(void);
 void vmx_cpu_init(void);
 void vmx_resume(boolean_t is_wake_from_hibernate);
 void vmx_suspend(void);

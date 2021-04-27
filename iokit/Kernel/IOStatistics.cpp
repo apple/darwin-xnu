@@ -151,6 +151,10 @@ oid_sysctl(__unused struct sysctl_oid *oidp, __unused void *arg1, int arg2, stru
 	int error = EINVAL;
 	uint32_t request = arg2;
 
+	if (!IOStatistics::isEnabled()) {
+		return ENOENT;
+	}
+
 	switch (request) {
 	case kIOStatisticsGeneral:
 		error = IOStatistics::getStatistics(req);
@@ -171,16 +175,17 @@ oid_sysctl(__unused struct sysctl_oid *oidp, __unused void *arg1, int arg2, stru
 SYSCTL_NODE(_debug, OID_AUTO, iokit_statistics, CTLFLAG_RW | CTLFLAG_LOCKED, NULL, "IOStatistics");
 
 static SYSCTL_PROC(_debug_iokit_statistics, OID_AUTO, general,
-    CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_LOCKED,
+    CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED,
     NULL, kIOStatisticsGeneral, oid_sysctl, "S", "");
 
 static SYSCTL_PROC(_debug_iokit_statistics, OID_AUTO, workloop,
-    CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_LOCKED,
+    CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED,
     NULL, kIOStatisticsWorkLoop, oid_sysctl, "S", "");
 
 static SYSCTL_PROC(_debug_iokit_statistics, OID_AUTO, userclient,
-    CTLTYPE_STRUCT | CTLFLAG_RW | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_LOCKED,
+    CTLTYPE_STRUCT | CTLFLAG_RW | CTLFLAG_KERN | CTLFLAG_LOCKED,
     NULL, kIOStatisticsUserClient, oid_sysctl, "S", "");
+
 
 void
 IOStatistics::initialize()
@@ -193,10 +198,6 @@ IOStatistics::initialize()
 	if (!(kIOStatistics & gIOKitDebug)) {
 		return;
 	}
-
-	sysctl_register_oid(&sysctl__debug_iokit_statistics_general);
-	sysctl_register_oid(&sysctl__debug_iokit_statistics_workloop);
-	sysctl_register_oid(&sysctl__debug_iokit_statistics_userclient);
 
 	lock = IORWLockAlloc();
 	if (!lock) {

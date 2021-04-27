@@ -80,6 +80,8 @@
 #include <sys/domain.h>
 #include <sys/queue.h>
 #include <sys/proc.h>
+#include <sys/filedesc.h>
+#include <sys/file_internal.h>
 
 #include <dev/random/randomdev.h>
 
@@ -88,7 +90,7 @@
 #include <kern/queue.h>
 #include <kern/sched_prim.h>
 #include <kern/backtrace.h>
-#include <kern/cpu_number.h>
+#include <kern/percpu.h>
 #include <kern/zalloc.h>
 
 #include <libkern/OSAtomic.h>
@@ -96,6 +98,7 @@
 #include <libkern/libkern.h>
 
 #include <os/log.h>
+#include <os/ptrtools.h>
 
 #include <IOKit/IOMapper.h>
 
@@ -303,7 +306,6 @@
 
 /* TODO: should be in header file */
 /* kernel translater */
-extern vm_offset_t kmem_mb_alloc(vm_map_t, int, int, kern_return_t *);
 extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
 extern vm_map_t mb_map;         /* special map */
 
@@ -325,11 +327,9 @@ static const char *mb_kmem_stats_labels[] = { "INVALID_ARGUMENT",
 	                                      "OTHERS" };
 
 /* Global lock */
-decl_lck_mtx_data(static, mbuf_mlock_data);
-static lck_mtx_t *mbuf_mlock = &mbuf_mlock_data;
-static lck_attr_t *mbuf_mlock_attr;
-static lck_grp_t *mbuf_mlock_grp;
-static lck_grp_attr_t *mbuf_mlock_grp_attr;
+static LCK_GRP_DECLARE(mbuf_mlock_grp, "mbuf");
+static LCK_MTX_DECLARE(mbuf_mlock_data, &mbuf_mlock_grp);
+static lck_mtx_t *const mbuf_mlock = &mbuf_mlock_data;
 
 /* Back-end (common) layer */
 static uint64_t mb_expand_cnt;
@@ -577,11 +577,9 @@ static struct mtrace *mleak_traces;
 static struct mtrace *mleak_top_trace[MLEAK_NUM_TRACES];
 
 /* Lock to protect mleak tables from concurrent modification */
-decl_lck_mtx_data(static, mleak_lock_data);
-static lck_mtx_t *mleak_lock = &mleak_lock_data;
-static lck_attr_t *mleak_lock_attr;
-static lck_grp_t *mleak_lock_grp;
-static lck_grp_attr_t *mleak_lock_grp_attr;
+static LCK_GRP_DECLARE(mleak_lock_grp, "mleak_lock");
+static LCK_MTX_DECLARE(mleak_lock_data, &mleak_lock_grp);
+static lck_mtx_t *const mleak_lock = &mleak_lock_data;
 
 /* *Failed* large allocations. */
 struct mtracelarge {
@@ -596,11 +594,8 @@ static struct mtracelarge mtracelarge_table[MTRACELARGE_NUM_TRACES];
 static void mtracelarge_register(size_t size);
 
 /* Lock to protect the completion callback table */
-static lck_grp_attr_t *mbuf_tx_compl_tbl_lck_grp_attr = NULL;
-static lck_attr_t *mbuf_tx_compl_tbl_lck_attr = NULL;
-static lck_grp_t *mbuf_tx_compl_tbl_lck_grp = NULL;
-decl_lck_rw_data(, mbuf_tx_compl_tbl_lck_rw_data);
-lck_rw_t *mbuf_tx_compl_tbl_lock = &mbuf_tx_compl_tbl_lck_rw_data;
+static LCK_GRP_DECLARE(mbuf_tx_compl_tbl_lck_grp, "mbuf_tx_compl_tbl");
+LCK_RW_DECLARE(mbuf_tx_compl_tbl_lock, &mbuf_tx_compl_tbl_lck_grp);
 
 extern u_int32_t high_sb_max;
 
@@ -1028,24 +1023,14 @@ struct mbstat mbstat;
  * anything beyond that (up to type 255) is considered a corner case.
  */
 typedef struct {
-	unsigned int    cpu_mtypes[MT_MAX];
-} __attribute__((aligned(MAX_CPU_CACHE_LINE_SIZE), packed)) mtypes_cpu_t;
-
-typedef struct {
-	mtypes_cpu_t    mbs_cpu[1];
+	unsigned int cpu_mtypes[MT_MAX];
 } mbuf_mtypes_t;
 
-static mbuf_mtypes_t *mbuf_mtypes;      /* per-CPU statistics */
-
-#define MBUF_MTYPES_SIZE(n) \
-	__builtin_offsetof(mbuf_mtypes_t, mbs_cpu[n])
-
-#define MTYPES_CPU(p) \
-	((mtypes_cpu_t *)(void *)((char *)(p) + MBUF_MTYPES_SIZE(cpu_number())))
+static mbuf_mtypes_t PERCPU_DATA(mbuf_mtypes);
 
 #define mtype_stat_add(type, n) {                                       \
 	if ((unsigned)(type) < MT_MAX) {                                \
-	        mtypes_cpu_t *mbs = MTYPES_CPU(mbuf_mtypes);            \
+	        mbuf_mtypes_t *mbs = PERCPU_GET(mbuf_mtypes);           \
 	        atomic_add_32(&mbs->cpu_mtypes[type], n);               \
 	} else if ((unsigned)(type) < (unsigned)MBSTAT_MTYPES_MAX) {    \
 	        atomic_add_16((int16_t *)&mbstat.m_mtypes[type], n);    \
@@ -1059,29 +1044,23 @@ static mbuf_mtypes_t *mbuf_mtypes;      /* per-CPU statistics */
 static void
 mbuf_mtypes_sync(boolean_t locked)
 {
-	int m, n;
-	mtypes_cpu_t mtc;
+	mbuf_mtypes_t mtc;
 
 	if (locked) {
 		LCK_MTX_ASSERT(mbuf_mlock, LCK_MTX_ASSERT_OWNED);
 	}
 
-	bzero(&mtc, sizeof(mtc));
-	for (m = 0; m < ncpu; m++) {
-		mtypes_cpu_t *scp = &mbuf_mtypes->mbs_cpu[m];
-		mtypes_cpu_t temp;
-
-		bcopy(&scp->cpu_mtypes, &temp.cpu_mtypes,
-		    sizeof(temp.cpu_mtypes));
-
-		for (n = 0; n < MT_MAX; n++) {
-			mtc.cpu_mtypes[n] += temp.cpu_mtypes[n];
+	mtc = *PERCPU_GET_MASTER(mbuf_mtypes);
+	percpu_foreach_secondary(mtype, mbuf_mtypes) {
+		for (int n = 0; n < MT_MAX; n++) {
+			mtc.cpu_mtypes[n] += mtype->cpu_mtypes[n];
 		}
 	}
+
 	if (!locked) {
 		lck_mtx_lock(mbuf_mlock);
 	}
-	for (n = 0; n < MT_MAX; n++) {
+	for (int n = 0; n < MT_MAX; n++) {
 		mbstat.m_mtypes[n] = mtc.cpu_mtypes[n];
 	}
 	if (!locked) {
@@ -1302,13 +1281,11 @@ mbuf_table_init(void)
 	unsigned int b, c, s;
 	int m, config_mbuf_jumbo = 0;
 
-	MALLOC(omb_stat, struct omb_stat *, OMB_STAT_SIZE(NELEM(mbuf_table)),
-	    M_TEMP, M_WAITOK | M_ZERO);
-	VERIFY(omb_stat != NULL);
+	omb_stat = zalloc_permanent(OMB_STAT_SIZE(NELEM(mbuf_table)),
+	    ZALIGN(struct omb_stat));
 
-	MALLOC(mb_stat, mb_stat_t *, MB_STAT_SIZE(NELEM(mbuf_table)),
-	    M_TEMP, M_WAITOK | M_ZERO);
-	VERIFY(mb_stat != NULL);
+	mb_stat = zalloc_permanent(MB_STAT_SIZE(NELEM(mbuf_table)),
+	    ZALIGN(mb_stat_t));
 
 	mb_stat->mbs_cnt = NELEM(mbuf_table);
 	for (m = 0; m < NELEM(mbuf_table); m++) {
@@ -1466,13 +1443,49 @@ mbuf_get_class(struct mbuf *m)
 bool
 mbuf_class_under_pressure(struct mbuf *m)
 {
-	int mclass = mbuf_get_class(m); // TODO - how can we get the class easily???
+	int mclass = mbuf_get_class(m);
 
-	if (m_total(mclass) >= (m_maxlimit(mclass) * mb_memory_pressure_percentage) / 100) {
-		os_log(OS_LOG_DEFAULT,
-		    "%s memory-pressure on mbuf due to class %u, total %u max %u",
-		    __func__, mclass, m_total(mclass), m_maxlimit(mclass));
-		return true;
+	if (m_total(mclass) - m_infree(mclass) >= (m_maxlimit(mclass) * mb_memory_pressure_percentage) / 100) {
+		/*
+		 * The above computation does not include the per-CPU cached objects.
+		 * As a fast-path check this is good-enough. But now we do
+		 * the "slower" count of the cached objects to know exactly the
+		 * number of active mbufs in use.
+		 *
+		 * We do not take the mbuf_lock here to avoid lock-contention. Numbers
+		 * might be slightly off but we don't try to be 100% accurate.
+		 * At worst, we drop a packet that we shouldn't have dropped or
+		 * we might go slightly above our memory-pressure threshold.
+		 */
+		mcache_t *cp = m_cache(mclass);
+		mcache_cpu_t *ccp = &cp->mc_cpu[0];
+
+		int bktsize = os_access_once(ccp->cc_bktsize);
+		uint32_t bl_total = os_access_once(cp->mc_full.bl_total);
+		uint32_t cached = 0;
+		int i;
+
+		for (i = 0; i < ncpu; i++) {
+			ccp = &cp->mc_cpu[i];
+
+			int cc_objs = os_access_once(ccp->cc_objs);
+			if (cc_objs > 0) {
+				cached += cc_objs;
+			}
+
+			int cc_pobjs = os_access_once(ccp->cc_pobjs);
+			if (cc_pobjs > 0) {
+				cached += cc_pobjs;
+			}
+		}
+		cached += (bl_total * bktsize);
+
+		if (m_total(mclass) - m_infree(mclass) - cached >= (m_maxlimit(mclass) * mb_memory_pressure_percentage) / 100) {
+			os_log(OS_LOG_DEFAULT,
+			    "%s memory-pressure on mbuf due to class %u, total %u free %u cached %u max %u",
+			    __func__, mclass, m_total(mclass), m_infree(mclass), cached, m_maxlimit(mclass));
+			return true;
+		}
 	}
 
 	return false;
@@ -1527,7 +1540,6 @@ mbinit(void)
 {
 	unsigned int m;
 	unsigned int initmcl = 0;
-	void *buf;
 	thread_t thread = THREAD_NULL;
 
 	microuptime(&mb_start);
@@ -1628,12 +1640,6 @@ mbinit(void)
 	/* Setup the mbuf table */
 	mbuf_table_init();
 
-	/* Global lock for common layer */
-	mbuf_mlock_grp_attr = lck_grp_attr_alloc_init();
-	mbuf_mlock_grp = lck_grp_alloc_init("mbuf", mbuf_mlock_grp_attr);
-	mbuf_mlock_attr = lck_attr_alloc_init();
-	lck_mtx_init(mbuf_mlock, mbuf_mlock_grp, mbuf_mlock_attr);
-
 	/*
 	 * Allocate cluster slabs table:
 	 *
@@ -1644,9 +1650,8 @@ mbinit(void)
 	 */
 	maxslabgrp =
 	    (P2ROUNDUP(nmbclusters, (MBSIZE >> MCLSHIFT)) << MCLSHIFT) >> MBSHIFT;
-	MALLOC(slabstbl, mcl_slabg_t * *, maxslabgrp * sizeof(mcl_slabg_t *),
-	    M_TEMP, M_WAITOK | M_ZERO);
-	VERIFY(slabstbl != NULL);
+	slabstbl = zalloc_permanent(maxslabgrp * sizeof(mcl_slabg_t *),
+	    ZALIGN(mcl_slabg_t));
 
 	/*
 	 * Allocate audit structures, if needed:
@@ -1661,14 +1666,11 @@ mbinit(void)
 		int l;
 		mcl_audit_t *mclad;
 		maxclaudit = ((maxslabgrp << MBSHIFT) >> PAGE_SHIFT);
-		MALLOC(mclaudit, mcl_audit_t *, maxclaudit * sizeof(*mclaudit),
-		    M_TEMP, M_WAITOK | M_ZERO);
-		VERIFY(mclaudit != NULL);
+		mclaudit = zalloc_permanent(maxclaudit * sizeof(*mclaudit),
+		    ZALIGN(mcl_audit_t));
 		for (l = 0, mclad = mclaudit; l < maxclaudit; l++) {
-			MALLOC(mclad[l].cl_audit, mcache_audit_t * *,
-			    NMBPG * sizeof(mcache_audit_t *),
-			    M_TEMP, M_WAITOK | M_ZERO);
-			VERIFY(mclad[l].cl_audit != NULL);
+			mclad[l].cl_audit = zalloc_permanent(NMBPG * sizeof(mcache_audit_t *),
+			    ZALIGN_PTR);
 		}
 
 		mcl_audit_con_cache = mcache_create("mcl_audit_contents",
@@ -1682,11 +1684,6 @@ mbinit(void)
 
 	/* Enable mbuf leak logging, with a lock to protect the tables */
 
-	mleak_lock_grp_attr = lck_grp_attr_alloc_init();
-	mleak_lock_grp = lck_grp_alloc_init("mleak_lock", mleak_lock_grp_attr);
-	mleak_lock_attr = lck_attr_alloc_init();
-	lck_mtx_init(mleak_lock, mleak_lock_grp, mleak_lock_attr);
-
 	mleak_activate();
 
 	/*
@@ -1696,23 +1693,14 @@ mbinit(void)
 	 * before alignment is not saved.
 	 */
 	ncpu = ml_wait_max_cpus();
-	MALLOC(buf, void *, MBUF_MTYPES_SIZE(ncpu) + CPU_CACHE_LINE_SIZE,
-	    M_TEMP, M_WAITOK);
-	VERIFY(buf != NULL);
-
-	mbuf_mtypes = (mbuf_mtypes_t *)P2ROUNDUP((intptr_t)buf,
-	    CPU_CACHE_LINE_SIZE);
-	bzero(mbuf_mtypes, MBUF_MTYPES_SIZE(ncpu));
 
 	/* Calculate the number of pages assigned to the cluster pool */
 	mcl_pages = (nmbclusters << MCLSHIFT) / PAGE_SIZE;
-	MALLOC(mcl_paddr, ppnum_t *, mcl_pages * sizeof(ppnum_t),
-	    M_TEMP, M_WAITOK);
-	VERIFY(mcl_paddr != NULL);
+	mcl_paddr = zalloc_permanent(mcl_pages * sizeof(ppnum_t),
+	    ZALIGN(ppnum_t));
 
 	/* Register with the I/O Bus mapper */
 	mcl_paddr_base = IOMapperIOVMAlloc(mcl_pages);
-	bzero((char *)mcl_paddr, mcl_pages * sizeof(ppnum_t));
 
 	embutl = (mbutl + (nmbclusters * MCLBYTES));
 	VERIFY(((embutl - mbutl) % MBIGCLBYTES) == 0);
@@ -1820,8 +1808,7 @@ mbinit(void)
 	}
 
 	/* allocate space for mbuf_dump_buf */
-	MALLOC(mbuf_dump_buf, char *, MBUF_DUMP_BUF_SIZE, M_TEMP, M_WAITOK);
-	VERIFY(mbuf_dump_buf != NULL);
+	mbuf_dump_buf = zalloc_permanent(MBUF_DUMP_BUF_SIZE, ZALIGN_NONE);
 
 	if (mbuf_debug & MCF_DEBUG) {
 		printf("%s: MLEN %d, MHLEN %d\n", __func__,
@@ -1832,26 +1819,6 @@ mbinit(void)
 	    (nmbclusters << MCLSHIFT) >> MBSHIFT,
 	    (nclusters << MCLSHIFT) >> MBSHIFT,
 	    (njcl << MCLSHIFT) >> MBSHIFT);
-
-	/* initialize lock form tx completion callback table */
-	mbuf_tx_compl_tbl_lck_grp_attr = lck_grp_attr_alloc_init();
-	if (mbuf_tx_compl_tbl_lck_grp_attr == NULL) {
-		panic("%s: lck_grp_attr_alloc_init failed", __func__);
-		/* NOTREACHED */
-	}
-	mbuf_tx_compl_tbl_lck_grp = lck_grp_alloc_init("mbuf_tx_compl_tbl",
-	    mbuf_tx_compl_tbl_lck_grp_attr);
-	if (mbuf_tx_compl_tbl_lck_grp == NULL) {
-		panic("%s: lck_grp_alloc_init failed", __func__);
-		/* NOTREACHED */
-	}
-	mbuf_tx_compl_tbl_lck_attr = lck_attr_alloc_init();
-	if (mbuf_tx_compl_tbl_lck_attr == NULL) {
-		panic("%s: lck_attr_alloc_init failed", __func__);
-		/* NOTREACHED */
-	}
-	lck_rw_init(mbuf_tx_compl_tbl_lock, mbuf_tx_compl_tbl_lck_grp,
-	    mbuf_tx_compl_tbl_lck_attr);
 }
 
 /*
@@ -2993,6 +2960,30 @@ m_vm_error_stats(uint32_t *cnt, uint64_t *ts, uint64_t *size,
 		mb_kmem_stats[5]++;
 		break;
 	}
+}
+
+static vm_offset_t
+kmem_mb_alloc(vm_map_t mbmap, int size, int physContig, kern_return_t *err)
+{
+	vm_offset_t addr = 0;
+	kern_return_t kr = KERN_SUCCESS;
+
+	if (!physContig) {
+		kr = kernel_memory_allocate(mbmap, &addr, size, 0,
+		    KMA_KOBJECT | KMA_LOMEM, VM_KERN_MEMORY_MBUF);
+	} else {
+		kr = kmem_alloc_contig(mbmap, &addr, size, PAGE_MASK, 0xfffff,
+		    0, KMA_KOBJECT | KMA_LOMEM, VM_KERN_MEMORY_MBUF);
+	}
+
+	if (kr != KERN_SUCCESS) {
+		addr = 0;
+	}
+	if (err) {
+		*err = kr;
+	}
+
+	return addr;
 }
 
 /*
@@ -6786,6 +6777,110 @@ mbuf_waiter_dec(mbuf_class_t class, boolean_t comp)
 	}
 }
 
+static bool mbuf_watchdog_defunct_active = false;
+
+static uint32_t
+mbuf_watchdog_socket_space(struct socket *so)
+{
+	if (so == NULL) {
+		return 0;
+	}
+
+	return so->so_snd.sb_mbcnt + so->so_rcv.sb_mbcnt;
+}
+
+struct mbuf_watchdog_defunct_args {
+	struct proc *top_app;
+	uint32_t top_app_space_used;
+};
+
+static int
+mbuf_watchdog_defunct_iterate(proc_t p, void *arg)
+{
+	struct fileproc *fp = NULL;
+	struct mbuf_watchdog_defunct_args *args =
+	    (struct mbuf_watchdog_defunct_args *)arg;
+	uint32_t space_used = 0;
+
+	proc_fdlock(p);
+	fdt_foreach(fp, p) {
+		struct fileglob *fg = fp->fp_glob;
+		struct socket *so = NULL;
+
+		if (FILEGLOB_DTYPE(fg) != DTYPE_SOCKET) {
+			continue;
+		}
+		so = (struct socket *)fp->fp_glob->fg_data;
+		/*
+		 * We calculate the space without the socket
+		 * lock because we don't want to be blocked
+		 * by another process that called send() and
+		 * is stuck waiting for mbufs.
+		 *
+		 * These variables are 32-bit so we don't have
+		 * to worry about incomplete reads.
+		 */
+		space_used += mbuf_watchdog_socket_space(so);
+	}
+	proc_fdunlock(p);
+	if (space_used > args->top_app_space_used) {
+		if (args->top_app != NULL) {
+			proc_rele(args->top_app);
+		}
+		args->top_app = p;
+		args->top_app_space_used = space_used;
+
+		return PROC_CLAIMED;
+	} else {
+		return PROC_RETURNED;
+	}
+}
+
+extern char *proc_name_address(void *p);
+
+static void
+mbuf_watchdog_defunct(thread_call_param_t arg0, thread_call_param_t arg1)
+{
+#pragma unused(arg0, arg1)
+	struct mbuf_watchdog_defunct_args args = {};
+	struct fileproc *fp = NULL;
+
+	proc_iterate(PROC_ALLPROCLIST,
+	    mbuf_watchdog_defunct_iterate, &args, NULL, NULL);
+
+	/*
+	 * Defunct all sockets from this app.
+	 */
+	if (args.top_app != NULL) {
+		os_log(OS_LOG_DEFAULT, "%s: defuncting all sockets from %s.%d",
+		    __func__,
+		    proc_name_address(args.top_app),
+		    proc_pid(args.top_app));
+		proc_fdlock(args.top_app);
+		fdt_foreach(fp, args.top_app) {
+			struct fileglob *fg = fp->fp_glob;
+			struct socket *so = NULL;
+
+			if (FILEGLOB_DTYPE(fg) != DTYPE_SOCKET) {
+				continue;
+			}
+			so = (struct socket *)fp->fp_glob->fg_data;
+			socket_lock(so, 0);
+			if (sosetdefunct(args.top_app, so,
+			    SHUTDOWN_SOCKET_LEVEL_DISCONNECT_ALL,
+			    TRUE) == 0) {
+				sodefunct(args.top_app, so,
+				    SHUTDOWN_SOCKET_LEVEL_DISCONNECT_ALL);
+			}
+			socket_unlock(so, 0);
+		}
+		proc_fdunlock(args.top_app);
+		proc_rele(args.top_app);
+		mbstat.m_forcedefunct++;
+	}
+	mbuf_watchdog_defunct_active = false;
+}
+
 /*
  * Called during slab (blocking and non-blocking) allocation.  If there
  * is at least one waiter, and the time since the first waiter is blocked
@@ -6796,13 +6891,43 @@ mbuf_watchdog(void)
 {
 	struct timeval now;
 	unsigned int since;
+	static thread_call_t defunct_tcall = NULL;
 
 	if (mb_waiters == 0 || !mb_watchdog) {
 		return;
 	}
 
+	LCK_MTX_ASSERT(mbuf_mlock, LCK_MTX_ASSERT_OWNED);
+
 	microuptime(&now);
 	since = now.tv_sec - mb_wdtstart.tv_sec;
+
+	/*
+	 * Check if we are about to panic the system due
+	 * to lack of mbufs and start defuncting sockets
+	 * from processes that use too many sockets.
+	 *
+	 * We're always called with the mbuf_mlock held,
+	 * so that also protects mbuf_watchdog_defunct_active.
+	 */
+	if (since >= MB_WDT_MAXTIME / 2 && !mbuf_watchdog_defunct_active) {
+		/*
+		 * Start a thread to defunct sockets
+		 * from apps that are over-using their socket
+		 * buffers.
+		 */
+		if (defunct_tcall == NULL) {
+			defunct_tcall =
+			    thread_call_allocate_with_options(mbuf_watchdog_defunct,
+			    NULL,
+			    THREAD_CALL_PRIORITY_KERNEL,
+			    THREAD_CALL_OPTIONS_ONCE);
+		}
+		if (defunct_tcall != NULL) {
+			mbuf_watchdog_defunct_active = true;
+			thread_call_enter(defunct_tcall);
+		}
+	}
 	if (since >= MB_WDT_MAXTIME) {
 		panic_plain("%s: %d waiters stuck for %u secs\n%s", __func__,
 		    mb_waiters, since, mbuf_dump());
@@ -7060,11 +7185,9 @@ slab_get(void *buf)
 		lck_mtx_unlock(mbuf_mlock);
 
 		/* This is a new buffer; create the slabs group for it */
-		MALLOC(slg, mcl_slabg_t *, sizeof(*slg), M_TEMP,
-		    M_WAITOK | M_ZERO);
-		MALLOC(slg->slg_slab, mcl_slab_t *, sizeof(mcl_slab_t) * NSLABSPMB,
-		    M_TEMP, M_WAITOK | M_ZERO);
-		VERIFY(slg != NULL && slg->slg_slab != NULL);
+		slg = zalloc_permanent_type(mcl_slabg_t);
+		slg->slg_slab = zalloc_permanent(sizeof(mcl_slab_t) * NSLABSPMB,
+		    ZALIGN(mcl_slab_t));
 
 		lck_mtx_lock(mbuf_mlock);
 		/*
@@ -7471,13 +7594,25 @@ __abortlike
 static void
 mcl_audit_mcheck_panic(struct mbuf *m)
 {
+	char buf[DUMP_MCA_BUF_SIZE];
 	mcache_audit_t *mca;
 
 	MRANGE(m);
 	mca = mcl_audit_buf2mca(MC_MBUF, (mcache_obj_t *)m);
 
 	panic("mcl_audit: freed mbuf %p with type 0x%x (instead of 0x%x)\n%s\n",
-	    m, (u_int16_t)m->m_type, MT_FREE, mcache_dump_mca(mca));
+	    m, (u_int16_t)m->m_type, MT_FREE, mcache_dump_mca(buf, mca));
+	/* NOTREACHED */
+}
+
+__abortlike
+static void
+mcl_audit_verify_nextptr_panic(void *next, mcache_audit_t *mca)
+{
+	char buf[DUMP_MCA_BUF_SIZE];
+	panic("mcl_audit: buffer %p modified after free at offset 0: "
+	    "%p out of range [%p-%p)\n%s\n",
+	    mca->mca_addr, next, mbutl, embutl, mcache_dump_mca(buf, mca));
 	/* NOTREACHED */
 }
 
@@ -7486,10 +7621,7 @@ mcl_audit_verify_nextptr(void *next, mcache_audit_t *mca)
 {
 	if (next != NULL && !MBUF_IN_MAP(next) &&
 	    (next != (void *)MCACHE_FREE_PATTERN || !mclverify)) {
-		panic("mcl_audit: buffer %p modified after free at offset 0: "
-		    "%p out of range [%p-%p)\n%s\n",
-		    mca->mca_addr, next, mbutl, embutl, mcache_dump_mca(mca));
-		/* NOTREACHED */
+		mcl_audit_verify_nextptr_panic(next, mca);
 	}
 }
 
@@ -7514,17 +7646,11 @@ mleak_activate(void)
 	    mleak_alloc_buckets * sizeof(struct mallocation);
 	vm_size_t trace_size = mleak_trace_buckets * sizeof(struct mtrace);
 
-	MALLOC(mleak_allocations, struct mallocation *, alloc_size,
-	    M_TEMP, M_WAITOK | M_ZERO);
-	VERIFY(mleak_allocations != NULL);
+	mleak_allocations = zalloc_permanent(alloc_size, ZALIGN(struct mallocation));
+	mleak_traces = zalloc_permanent(trace_size, ZALIGN(struct mtrace));
+	mleak_stat = zalloc_permanent(MLEAK_STAT_SIZE(MLEAK_NUM_TRACES),
+	    ZALIGN(mleak_stat_t));
 
-	MALLOC(mleak_traces, struct mtrace *, trace_size,
-	    M_TEMP, M_WAITOK | M_ZERO);
-	VERIFY(mleak_traces != NULL);
-
-	MALLOC(mleak_stat, mleak_stat_t *, MLEAK_STAT_SIZE(MLEAK_NUM_TRACES),
-	    M_TEMP, M_WAITOK | M_ZERO);
-	VERIFY(mleak_stat != NULL);
 	mleak_stat->ml_cnt = MLEAK_NUM_TRACES;
 #ifdef __LP64__
 	mleak_stat->ml_isaddr64 = 1;
@@ -8689,11 +8815,12 @@ _mbwdog_logger(const char *func, const int line, const char *fmt, ...)
 
 	LCK_MTX_ASSERT(mbuf_mlock, LCK_MTX_ASSERT_OWNED);
 	if (mbwdog_logging == NULL) {
-		mbwdog_logging = _MALLOC(mbwdog_logging_size,
-		    M_TEMP, M_ZERO | M_NOWAIT);
-		if (mbwdog_logging == NULL) {
-			return;
-		}
+		/*
+		 * This might block under a mutex, which isn't really great,
+		 * but this happens once, so we'll live.
+		 */
+		mbwdog_logging = zalloc_permanent(mbwdog_logging_size,
+		    ZALIGN_NONE);
 	}
 	va_start(ap, fmt);
 	vsnprintf(p, sizeof(p), fmt, ap);
@@ -8729,80 +8856,6 @@ SYSCTL_PROC(_kern_ipc, OID_AUTO, mbwdog_log,
     CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED,
     0, 0, sysctl_mbwdog_log, "A", "");
 
-static int mbtest_val;
-static int mbtest_running;
-
-static void
-mbtest_thread(__unused void *arg)
-{
-	int i;
-	int scale_down = 1;
-	int iterations = 250;
-	int allocations = nmbclusters;
-	iterations = iterations / scale_down;
-	allocations = allocations / scale_down;
-	printf("%s thread starting\n", __func__);
-	for (i = 0; i < iterations; i++) {
-		unsigned int needed = allocations;
-		struct mbuf *m1, *m2, *m3;
-
-		if (njcl > 0) {
-			needed = allocations;
-			m3 = m_getpackets_internal(&needed, 0, M_DONTWAIT, 0, M16KCLBYTES);
-			m_freem_list(m3);
-		}
-
-		needed = allocations;
-		m2 = m_getpackets_internal(&needed, 0, M_DONTWAIT, 0, MBIGCLBYTES);
-		m_freem_list(m2);
-
-		m1 = m_getpackets_internal(&needed, 0, M_DONTWAIT, 0, MCLBYTES);
-		m_freem_list(m1);
-	}
-
-	printf("%s thread ending\n", __func__);
-
-	OSDecrementAtomic(&mbtest_running);
-	wakeup_one((caddr_t)&mbtest_running);
-}
-
-static void
-sysctl_mbtest(void)
-{
-	/* We launch three threads - wait for all of them */
-	OSIncrementAtomic(&mbtest_running);
-	OSIncrementAtomic(&mbtest_running);
-	OSIncrementAtomic(&mbtest_running);
-
-	thread_call_func_delayed((thread_call_func_t)mbtest_thread, NULL, 10);
-	thread_call_func_delayed((thread_call_func_t)mbtest_thread, NULL, 10);
-	thread_call_func_delayed((thread_call_func_t)mbtest_thread, NULL, 10);
-
-	while (mbtest_running) {
-		msleep((caddr_t)&mbtest_running, NULL, PUSER, "mbtest_running", NULL);
-	}
-}
-
-static int
-mbtest SYSCTL_HANDLER_ARGS
-{
-#pragma unused(arg1, arg2)
-	int error = 0, val, oldval = mbtest_val;
-
-	val = oldval;
-	error = sysctl_handle_int(oidp, &val, 0, req);
-	if (error || !req->newptr) {
-		return error;
-	}
-
-	if (val != oldval) {
-		sysctl_mbtest();
-	}
-
-	mbtest_val = val;
-
-	return error;
-}
 #endif // DEBUG || DEVELOPMENT
 
 static void
@@ -8835,9 +8888,6 @@ mtracelarge_register(size_t size)
 
 SYSCTL_DECL(_kern_ipc);
 #if DEBUG || DEVELOPMENT
-SYSCTL_PROC(_kern_ipc, OID_AUTO, mbtest,
-    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, &mbtest_val, 0, &mbtest, "I",
-    "Toggle to test mbufs");
 #endif
 SYSCTL_PROC(_kern_ipc, KIPC_MBSTAT, mbstat,
     CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED,

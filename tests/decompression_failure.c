@@ -120,6 +120,8 @@ run_test(vm_address_t buffer_start, vm_address_t buffer_length)
 
 static size_t
 kern_memory_failure_handler(
+	__unused mach_port_t task,
+	__unused mach_port_t thread,
 	exception_type_t exception,
 	mach_exception_data_t code)
 {

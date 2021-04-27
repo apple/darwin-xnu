@@ -750,8 +750,8 @@ kalloc_large(
 	zalloc_flags_t        flags,
 	vm_allocation_site_t  *site)
 {
-	int kma_flags = KMA_ATOMIC | KMA_KOBJECT;
-	vm_tag_t tag = VM_KERN_MEMORY_KALLOC;
+	int kma_flags = KMA_ATOMIC;
+	vm_tag_t tag;
 	vm_map_t alloc_map;
 	vm_offset_t addr;
 
@@ -764,6 +764,16 @@ kalloc_large(
 		return (struct kalloc_result){ };
 	}
 
+#ifndef __x86_64__
+	/*
+	 * (73465472) on Intel we didn't use to pass this flag,
+	 * which in turned allowed kalloc_large() memory to be shared
+	 * with user directly.
+	 *
+	 * We're bound by this unfortunate ABI.
+	 */
+	kma_flags |= KMA_KOBJECT;
+#endif
 	if (flags & Z_NOPAGEWAIT) {
 		kma_flags |= KMA_NOPAGEWAIT;
 	}
@@ -781,8 +791,13 @@ kalloc_large(
 
 	alloc_map = kalloc_map_for_size(size);
 
-	if (site) {
-		tag = vm_tag_alloc(site);
+	tag = zalloc_flags_get_tag(flags);
+	if (tag == VM_KERN_MEMORY_NONE) {
+		if (site) {
+			tag = vm_tag_alloc(site);
+		} else {
+			tag = VM_KERN_MEMORY_KALLOC;
+		}
 	}
 
 	if (kmem_alloc_flags(alloc_map, &addr, size, tag, kma_flags) != KERN_SUCCESS) {
@@ -864,7 +879,6 @@ kalloc_ext(
 	zalloc_flags_t        flags,
 	vm_allocation_site_t  *site)
 {
-	vm_tag_t tag = VM_KERN_MEMORY_KALLOC;
 	vm_size_t size;
 	void *addr;
 	zone_t z;
@@ -881,7 +895,7 @@ kalloc_ext(
 	 * Kasan for kalloc heaps will put the redzones *inside*
 	 * the allocation, and hence augment its size.
 	 *
-	 * kalloc heaps do not use zone_t::kasan_redzone.
+	 * kalloc heaps do not use zone_t::z_kasan_redzone.
 	 */
 #if KASAN_KALLOC
 	size = kasan_alloc_resize(req_size);
@@ -903,15 +917,19 @@ kalloc_ext(
 	assert(size <= zone_elem_size(z));
 
 #if VM_MAX_TAG_ZONES
-	if (z->tags && site) {
-		tag = vm_tag_alloc(site);
-		if ((flags & (Z_NOWAIT | Z_NOPAGEWAIT)) && !vm_allocation_zone_totals[tag]) {
-			tag = VM_KERN_MEMORY_KALLOC;
+	if (z->tags) {
+		vm_tag_t tag = zalloc_flags_get_tag(flags);
+		if (tag == VM_KERN_MEMORY_NONE && site) {
+			tag = vm_tag_alloc(site);
 		}
+		if (tag != VM_KERN_MEMORY_NONE) {
+			tag = vm_tag_will_update_zone(tag, z->tag_zone_index,
+			    flags & (Z_WAITOK | Z_NOWAIT | Z_NOPAGEWAIT));
+		}
+		flags |= Z_VM_TAG(tag);
 	}
 #endif
-	addr = zalloc_ext(z, kheap->kh_stats ?: z->z_stats,
-	    flags | Z_VM_TAG(tag), zone_elem_size(z) - size);
+	addr = zalloc_ext(z, kheap->kh_stats ?: z->z_stats, flags);
 
 #if KASAN_KALLOC
 	addr = (void *)kasan_alloc((vm_offset_t)addr, zone_elem_size(z),

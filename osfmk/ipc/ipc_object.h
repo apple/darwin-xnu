@@ -85,6 +85,20 @@ typedef natural_t ipc_object_refs_t;    /* for ipc/ipc_object.h		*/
 typedef natural_t ipc_object_bits_t;
 typedef natural_t ipc_object_type_t;
 
+__options_closed_decl(ipc_object_copyout_flags_t, uint32_t, {
+	IPC_OBJECT_COPYOUT_FLAGS_NONE                 = 0x0,
+	IPC_OBJECT_COPYOUT_FLAGS_PINNED               = 0x1,
+	IPC_OBJECT_COPYOUT_FLAGS_NO_LABEL_CHECK       = 0x2,
+});
+
+__options_closed_decl(ipc_object_copyin_flags_t, uint32_t, {
+	IPC_OBJECT_COPYIN_FLAGS_NONE                     = 0x0,
+	IPC_OBJECT_COPYIN_FLAGS_ALLOW_IMMOVABLE_SEND     = 0x1, /* Dest port contains an immovable send right */
+	IPC_OBJECT_COPYIN_FLAGS_SOFT_FAIL_IMMOVABLE_SEND = 0x2, /* Silently fail copyin without guard exception */
+	IPC_OBJECT_COPYIN_FLAGS_ALLOW_DEAD_SEND_ONCE     = 0x4,
+	IPC_OBJECT_COPYIN_FLAGS_DEADOK                   = 0x8,
+});
+
 /*
  * The ipc_object is used to both tag and reference count these two data
  * structures, and (Noto Bene!) pointers to either of these or the
@@ -156,8 +170,11 @@ struct ipc_object_header {
 extern zone_t ipc_object_zones[IOT_NUMBER];
 extern lck_grp_t        ipc_lck_grp;
 
-#define io_alloc(otype)         \
-	        ((ipc_object_t) zalloc(ipc_object_zones[(otype)]))
+static inline ipc_object_t
+io_alloc(unsigned int otype, zalloc_flags_t flags)
+{
+	return zalloc_flags(ipc_object_zones[otype], flags);
+}
 
 extern void     io_free(
 	unsigned int    otype,
@@ -333,7 +350,7 @@ extern kern_return_t ipc_object_copyin(
 	ipc_object_t            *objectp,
 	mach_port_context_t     context,
 	mach_msg_guard_flags_t  *guard_flags,
-	uint16_t                kmsg_flags);
+	ipc_object_copyin_flags_t copyin_flags);
 
 /* Copyin a naked capability from the kernel */
 extern void ipc_object_copyin_from_kernel(
@@ -361,6 +378,7 @@ extern kern_return_t ipc_object_copyout(
 	ipc_space_t             space,
 	ipc_object_t            object,
 	mach_msg_type_name_t    msgt_name,
+	ipc_object_copyout_flags_t flags,
 	mach_port_context_t     *context,
 	mach_msg_guard_flags_t  *guard_flags,
 	mach_port_name_t        *namep);

@@ -548,6 +548,12 @@ munge_llllll(void *args __unused)
 }
 
 void
+munge_llll(void *args __unused)
+{
+	/* Nothing to do, already all 64-bit */
+}
+
+void
 munge_ll(void *args __unused)
 {
 	/* Nothing to do, already all 64-bit */

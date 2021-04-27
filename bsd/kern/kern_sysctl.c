@@ -105,6 +105,7 @@
 #include <sys/memory_maintenance.h>
 #include <sys/priv.h>
 #include <stdatomic.h>
+#include <uuid/uuid.h>
 
 #include <security/audit/audit.h>
 #include <kern/kalloc.h>
@@ -189,6 +190,7 @@ extern unsigned int speculative_prefetch_max_iosize;
 extern unsigned int preheat_max_bytes;
 extern unsigned int preheat_min_bytes;
 extern long numvnodes;
+extern long freevnodes;
 extern long num_recycledvnodes;
 
 extern uuid_string_t bootsessionuuid_string;
@@ -449,6 +451,7 @@ sysctl_sched_stats(__unused struct sysctl_oid *oidp, __unused void *arg1, __unus
 	host_basic_info_data_t hinfo;
 	kern_return_t kret;
 	uint32_t size;
+	uint32_t buf_size = 0;
 	int changed;
 	mach_msg_type_number_t count = HOST_BASIC_INFO_COUNT;
 	struct _processor_statistics_np *buf;
@@ -465,7 +468,8 @@ sysctl_sched_stats(__unused struct sysctl_oid *oidp, __unused void *arg1, __unus
 		return EINVAL;
 	}
 
-	MALLOC(buf, struct _processor_statistics_np*, size, M_TEMP, M_ZERO | M_WAITOK);
+	buf_size = size;
+	buf = kheap_alloc(KHEAP_TEMP, buf_size, Z_ZERO | Z_WAITOK);
 
 	kret = get_sched_statistics(buf, &size);
 	if (kret != KERN_SUCCESS) {
@@ -482,7 +486,7 @@ sysctl_sched_stats(__unused struct sysctl_oid *oidp, __unused void *arg1, __unus
 		panic("Sched info changed?!");
 	}
 out:
-	FREE(buf, M_TEMP);
+	kheap_free(KHEAP_TEMP, buf, buf_size);
 	return error;
 }
 
@@ -531,11 +535,7 @@ sysctl_docountsyscalls SYSCTL_HANDLER_ARGS
 	__unused int cmd = oidp->oid_arg2;      /* subcommand*/
 	__unused int *name = arg1;      /* oid element argument vector */
 	__unused int namelen = arg2;    /* number of oid element arguments */
-	user_addr_t oldp = req->oldptr; /* user buffer copy out address */
-	size_t *oldlenp = &req->oldlen; /* user buffer copy out size */
-	user_addr_t newp = req->newptr; /* user buffer copy in address */
-	size_t newlen = req->newlen;    /* user buffer copy in size */
-	int error;
+	int error, changed;
 
 	int tmp;
 
@@ -547,16 +547,17 @@ sysctl_docountsyscalls SYSCTL_HANDLER_ARGS
 	 * for example, to dump current counts:
 	 *		sysctl -w kern.count_calls=2
 	 */
-	error = sysctl_int(oldp, oldlenp, newp, newlen, &tmp);
-	if (error != 0) {
+	error = sysctl_io_number(req, do_count_syscalls,
+	    sizeof(do_count_syscalls), &tmp, &changed);
+
+	if (error != 0 || !changed) {
 		return error;
 	}
 
 	if (tmp == 1) {
 		do_count_syscalls = 1;
 	} else if (tmp == 0 || tmp == 2 || tmp == 3) {
-		int                     i;
-		for (i = 0; i < nsysent; i++) {
+		for (int i = 0; i < nsysent; i++) {
 			if (syscalls_log[i] != 0) {
 				if (tmp == 2) {
 					printf("%d calls - name %s \n", syscalls_log[i], syscallnames[i]);
@@ -565,14 +566,7 @@ sysctl_docountsyscalls SYSCTL_HANDLER_ARGS
 				}
 			}
 		}
-		if (tmp != 0) {
-			do_count_syscalls = 1;
-		}
-	}
-
-	/* adjust index so we return the right required/consumed amount */
-	if (!error) {
-		req->oldidx += req->oldlen;
+		do_count_syscalls = (tmp != 0);
 	}
 
 	return error;
@@ -594,65 +588,6 @@ SYSCTL_PROC(_kern, KERN_COUNT_SYSCALLS, count_syscalls, CTLTYPE_NODE | CTLFLAG_R
  *  sysctl_io_opaque()
  * instead.
  */
-
-/*
- * Validate parameters and get old / set new parameters
- * for an integer-valued sysctl function.
- */
-int
-sysctl_int(user_addr_t oldp, size_t *oldlenp,
-    user_addr_t newp, size_t newlen, int *valp)
-{
-	int error = 0;
-
-	if (oldp != USER_ADDR_NULL && oldlenp == NULL) {
-		return EFAULT;
-	}
-	if (oldp && *oldlenp < sizeof(int)) {
-		return ENOMEM;
-	}
-	if (newp && newlen != sizeof(int)) {
-		return EINVAL;
-	}
-	*oldlenp = sizeof(int);
-	if (oldp) {
-		error = copyout(valp, oldp, sizeof(int));
-	}
-	if (error == 0 && newp) {
-		error = copyin(newp, valp, sizeof(int));
-		AUDIT_ARG(value32, *valp);
-	}
-	return error;
-}
-
-/*
- * Validate parameters and get old / set new parameters
- * for an quad(64bit)-valued sysctl function.
- */
-int
-sysctl_quad(user_addr_t oldp, size_t *oldlenp,
-    user_addr_t newp, size_t newlen, quad_t *valp)
-{
-	int error = 0;
-
-	if (oldp != USER_ADDR_NULL && oldlenp == NULL) {
-		return EFAULT;
-	}
-	if (oldp && *oldlenp < sizeof(quad_t)) {
-		return ENOMEM;
-	}
-	if (newp && newlen != sizeof(quad_t)) {
-		return EINVAL;
-	}
-	*oldlenp = sizeof(quad_t);
-	if (oldp) {
-		error = copyout(valp, oldp, sizeof(quad_t));
-	}
-	if (error == 0 && newp) {
-		error = copyin(newp, valp, sizeof(quad_t));
-	}
-	return error;
-}
 
 STATIC int
 sysdoproc_filt_KERN_PROC_PID(proc_t p, void * arg)
@@ -2290,6 +2225,9 @@ SYSCTL_INT(_kern, OID_AUTO, num_taskthreads,
 SYSCTL_LONG(_kern, OID_AUTO, num_recycledvnodes,
     CTLFLAG_RD | CTLFLAG_LOCKED,
     &num_recycledvnodes, "");
+SYSCTL_COMPAT_INT(_kern, OID_AUTO, free_vnodes,
+    CTLFLAG_RD | CTLFLAG_LOCKED,
+    &freevnodes, 0, "");
 
 STATIC int
 sysctl_maxvnodes(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
@@ -3434,8 +3372,9 @@ SYSCTL_PROC(_debug,
 #include <mach/task.h>
 #include <mach/semaphore.h>
 
-extern lck_grp_t * sysctl_debug_test_stackshot_owner_grp; /* used for both mutexes and rwlocks */
-extern lck_mtx_t * sysctl_debug_test_stackshot_owner_init_mtx; /* used to protect lck_*_init */
+static LCK_GRP_DECLARE(sysctl_debug_test_stackshot_owner_grp, "test-stackshot-owner-grp");
+static LCK_MTX_DECLARE(sysctl_debug_test_stackshot_owner_init_mtx,
+    &sysctl_debug_test_stackshot_owner_grp);
 
 /* This is a sysctl for testing collection of owner info on a lock in kernel space. A multi-threaded
  * test from userland sets this sysctl in such a way that a thread blocks in kernel mode, and a
@@ -3462,17 +3401,17 @@ sysctl_debug_test_stackshot_mutex_owner(__unused struct sysctl_oid *oidp, __unus
 	long long mtx_unslid_addr = (long long)VM_KERNEL_UNSLIDE_OR_PERM(&sysctl_debug_test_stackshot_owner_lck);
 	int error = sysctl_io_number(req, mtx_unslid_addr, sizeof(long long), (void*)&option, NULL);
 
-	lck_mtx_lock(sysctl_debug_test_stackshot_owner_init_mtx);
+	lck_mtx_lock(&sysctl_debug_test_stackshot_owner_init_mtx);
 	if (!sysctl_debug_test_stackshot_mtx_inited) {
 		lck_mtx_init(&sysctl_debug_test_stackshot_owner_lck,
-		    sysctl_debug_test_stackshot_owner_grp,
+		    &sysctl_debug_test_stackshot_owner_grp,
 		    LCK_ATTR_NULL);
 		semaphore_create(kernel_task,
 		    &sysctl_debug_test_stackshot_mutex_sem,
 		    SYNC_POLICY_FIFO, 0);
 		sysctl_debug_test_stackshot_mtx_inited = 1;
 	}
-	lck_mtx_unlock(sysctl_debug_test_stackshot_owner_init_mtx);
+	lck_mtx_unlock(&sysctl_debug_test_stackshot_owner_init_mtx);
 
 	if (!error) {
 		switch (option) {
@@ -3489,15 +3428,15 @@ sysctl_debug_test_stackshot_mutex_owner(__unused struct sysctl_oid *oidp, __unus
 			semaphore_signal(sysctl_debug_test_stackshot_mutex_sem);
 			break;
 		case SYSCTL_DEBUG_MTX_TEARDOWN:
-			lck_mtx_lock(sysctl_debug_test_stackshot_owner_init_mtx);
+			lck_mtx_lock(&sysctl_debug_test_stackshot_owner_init_mtx);
 
 			lck_mtx_destroy(&sysctl_debug_test_stackshot_owner_lck,
-			    sysctl_debug_test_stackshot_owner_grp);
+			    &sysctl_debug_test_stackshot_owner_grp);
 			semaphore_destroy(kernel_task,
 			    sysctl_debug_test_stackshot_mutex_sem);
 			sysctl_debug_test_stackshot_mtx_inited = 0;
 
-			lck_mtx_unlock(sysctl_debug_test_stackshot_owner_init_mtx);
+			lck_mtx_unlock(&sysctl_debug_test_stackshot_owner_init_mtx);
 			break;
 		case -1:         /* user just wanted to read the value, so do nothing */
 			break;
@@ -3543,10 +3482,10 @@ sysctl_debug_test_stackshot_rwlck_owner(__unused struct sysctl_oid *oidp, __unus
 	long long rwlck_unslid_addr = (long long)VM_KERNEL_UNSLIDE_OR_PERM(&sysctl_debug_test_stackshot_owner_rwlck);
 	int error = sysctl_io_number(req, rwlck_unslid_addr, sizeof(long long), (void*)&option, NULL);
 
-	lck_mtx_lock(sysctl_debug_test_stackshot_owner_init_mtx);
+	lck_mtx_lock(&sysctl_debug_test_stackshot_owner_init_mtx);
 	if (!sysctl_debug_test_stackshot_rwlck_inited) {
 		lck_rw_init(&sysctl_debug_test_stackshot_owner_rwlck,
-		    sysctl_debug_test_stackshot_owner_grp,
+		    &sysctl_debug_test_stackshot_owner_grp,
 		    LCK_ATTR_NULL);
 		semaphore_create(kernel_task,
 		    &sysctl_debug_test_stackshot_rwlck_sem,
@@ -3554,7 +3493,7 @@ sysctl_debug_test_stackshot_rwlck_owner(__unused struct sysctl_oid *oidp, __unus
 		    0);
 		sysctl_debug_test_stackshot_rwlck_inited = 1;
 	}
-	lck_mtx_unlock(sysctl_debug_test_stackshot_owner_init_mtx);
+	lck_mtx_unlock(&sysctl_debug_test_stackshot_owner_init_mtx);
 
 	if (!error) {
 		switch (option) {
@@ -3580,15 +3519,15 @@ sysctl_debug_test_stackshot_rwlck_owner(__unused struct sysctl_oid *oidp, __unus
 			semaphore_signal(sysctl_debug_test_stackshot_rwlck_sem);
 			break;
 		case SYSCTL_DEBUG_KRWLCK_TEARDOWN:
-			lck_mtx_lock(sysctl_debug_test_stackshot_owner_init_mtx);
+			lck_mtx_lock(&sysctl_debug_test_stackshot_owner_init_mtx);
 
 			lck_rw_destroy(&sysctl_debug_test_stackshot_owner_rwlck,
-			    sysctl_debug_test_stackshot_owner_grp);
+			    &sysctl_debug_test_stackshot_owner_grp);
 			semaphore_destroy(kernel_task,
 			    sysctl_debug_test_stackshot_rwlck_sem);
 			sysctl_debug_test_stackshot_rwlck_inited = 0;
 
-			lck_mtx_unlock(sysctl_debug_test_stackshot_owner_init_mtx);
+			lck_mtx_unlock(&sysctl_debug_test_stackshot_owner_init_mtx);
 			break;
 		case -1:         /* user just wanted to read the value, so do nothing */
 			break;
@@ -4343,20 +4282,24 @@ extern int vm_page_delayed_work_ctx_needed;
 SYSCTL_INT(_vm, OID_AUTO, vm_page_needed_delayed_work_ctx, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_delayed_work_ctx_needed, 0, "");
 
 /* log message counters for persistence mode */
-extern uint32_t oslog_p_total_msgcount;
-extern uint32_t oslog_p_metadata_saved_msgcount;
-extern uint32_t oslog_p_metadata_dropped_msgcount;
-extern uint32_t oslog_p_error_count;
-extern uint32_t oslog_p_saved_msgcount;
-extern uint32_t oslog_p_dropped_msgcount;
-extern uint32_t oslog_p_boot_dropped_msgcount;
-extern uint32_t oslog_p_coprocessor_total_msgcount;
-extern uint32_t oslog_p_coprocessor_dropped_msgcount;
+SCALABLE_COUNTER_DECLARE(oslog_p_total_msgcount);
+SCALABLE_COUNTER_DECLARE(oslog_p_metadata_saved_msgcount);
+SCALABLE_COUNTER_DECLARE(oslog_p_metadata_dropped_msgcount);
+SCALABLE_COUNTER_DECLARE(oslog_p_error_count);
+SCALABLE_COUNTER_DECLARE(oslog_p_saved_msgcount);
+SCALABLE_COUNTER_DECLARE(oslog_p_dropped_msgcount);
+SCALABLE_COUNTER_DECLARE(oslog_p_boot_dropped_msgcount);
+SCALABLE_COUNTER_DECLARE(oslog_p_coprocessor_total_msgcount);
+SCALABLE_COUNTER_DECLARE(oslog_p_coprocessor_dropped_msgcount);
+SCALABLE_COUNTER_DECLARE(oslog_p_unresolved_kc_msgcount);
+SCALABLE_COUNTER_DECLARE(oslog_p_fmt_invalid_msgcount);
+SCALABLE_COUNTER_DECLARE(oslog_p_fmt_max_args_msgcount);
+SCALABLE_COUNTER_DECLARE(oslog_p_truncated_msgcount);
 
 /* log message counters for streaming mode */
 extern uint32_t oslog_s_total_msgcount;
 extern uint32_t oslog_s_metadata_msgcount;
-extern uint32_t oslog_s_error_count;
+SCALABLE_COUNTER_DECLARE(oslog_s_error_count);
 extern uint32_t oslog_s_streamed_msgcount;
 extern uint32_t oslog_s_dropped_msgcount;
 
@@ -4369,19 +4312,24 @@ extern uint32_t oslog_msgbuf_dropped_charcount;
 extern uint32_t vaddlog_msgcount;
 extern uint32_t vaddlog_msgcount_dropped;
 
-SYSCTL_UINT(_debug, OID_AUTO, oslog_p_total_msgcount, CTLFLAG_ANYBODY | CTLFLAG_RD | CTLFLAG_LOCKED, &oslog_p_total_msgcount, 0, "");
-SYSCTL_UINT(_debug, OID_AUTO, oslog_p_metadata_saved_msgcount, CTLFLAG_ANYBODY | CTLFLAG_RD | CTLFLAG_LOCKED, &oslog_p_metadata_saved_msgcount, 0, "");
-SYSCTL_UINT(_debug, OID_AUTO, oslog_p_metadata_dropped_msgcount, CTLFLAG_ANYBODY | CTLFLAG_RD | CTLFLAG_LOCKED, &oslog_p_metadata_dropped_msgcount, 0, "");
-SYSCTL_UINT(_debug, OID_AUTO, oslog_p_error_count, CTLFLAG_ANYBODY | CTLFLAG_RD | CTLFLAG_LOCKED, &oslog_p_error_count, 0, "");
-SYSCTL_UINT(_debug, OID_AUTO, oslog_p_saved_msgcount, CTLFLAG_ANYBODY | CTLFLAG_RD | CTLFLAG_LOCKED, &oslog_p_saved_msgcount, 0, "");
-SYSCTL_UINT(_debug, OID_AUTO, oslog_p_dropped_msgcount, CTLFLAG_ANYBODY | CTLFLAG_RD | CTLFLAG_LOCKED, &oslog_p_dropped_msgcount, 0, "");
-SYSCTL_UINT(_debug, OID_AUTO, oslog_p_boot_dropped_msgcount, CTLFLAG_ANYBODY | CTLFLAG_RD | CTLFLAG_LOCKED, &oslog_p_boot_dropped_msgcount, 0, "");
-SYSCTL_UINT(_debug, OID_AUTO, oslog_p_coprocessor_total_msgcount, CTLFLAG_ANYBODY | CTLFLAG_RD | CTLFLAG_LOCKED, &oslog_p_coprocessor_total_msgcount, 0, "");
-SYSCTL_UINT(_debug, OID_AUTO, oslog_p_coprocessor_dropped_msgcount, CTLFLAG_ANYBODY | CTLFLAG_RD | CTLFLAG_LOCKED, &oslog_p_coprocessor_dropped_msgcount, 0, "");
+SYSCTL_SCALABLE_COUNTER(_debug, oslog_p_total_msgcount, oslog_p_total_msgcount, "");
+SYSCTL_SCALABLE_COUNTER(_debug, oslog_p_metadata_saved_msgcount, oslog_p_metadata_saved_msgcount, "");
+SYSCTL_SCALABLE_COUNTER(_debug, oslog_p_metadata_dropped_msgcount, oslog_p_metadata_dropped_msgcount, "");
+SYSCTL_SCALABLE_COUNTER(_debug, oslog_p_error_count, oslog_p_error_count, "");
+SYSCTL_SCALABLE_COUNTER(_debug, oslog_p_saved_msgcount, oslog_p_saved_msgcount, "");
+SYSCTL_SCALABLE_COUNTER(_debug, oslog_p_dropped_msgcount, oslog_p_dropped_msgcount, "");
+SYSCTL_SCALABLE_COUNTER(_debug, oslog_p_boot_dropped_msgcount, oslog_p_boot_dropped_msgcount, "");
+SYSCTL_SCALABLE_COUNTER(_debug, oslog_p_coprocessor_total_msgcount, oslog_p_coprocessor_total_msgcount, "");
+SYSCTL_SCALABLE_COUNTER(_debug, oslog_p_coprocessor_dropped_msgcount, oslog_p_coprocessor_dropped_msgcount, "");
+SYSCTL_SCALABLE_COUNTER(_debug, oslog_p_unresolved_kc_msgcount, oslog_p_unresolved_kc_msgcount, "");
+
+SYSCTL_SCALABLE_COUNTER(_debug, oslog_p_fmt_invalid_msgcount, oslog_p_fmt_invalid_msgcount, "");
+SYSCTL_SCALABLE_COUNTER(_debug, oslog_p_fmt_max_args_msgcount, oslog_p_fmt_max_args_msgcount, "");
+SYSCTL_SCALABLE_COUNTER(_debug, oslog_p_truncated_msgcount, oslog_p_truncated_msgcount, "");
 
 SYSCTL_UINT(_debug, OID_AUTO, oslog_s_total_msgcount, CTLFLAG_ANYBODY | CTLFLAG_RD | CTLFLAG_LOCKED, &oslog_s_total_msgcount, 0, "");
 SYSCTL_UINT(_debug, OID_AUTO, oslog_s_metadata_msgcount, CTLFLAG_ANYBODY | CTLFLAG_RD | CTLFLAG_LOCKED, &oslog_s_metadata_msgcount, 0, "");
-SYSCTL_UINT(_debug, OID_AUTO, oslog_s_error_count, CTLFLAG_ANYBODY | CTLFLAG_RD | CTLFLAG_LOCKED, &oslog_s_error_count, 0, "");
+SYSCTL_SCALABLE_COUNTER(_debug, oslog_s_error_count, oslog_s_error_count, "");
 SYSCTL_UINT(_debug, OID_AUTO, oslog_s_streamed_msgcount, CTLFLAG_ANYBODY | CTLFLAG_RD | CTLFLAG_LOCKED, &oslog_s_streamed_msgcount, 0, "");
 SYSCTL_UINT(_debug, OID_AUTO, oslog_s_dropped_msgcount, CTLFLAG_ANYBODY | CTLFLAG_RD | CTLFLAG_LOCKED, &oslog_s_dropped_msgcount, 0, "");
 
@@ -4687,6 +4635,8 @@ SYSCTL_QUAD(_kern, OID_AUTO, driverkit_checkin_timed_out,
     &driverkit_checkin_timed_out, "timestamp of dext checkin timeout");
 #endif
 
+extern int IOGetVMMPresent(void);
+
 static int
 hv_vmm_present SYSCTL_HANDLER_ARGS
 {
@@ -4696,11 +4646,7 @@ hv_vmm_present SYSCTL_HANDLER_ARGS
 
 	int hv_vmm_present = 0;
 
-#if defined (__arm64__)
-	/* <rdar://problem/59966231> Need a way to determine if ARM xnu is running as a guest */
-#elif defined (__x86_64__)
-	hv_vmm_present = cpuid_vmm_present();
-#endif
+	hv_vmm_present = IOGetVMMPresent();
 
 	return SYSCTL_OUT(req, &hv_vmm_present, sizeof(hv_vmm_present));
 }
@@ -4810,7 +4756,7 @@ SYSCTL_PROC(_kern, OID_AUTO, sysent_const_check,
 #endif
 
 #if DEVELOPMENT || DEBUG
-SYSCTL_COMPAT_INT(_kern, OID_AUTO, development, CTLFLAG_RD | CTLFLAG_MASKED, NULL, 1, "");
+SYSCTL_COMPAT_INT(_kern, OID_AUTO, development, CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_KERN, NULL, 1, "");
 #else
 SYSCTL_COMPAT_INT(_kern, OID_AUTO, development, CTLFLAG_RD | CTLFLAG_MASKED, NULL, 0, "");
 #endif
@@ -5569,24 +5515,9 @@ sysctl_get_owned_vmobjects SYSCTL_HANDLER_ARGS
 	mach_port_name_t task_port_name;
 	task_t task;
 	size_t buffer_size = (req->oldptr != USER_ADDR_NULL) ? req->oldlen : 0;
-	vmobject_list_output_t buffer;
+	vmobject_list_output_t buffer = NULL;
 	size_t output_size;
 	size_t entries;
-
-	if (buffer_size) {
-		if (buffer_size < sizeof(*buffer) + sizeof(vm_object_query_data_t)) {
-			return ENOMEM;
-		}
-
-		buffer = kheap_alloc(KHEAP_TEMP, buffer_size, Z_WAITOK);
-
-		if (!buffer) {
-			error = ENOMEM;
-			goto sysctl_get_vmobject_list_exit;
-		}
-	} else {
-		buffer = NULL;
-	}
 
 	/* we have a "newptr" (for write) we get a task port name from the caller. */
 	error = SYSCTL_IN(req, &task_port_name, sizeof(mach_port_name_t));
@@ -5595,25 +5526,47 @@ sysctl_get_owned_vmobjects SYSCTL_HANDLER_ARGS
 		goto sysctl_get_vmobject_list_exit;
 	}
 
-	task = port_name_to_task(task_port_name);
+	task = port_name_to_task_read(task_port_name);
 	if (task == TASK_NULL) {
 		error = ESRCH;
 		goto sysctl_get_vmobject_list_exit;
 	}
 
+	/* get the current size */
+	task_copy_vmobjects(task, NULL, 0, &entries);
+	size_t max_size = (entries > 0) ? entries * sizeof(vm_object_query_data_t) + sizeof(*buffer) : 0;
+
+	/* if buffer_size is specified clamp to the current size then allcoate the kernel buffer */
+	if (buffer_size) {
+		if (buffer_size < sizeof(*buffer) + sizeof(vm_object_query_data_t)) {
+			error = ENOMEM;
+			goto sysctl_get_vmobject_list_deallocate_and_exit;
+		}
+
+		buffer_size = (buffer_size > max_size) ? max_size : buffer_size;
+		buffer = kheap_alloc(KHEAP_TEMP, buffer_size, Z_WAITOK);
+
+		if (!buffer) {
+			error = ENOMEM;
+			goto sysctl_get_vmobject_list_deallocate_and_exit;
+		}
+	} else {
+		buffer = NULL;
+	}
+
 	/* copy the vmobjects and vmobject data out of the task */
 	if (buffer_size == 0) {
-		task_copy_vmobjects(task, NULL, 0, &entries);
-		output_size = (entries > 0) ? entries * sizeof(vm_object_query_data_t) + sizeof(*buffer) : 0;
+		output_size = max_size;
 	} else {
 		task_copy_vmobjects(task, &buffer->data[0], buffer_size - sizeof(*buffer), &entries);
 		buffer->entries = (uint64_t)entries;
 		output_size = entries * sizeof(vm_object_query_data_t) + sizeof(*buffer);
 	}
 
-	task_deallocate(task);
-
 	error = SYSCTL_OUT(req, (char*) buffer, output_size);
+
+sysctl_get_vmobject_list_deallocate_and_exit:
+	task_deallocate(task);
 
 sysctl_get_vmobject_list_exit:
 	if (buffer) {
@@ -5626,3 +5579,20 @@ sysctl_get_vmobject_list_exit:
 SYSCTL_PROC(_vm, OID_AUTO, get_owned_vmobjects,
     CTLTYPE_OPAQUE | CTLFLAG_RD | CTLFLAG_WR | CTLFLAG_MASKED | CTLFLAG_KERN | CTLFLAG_LOCKED | CTLFLAG_ANYBODY,
     0, 0, sysctl_get_owned_vmobjects, "A", "get owned vmobjects in task");
+
+extern uint64_t num_static_scalable_counters;
+SYSCTL_QUAD(_kern, OID_AUTO, num_static_scalable_counters, CTLFLAG_RD | CTLFLAG_LOCKED, &num_static_scalable_counters, "");
+
+uuid_string_t trial_treatment_id;
+uuid_string_t trial_experiment_id;
+int trial_deployment_id = -1;
+
+SYSCTL_STRING(_kern, OID_AUTO, trial_treatment_id, CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_ANYBODY | CTLFLAG_EXPERIMENT, trial_treatment_id, sizeof(trial_treatment_id), "");
+SYSCTL_STRING(_kern, OID_AUTO, trial_experiment_id, CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_ANYBODY | CTLFLAG_EXPERIMENT, trial_experiment_id, sizeof(trial_experiment_id), "");
+SYSCTL_INT(_kern, OID_AUTO, trial_deployment_id, CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_ANYBODY | CTLFLAG_EXPERIMENT, &trial_deployment_id, 0, "");
+
+#if DEVELOPMENT || DEBUG
+/* For unit testing setting factors & limits. */
+unsigned int testing_experiment_factor;
+EXPERIMENT_FACTOR_UINT(_kern, testing_experiment_factor, &testing_experiment_factor, 5, 10, "");
+#endif /* DEVELOPMENT || DEBUG */

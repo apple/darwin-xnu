@@ -288,7 +288,6 @@ __END_DECLS
 #else   /* KERNEL */
 #ifdef XNU_KERNEL_PRIVATE
 void pshm_cache_init(void);     /* for bsd_init() */
-void pshm_lock_init(void);
 
 /*
  * XXX routine exported by posix_shm.c, but never used there, only used in

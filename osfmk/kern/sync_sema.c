@@ -180,6 +180,12 @@ semaphore_create(
 	 *  the new semaphore to the task's semaphore list.
 	 */
 	task_lock(task);
+	/* Check for race with task_terminate */
+	if (!task->active) {
+		task_unlock(task);
+		zfree(semaphore_zone, s);
+		return KERN_INVALID_TASK;
+	}
 	enqueue_head(&task->semaphore_list, (queue_entry_t) s);
 	task->semaphores_owned++;
 	task_unlock(task);

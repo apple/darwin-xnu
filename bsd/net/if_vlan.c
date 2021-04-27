@@ -1137,6 +1137,7 @@ vlan_output(struct ifnet * ifp, struct mbuf * m)
 			m->m_pkthdr.csum_tx_start += ETHER_VLAN_ENCAP_LEN;
 			m->m_pkthdr.csum_tx_stuff += ETHER_VLAN_ENCAP_LEN;
 		}
+		m->m_pkthdr.csum_flags |= CSUM_VLAN_ENCAP_PRESENT;
 	}
 
 	err = dlil_output(p, PF_VLAN, m, NULL, NULL, 1, &adv);

@@ -11,6 +11,7 @@ import time
 import xnudefines
 import memory
 import json
+from collections import defaultdict
 
 def GetProcName(proc):
     """ returns a string name of the process. Longer variant is preffered if provided.
@@ -26,17 +27,25 @@ def GetProcName(proc):
         return str(proc.p_comm)
 
 def GetProcNameForTask(task):
-    """ returns a string name of the process. if proc is not valid "unknown" is returned
+    """ returns a string name of the process. If proc is not valid the proc
+        name is looked up in the associated importance structure (if
+        available). If no name can be found, "unknown"  is returned.
         params:
             task: value object represeting a task in the kernel.
         returns:
             str : A string name of the process linked to the task
     """
-    if not task or not unsigned(task.bsd_info):
-        return "unknown"
-    p = Cast(task.bsd_info, 'proc *')
+    if task:
+        if unsigned(task.bsd_info):
+            p = Cast(task.bsd_info, 'proc *')
+            return GetProcName(p)
 
-    return GetProcName(p)
+        if (hasattr(task, 'task_imp_base') and
+           hasattr(task.task_imp_base, 'iit_procname') and
+           unsigned(task.task_imp_base) != 0):
+            return str(task.task_imp_base.iit_procname)
+
+    return "unknown"
 
 def GetProcPIDForTask(task):
     """ returns a int pid of the process. if the proc is not valid, val[5] from audit_token is returned.
@@ -187,6 +196,7 @@ def GetASTSummary(ast):
         K - AST_KPERF
         M - AST_MACF
         r - AST_RESET_PCS
+        a - AST_ARCADE
         G - AST_GUARD
         T - AST_TELEMETRY_USER
         T - AST_TELEMETRY_KERNEL
@@ -201,12 +211,12 @@ def GetASTSummary(ast):
     out_string = ""
     state = int(ast)
     thread_state_chars = {0x0:'', 0x1:'P', 0x2:'Q', 0x4:'U', 0x8:'H', 0x10:'Y', 0x20:'A',
-                          0x40:'L', 0x80:'B', 0x100:'K', 0x200:'M', 0x400: 'r',
+                          0x40:'L', 0x80:'B', 0x100:'K', 0x200:'M', 0x400: 'r', 0x800: 'a',
                           0x1000:'G', 0x2000:'T', 0x4000:'T', 0x8000:'T', 0x10000:'S',
                           0x20000: 'D', 0x40000: 'I', 0x80000: 'E', 0x100000: 'R', 0x200000: 'N'}
     state_str = ''
     mask = 0x1
-    while mask <= 0x80000:
+    while mask <= 0x200000:
         state_str += thread_state_chars[int(state & mask)]
         mask = mask << 1
 
@@ -583,7 +593,7 @@ def GetThreadGroupSummary(tg):
         tg_flags += 'E'
     if (tg.tg_flags & 0x2):
         tg_flags += 'U'
-    out_string += format_string.format(tg, tg.tg_id, tg.tg_name, tg.tg_refcount, tg_flags, tg.tg_recommendation)
+    out_string += format_string.format(tg, tg.tg_id, tg.tg_name, tg.tg_refcount.ref_count, tg_flags, tg.tg_recommendation)
     return out_string
 
 @lldb_command('showallthreadgroups')
@@ -1052,8 +1062,20 @@ def ShowTerminatedTasks(cmd_args=None):
     global kern
     print GetTaskSummary.header + " " + GetProcSummary.header
     for t in kern.terminated_tasks:
+
+        # If the task has been terminated it's likely that the process is
+        # gone too. If there is no proc it may still be possible to find
+        # the original proc name.
         pval = Cast(t.bsd_info, 'proc *')
-        print GetTaskSummary(t) +" "+ GetProcSummary(pval)
+        if pval:
+            psummary = GetProcSummary(pval)
+        else:
+            name = GetProcNameForTask(t);
+            pslen = GetProcSummary.header.find("command");
+            psummary = "{0: <{indent}} {1: <s}".format("", name, indent = pslen - 1)
+
+        print GetTaskSummary(t) + " " + psummary
+
     return True
 
 # Macro: showtaskstacks
@@ -1166,15 +1188,41 @@ def ShowProcRefs(cmd_args = None):
 def ShowAllThreads(cmd_args = None):
     """ Display info about all threads in the system
     """
+
+    # Terminated threads get prefixed with a 'T'
+    def ShowTaskTerminatedThreads(task):
+        tlist = tmap.get(unsigned(task), [])
+        for thval in tlist:
+            print "T\t" + GetThreadSummary(thval)
+
+    # Task -> [thread, ..] map of terminated threads
+    tmap = defaultdict(list)
+    for thr in kern.terminated_threads:
+        tmap[unsigned(thr.task)].append(thr)
+
     for t in kern.tasks:
         ShowTaskThreads([str(int(t))])
+        ShowTaskTerminatedThreads(t)
         print " \n"
-        
+
     for t in kern.terminated_tasks:
         print "Terminated: \n"
         ShowTaskThreads([str(int(t))])
+        ShowTaskTerminatedThreads(t)
         print " \n"
-        
+
+    return
+
+@lldb_command('showterminatedthreads')
+def ShowTerminatedThreads(cmd_args=None):
+    """ Display info about all terminated threads in the system
+    """
+
+    global kern
+    print GetThreadSummary.header
+    for t in kern.terminated_threads:
+        print GetThreadSummary(t)
+
     return
 
 @lldb_command('showtaskthreads', "F:")
@@ -1346,7 +1394,7 @@ def GetFullBackTrace(frame_addr, verbosity = vHUMAN, prefix = ""):
         if (not kern.arch.startswith('arm') and frame_ptr < mh_execute_addr) or (kern.arch.startswith('arm') and frame_ptr > mh_execute_addr):
             break
         pc_val = kern.GetValueFromAddress(frame_ptr + kern.ptrsize,'uintptr_t *')
-        pc_val = unsigned(dereference(pc_val))
+        pc_val = kern.StripKernelPAC(unsigned(dereference(pc_val)))
         out_string += prefix + GetSourceInformationForAddress(pc_val) + "\n"
         bt_count +=1
         previous_frame_ptr = frame_ptr

@@ -167,6 +167,17 @@ ml_init_lock_timeout(void)
 }
 
 /*
+ * This is called when all of the ml_processor_info_t structures have been
+ * initialized and all the processors have been started through processor_start().
+ *
+ * Required by the scheduler subsystem.
+ */
+void
+ml_cpu_init_completed(void)
+{
+}
+
+/*
  * This is called from the machine-independent routine cpu_up()
  * to perform machine-dependent info updates.
  */

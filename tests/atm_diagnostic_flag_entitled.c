@@ -3,6 +3,8 @@
 #include <mach/mach_error.h>
 #include <mach/mach_host.h>
 
+#include "drop_priv.h"
+
 T_GLOBAL_META(T_META_NAMESPACE("xnu.debugging"));
 
 /*
@@ -10,8 +12,6 @@ T_GLOBAL_META(T_META_NAMESPACE("xnu.debugging"));
  * of the upper 8 bits to ensure round-tripping.
  */
 #define LIBTRACE_PRIVATE_DATA  0x01000000
-
-extern void drop_priv(void);
 
 static bool _needs_reset;
 static uint32_t _original;

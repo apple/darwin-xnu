@@ -1540,8 +1540,12 @@ workq_open(struct proc *p, __unused struct workq_open_args *uap,
 		priority_queue_init(&wq->wq_constrained_queue);
 		priority_queue_init(&wq->wq_special_queue);
 
-		wq->wq_delayed_call = thread_call_allocate_with_options(
-			workq_add_new_threads_call, p, THREAD_CALL_PRIORITY_KERNEL,
+		/* We are only using the delayed thread call for the constrained pool
+		 * which can't have work at >= UI QoS and so we can be fine with a
+		 * UI QoS thread call.
+		 */
+		wq->wq_delayed_call = thread_call_allocate_with_qos(
+			workq_add_new_threads_call, p, THREAD_QOS_USER_INTERACTIVE,
 			THREAD_CALL_OPTIONS_ONCE);
 		wq->wq_immediate_call = thread_call_allocate_with_options(
 			workq_add_new_threads_call, p, THREAD_CALL_PRIORITY_KERNEL,
@@ -2835,11 +2839,14 @@ workq_constrained_allowance(struct workqueue *wq, thread_qos_t at_qos,
 
 	/*
 	 * Compute a metric for many how many threads are active.  We find the
-	 * highest priority request outstanding and then add up the number of
-	 * active threads in that and all higher-priority buckets.  We'll also add
-	 * any "busy" threads which are not active but blocked recently enough that
-	 * we can't be sure they've gone idle yet.  We'll then compare this metric
-	 * to our max concurrency to decide whether to add a new thread.
+	 * highest priority request outstanding and then add up the number of active
+	 * threads in that and all higher-priority buckets.  We'll also add any
+	 * "busy" threads which are not currently active but blocked recently enough
+	 * that we can't be sure that they won't be unblocked soon and start
+	 * being active again.
+	 *
+	 * We'll then compare this metric to our max concurrency to decide whether
+	 * to add a new thread.
 	 */
 
 	uint32_t busycount, thactive_count;
@@ -2869,7 +2876,7 @@ workq_constrained_allowance(struct workqueue *wq, thread_qos_t at_qos,
 		    thactive_count, busycount, 0);
 	}
 
-	if (busycount && may_start_timer) {
+	if (may_start_timer) {
 		/*
 		 * If this is called from the add timer, we won't have another timer
 		 * fire when the thread exits the "busy" state, so rearm the timer.
@@ -3270,8 +3277,6 @@ workq_select_threadreq_or_park_and_unlock(proc_t p, struct workqueue *wq,
 
 	workq_thread_reset_pri(wq, uth, req, /*unpark*/ true);
 
-	thread_unfreeze_base_pri(uth->uu_thread);
-#if 0 // <rdar://problem/55259863> to turn this back on
 	if (__improbable(thread_unfreeze_base_pri(uth->uu_thread) && !is_creator)) {
 		if (req_ts) {
 			workq_perform_turnstile_operation_locked(wq, ^{
@@ -3284,7 +3289,6 @@ workq_select_threadreq_or_park_and_unlock(proc_t p, struct workqueue *wq,
 		WQ_TRACE_WQ(TRACE_wq_select_threadreq | DBG_FUNC_NONE, wq, 3, 0, 0, 0);
 		goto park_thawed;
 	}
-#endif
 
 	/*
 	 * We passed all checks, dequeue the request, bind to it, and set it up
@@ -3355,9 +3359,7 @@ workq_select_threadreq_or_park_and_unlock(proc_t p, struct workqueue *wq,
 
 park:
 	thread_unfreeze_base_pri(uth->uu_thread);
-#if 0 // <rdar://problem/55259863>
 park_thawed:
-#endif
 	workq_park_and_unlock(p, wq, uth, setup_flags);
 }
 
@@ -3540,10 +3542,12 @@ workq_setup_and_run(proc_t p, struct uthread *uth, int setup_flags)
 	}
 
 	if (uth->uu_workq_thport == MACH_PORT_NULL) {
-		/* convert_thread_to_port() consumes a reference */
+		/* convert_thread_to_port_pinned() consumes a reference */
 		thread_reference(th);
-		ipc_port_t port = convert_thread_to_port(th);
-		uth->uu_workq_thport = ipc_port_copyout_send(port, get_task_ipcspace(p->task));
+		/* Convert to immovable/pinned thread port, but port is not pinned yet */
+		ipc_port_t port = convert_thread_to_port_pinned(th);
+		/* Atomically, pin and copy out the port */
+		uth->uu_workq_thport = ipc_port_copyout_send_pinned(port, get_task_ipcspace(p->task));
 	}
 
 	/*

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2020 Apple Inc. All rights reserved.
+ * Copyright (c) 2013-2021 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -153,6 +153,7 @@ struct necp_packet_header {
 #define NECP_POLICY_CONDITION_SDK_VERSION               28      // struct necp_policy_condition_sdk_version
 #define NECP_POLICY_CONDITION_SIGNING_IDENTIFIER        29      // String
 #define NECP_POLICY_CONDITION_PACKET_FILTER_TAGS        30      // u_int16_t
+#define NECP_POLICY_CONDITION_DELEGATE_IS_PLATFORM_BINARY      32      // N/A
 
 /*
  * Policy Packet tags
@@ -203,6 +204,7 @@ struct necp_packet_header {
 #define NECP_ROUTE_RULE_ALLOW_INTERFACE                 2       // String, or empty to match all
 #define NECP_ROUTE_RULE_QOS_MARKING                             3       // String, or empty to match all
 #define NECP_ROUTE_RULE_DENY_LQM_ABORT                  4       // String, or empty to match all
+#define NECP_ROUTE_RULE_USE_NETAGENT                    5       // UUID, followed by string or empty
 
 #define NECP_ROUTE_RULE_FLAG_CELLULAR                   0x01
 #define NECP_ROUTE_RULE_FLAG_WIFI                       0x02
@@ -311,6 +313,7 @@ struct necp_aggregate_result {
 	u_int32_t                                                       policy_id;
 	uuid_t                                                          netagents[NECP_MAX_NETAGENTS];
 	u_int32_t                                                       netagent_use_flags[NECP_MAX_NETAGENTS];
+	struct ipv6_prefix                                              nat64_prefixes[NAT64_MAX_NUM_PREFIXES];
 	u_int8_t                                                        mss_recommended;
 };
 
@@ -645,6 +648,7 @@ typedef struct necp_cache_buffer {
 #define NECP_CLIENT_RESULT_EFFECTIVE_TRAFFIC_CLASS              210             // u_int32_t
 #define NECP_CLIENT_RESULT_TRAFFIC_MGMT_BG                              211             // u_int32_t, 1: background, 0: not background
 #define NECP_CLIENT_RESULT_GATEWAY                                      212             // struct necp_client_endpoint
+#define NECP_CLIENT_RESULT_NAT64                                        213             // struct ipv6_prefix[NAT64_MAX_NUM_PREFIXES]
 
 #define NECP_CLIENT_RESULT_FLAG_IS_LOCAL                                0x0001  // Routes to this device
 #define NECP_CLIENT_RESULT_FLAG_IS_DIRECT                               0x0002  // Routes to directly accessible peer
@@ -948,6 +952,8 @@ extern int necp_buffer_find_tlv(u_int8_t *buffer, u_int32_t buffer_length, int o
 #define NECPCTL_RESTRICT_MULTICAST                      20      /* Restrict multicast access */
 #define NECPCTL_DEDUP_POLICIES                          21      /* Dedup overlapping policies */
 
+#define NECP_LOOPBACK_PASS_ALL         1  // Pass all loopback traffic
+#define NECP_LOOPBACK_PASS_WITH_FILTER 2  // Pass all loopback traffic, but activate content filter and/or flow divert if applicable
 
 #define NECPCTL_NAMES {                                 \
 	{ 0, 0 },                                                       \
@@ -1047,6 +1053,7 @@ struct necp_kernel_socket_policy {
 	struct necp_policy_condition_sdk_version cond_sdk_version;
 	char                                            *cond_signing_identifier;   // String
 	u_int16_t                                       cond_packet_filter_tags;
+	int32_t                                         cond_pid_version;
 
 	necp_kernel_policy_result       result;
 	necp_kernel_policy_result_parameter     result_parameter;
@@ -1116,12 +1123,13 @@ struct necp_aggregate_socket_result {
 };
 
 struct necp_inpcb_result {
-	u_int32_t                                                       app_id;
+	u_int32_t                                       app_id;
 	necp_kernel_policy_id                           policy_id;
 	necp_kernel_policy_id                           skip_policy_id;
-	int32_t                                                         policy_gencount;
-	u_int32_t                                                       flowhash;
-	struct necp_aggregate_socket_result     results;
+	int32_t                                         policy_gencount;
+	u_int32_t                                       flowhash;
+	u_int32_t                                       network_denied_notifies;// Notification count
+	struct necp_aggregate_socket_result             results;
 };
 
 extern errno_t necp_init(void);
@@ -1142,18 +1150,18 @@ extern u_int32_t necp_socket_get_effective_mtu(struct inpcb *inp, u_int32_t curr
 
 extern bool necp_socket_is_allowed_to_recv_on_interface(struct inpcb *inp, ifnet_t interface);
 
-extern bool necp_socket_is_allowed_to_send_recv(struct inpcb *inp, ifnet_t interface, u_int16_t pf_tag,
+extern bool necp_socket_is_allowed_to_send_recv(struct inpcb *inp, ifnet_t input_interface, u_int16_t pf_tag,
     necp_kernel_policy_id *return_policy_id,
     u_int32_t *return_route_rule_id,
     necp_kernel_policy_id *return_skip_policy_id, u_int32_t *return_pass_flags);
 extern bool necp_socket_is_allowed_to_send_recv_v4(struct inpcb *inp, u_int16_t local_port,
     u_int16_t remote_port, struct in_addr *local_addr,
-    struct in_addr *remote_addr, ifnet_t interface, u_int16_t pf_tag,
+    struct in_addr *remote_addr, ifnet_t input_interface, u_int16_t pf_tag,
     necp_kernel_policy_id *return_policy_id, u_int32_t *return_route_rule_id,
     necp_kernel_policy_id *return_skip_policy_id, u_int32_t *return_pass_flags);
 extern bool necp_socket_is_allowed_to_send_recv_v6(struct inpcb *inp, u_int16_t local_port,
     u_int16_t remote_port, struct in6_addr *local_addr,
-    struct in6_addr *remote_addr, ifnet_t interface, u_int16_t pf_tag,
+    struct in6_addr *remote_addr, ifnet_t input_interface, u_int16_t pf_tag,
     necp_kernel_policy_id *return_policy_id, u_int32_t *return_route_rule_id,
     necp_kernel_policy_id *return_skip_policy_id, u_int32_t *return_pass_flags);
 extern void necp_socket_update_qos_marking(struct inpcb *inp, struct rtentry *route, u_int32_t route_rule_id);

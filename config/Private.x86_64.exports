@@ -2,9 +2,10 @@ _IOGetBootKeyStoreData
 _IOGetAPFSKeyStoreData
 _IOSetAPFSKeyStoreData
 _IOGetARVRootHashData
-_IOSetARVRootHashData
 _IOGetARVManifestData
-_IOSetARVManifestData
+_IOGetBaseSystemARVRootHashData
+_IOGetBaseSystemARVManifestData
+_IOBaseSystemARVRootHashAvailable
 __Z33IOSKCopyKextIdentifierWithAddressm
 __ZN14IOPMrootDomain17requestUserActiveEP9IOServicePKc
 __ZN14IOPMrootDomain20claimSystemBootEventEP9IOServicejPKcP8OSObject
@@ -113,6 +114,7 @@ _hv_ast_pending
 _hv_disable
 _hv_ept_pmap_create
 _hv_get*
+_hv_io_notifier*
 _hv_release*
 _hv_set*
 _hv_trace*

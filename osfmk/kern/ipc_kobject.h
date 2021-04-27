@@ -98,7 +98,7 @@ typedef natural_t       ipc_kobject_type_t;
 #define IKOT_PSET                       6
 #define IKOT_PSET_NAME                  7
 #define IKOT_TIMER                      8
-#define IKOT_PAGING_REQUEST             9
+#define IKOT_PORT_SUBST_ONCE            9
 #define IKOT_MIG                        10
 #define IKOT_MEMORY_OBJECT              11
 #define IKOT_XMM_PAGER                  12
@@ -139,12 +139,13 @@ typedef natural_t       ipc_kobject_type_t;
 #define IKOT_THREAD_READ                47
 #define IKOT_SUID_CRED                  48
 #define IKOT_HYPERVISOR                 49
+#define IKOT_TASK_ID_TOKEN              50
 
 /*
  * Add new entries here and adjust IKOT_UNKNOWN.
  * Please keep ipc/ipc_object.c:ikot_print_array up to date.
  */
-#define IKOT_UNKNOWN                    50      /* magic catchall       */
+#define IKOT_UNKNOWN                    51      /* magic catchall */
 #define IKOT_MAX_TYPE   (IKOT_UNKNOWN+1)        /* # of IKOT_ types	*/
 
 /* set the bitstring index for kobject */
@@ -191,6 +192,8 @@ __options_decl(ipc_kobject_alloc_options_t, uint32_t, {
 	IPC_KOBJECT_ALLOC_IMMOVABLE_SEND = 0x00000008,
 	/* Add a label structure to the port */
 	IPC_KOBJECT_ALLOC_LABEL = 0x00000010,
+	/* Make all rights pinned (non dealloc-able) in an ipc space*/
+	IPC_KOBJECT_ALLOC_PINNED    = 0x00000020,
 });
 
 /* Allocates a kobject port, never fails */
@@ -206,11 +209,15 @@ extern ipc_port_t ipc_kobject_alloc_labeled_port(
 	ipc_label_t                 label,
 	ipc_kobject_alloc_options_t options);
 
+extern ipc_port_t ipc_kobject_alloc_subst_once(
+	ipc_port_t                  target);
+
 /* Makes a send right, lazily allocating a kobject port, arming for no-senders, never fails */
 extern boolean_t ipc_kobject_make_send_lazy_alloc_port(
 	ipc_port_t                 *port_store,
 	ipc_kobject_t               kobject,
 	ipc_kobject_type_t          type,
+	ipc_kobject_alloc_options_t alloc_opts,
 	boolean_t                   should_ptrauth,
 	uint64_t                    ptrauth_discriminator) __result_use_check;
 
@@ -235,10 +242,28 @@ ipc_kobject_get(ipc_port_t port)
 }
 
 /* Check if a kobject can be copied out to a given space */
-extern boolean_t ipc_kobject_label_check(
-	ipc_space_t space,
-	ipc_port_t port,
-	mach_msg_type_name_t msgt_name);
+extern bool     ipc_kobject_label_check(
+	ipc_space_t                 space,
+	ipc_port_t                  port,
+	mach_msg_type_name_t        msgt_name,
+	ipc_object_copyout_flags_t *flags,
+	ipc_port_t                 *subst_portp) __result_use_check;
+
+__result_use_check
+static inline bool
+ip_label_check(
+	ipc_space_t                 space,
+	ipc_port_t                  port,
+	mach_msg_type_name_t        msgt_name,
+	ipc_object_copyout_flags_t *flags,
+	ipc_port_t                 *subst_portp)
+{
+	if (!ip_is_kolabeled(port)) {
+		*subst_portp = IP_NULL;
+		return true;
+	}
+	return ipc_kobject_label_check(space, port, msgt_name, flags, subst_portp);
+}
 
 /* Release any kernel object resources associated with a port */
 extern void ipc_kobject_destroy(
@@ -248,6 +273,21 @@ extern void ipc_kobject_destroy(
 
 extern kern_return_t
 uext_server(ipc_kmsg_t request, ipc_kmsg_t * reply);
+
+/* These boot-args decide if the pinned and immovable ports can be copied out to IPC space */
+__options_decl(ipc_control_port_options_t, uint32_t, {
+	IPC_CONTROL_PORT_OPTIONS_NONE           = 0x00,
+
+	IPC_CONTROL_PORT_OPTIONS_PINNED_SOFT    = 0x01,
+	IPC_CONTROL_PORT_OPTIONS_PINNED_HARD    = 0x02,
+
+	IPC_CONTROL_PORT_OPTIONS_IMMOVABLE_SOFT = 0x10,
+	IPC_CONTROL_PORT_OPTIONS_IMMOVABLE_HARD = 0x20,
+});
+
+extern ipc_control_port_options_t ipc_control_port_options;
+extern bool pinned_control_port_enabled;
+extern bool immovable_control_port_enabled;
 
 #endif /* MACH_KERNEL_PRIVATE */
 

@@ -1032,6 +1032,7 @@ tcp_newtcpcb(struct inpcb *inp)
 	struct tcpcb *tp;
 	struct socket *so = inp->inp_socket;
 	int isipv6 = (inp->inp_vflag & INP_IPV6) != 0;
+	uint32_t random_32;
 
 	calculate_tcp_clock();
 
@@ -1104,12 +1105,17 @@ tcp_newtcpcb(struct inpcb *inp)
 	tp->t_twentry.tqe_next = NULL;
 	tp->t_twentry.tqe_prev = NULL;
 
+	read_frandom(&random_32, sizeof(random_32));
 	if (__probable(tcp_do_ack_compression)) {
-		read_frandom(&tp->t_comp_gencnt, sizeof(tp->t_comp_gencnt));
+		tp->t_comp_gencnt = random_32;
 		if (tp->t_comp_gencnt <= TCP_ACK_COMPRESSION_DUMMY) {
 			tp->t_comp_gencnt = TCP_ACK_COMPRESSION_DUMMY + 1;
 		}
 		tp->t_comp_lastinc = tcp_now;
+	}
+
+	if (__probable(tcp_randomize_timestamps)) {
+		tp->t_ts_offset = random_32;
 	}
 
 	/*

@@ -1423,6 +1423,9 @@ extern void             vm_page_create(
 	ppnum_t         start,
 	ppnum_t         end);
 
+extern void             vm_page_create_retired(
+	ppnum_t         pn);
+
 extern vm_page_t        kdp_vm_page_lookup(
 	vm_object_t             object,
 	vm_object_offset_t      offset);
@@ -1431,18 +1434,16 @@ extern vm_page_t        vm_page_lookup(
 	vm_object_t             object,
 	vm_object_offset_t      offset);
 
-extern vm_page_t        vm_page_grab_fictitious(void);
+extern vm_page_t        vm_page_grab_fictitious(boolean_t canwait);
 
-extern vm_page_t        vm_page_grab_guard(void);
+extern vm_page_t        vm_page_grab_guard(boolean_t canwait);
 
 extern void             vm_page_release_fictitious(
 	vm_page_t page);
 
 extern void             vm_free_delayed_pages(void);
 
-extern void             vm_page_more_fictitious(void);
-
-extern int              vm_pool_low(void);
+extern bool             vm_pool_low(void);
 
 extern vm_page_t        vm_page_grab(void);
 extern vm_page_t        vm_page_grab_options(int flags);
@@ -1463,10 +1464,6 @@ extern boolean_t        vm_page_wait(
 	int             interruptible );
 
 extern vm_page_t        vm_page_alloc(
-	vm_object_t             object,
-	vm_object_offset_t      offset);
-
-extern vm_page_t        vm_page_alloc_guard(
 	vm_object_t             object,
 	vm_object_offset_t      offset);
 
@@ -1630,15 +1627,15 @@ extern void memorystatus_pages_update(unsigned int pages_avail);
 
 #else /* CONFIG_JETSAM */
 
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 
 #define VM_CHECK_MEMORYSTATUS do {} while(0)
 
-#else /* CONFIG_EMBEDDED */
+#else /* !XNU_TARGET_OS_OSX */
 
 #define VM_CHECK_MEMORYSTATUS   vm_pressure_response()
 
-#endif /* CONFIG_EMBEDDED */
+#endif /* !XNU_TARGET_OS_OSX */
 
 #endif /* CONFIG_JETSAM */
 
@@ -1647,7 +1644,7 @@ extern void memorystatus_pages_update(unsigned int pages_avail);
  * protected by the object lock.
  */
 
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 #define SET_PAGE_DIRTY(m, set_pmap_modified)                            \
 	        MACRO_BEGIN                                             \
 	        vm_page_t __page__ = (m);                               \
@@ -1659,13 +1656,13 @@ extern void memorystatus_pages_update(unsigned int pages_avail);
 	        }                                                       \
 	        __page__->vmp_dirty = TRUE;                             \
 	        MACRO_END
-#else /* CONFIG_EMBEDDED */
+#else /* !XNU_TARGET_OS_OSX */
 #define SET_PAGE_DIRTY(m, set_pmap_modified)                            \
 	        MACRO_BEGIN                                             \
 	        vm_page_t __page__ = (m);                               \
 	        __page__->vmp_dirty = TRUE;                             \
 	        MACRO_END
-#endif /* CONFIG_EMBEDDED */
+#endif /* !XNU_TARGET_OS_OSX */
 
 #define PAGE_ASSERT_WAIT(m, interruptible)                      \
 	        (((m)->vmp_wanted = TRUE),                      \
@@ -1700,12 +1697,6 @@ extern void memorystatus_pages_update(unsigned int pages_avail);
 #define VM_PAGE_FREE(p)                         \
 	        MACRO_BEGIN                     \
 	        vm_page_free_unlocked(p, TRUE); \
-	        MACRO_END
-
-#define VM_PAGE_GRAB_FICTITIOUS(M)                                      \
-	        MACRO_BEGIN                                             \
-	        while ((M = vm_page_grab_fictitious()) == VM_PAGE_NULL) \
-	                vm_page_more_fictitious();                      \
 	        MACRO_END
 
 #define VM_PAGE_WAIT()          ((void)vm_page_wait(THREAD_UNINT))
@@ -1860,5 +1851,7 @@ extern void start_secluded_suppression(task_t);
 extern void stop_secluded_suppression(task_t);
 #endif /* CONFIG_SECLUDED_MEMORY */
 
+extern void vm_retire_boot_pages(void);
+extern uint32_t vm_retired_pages_count(void);
 
 #endif  /* _VM_VM_PAGE_H_ */

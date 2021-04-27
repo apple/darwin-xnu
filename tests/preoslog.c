@@ -4,6 +4,8 @@
 #include <string.h>
 #include <errno.h>
 
+#include "test_utils.h"
+
 /*
  * Any change to this structure must be reflected in iBoot / MacEFI / PanicDump / XNU Tests and vice versa.
  */
@@ -37,21 +39,6 @@ check_for_substrings(const char* string, size_t len)
 	}
 
 	return res;
-}
-
-static boolean_t
-is_development_kernel(void)
-{
-	int ret;
-	int dev = 0;
-	size_t dev_size = sizeof(dev);
-
-	ret = sysctlbyname("kern.development", &dev, &dev_size, NULL, 0);
-	if (ret != 0) {
-		return FALSE;
-	}
-
-	return dev != 0;
 }
 
 /*

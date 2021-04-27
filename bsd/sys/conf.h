@@ -206,14 +206,6 @@ extern uint64_t cdevsw_flags[];
 #define CDEVSW_IS_PTS        0x08
 
 struct thread;
-
-typedef struct devsw_lock {
-	TAILQ_ENTRY(devsw_lock)         dl_list;
-	struct thread                   *dl_thread;
-	dev_t                           dl_dev;
-	int                             dl_mode;
-} *devsw_lock_t;
-
 #endif /* BSD_KERNEL_PRIVATE */
 
 
@@ -295,7 +287,6 @@ extern struct swdevt swdevt[];
  */
 __BEGIN_DECLS
 #ifdef KERNEL_PRIVATE
-void devsw_init(void);
 extern struct cdevsw cdevsw[];
 extern int cdevsw_setkqueueok(int, const struct cdevsw*, int);
 #endif /* KERNEL_PRIVATE */

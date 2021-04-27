@@ -82,9 +82,8 @@ extern const char *syscallnames[];
 #define LOADABLE_SYSCALL(a) 0 /* Not pertinent to Darwin. */
 #define LOADED_SYSCALL(a) 1 /* Not pertinent to Darwin. */
 
-extern lck_attr_t* dtrace_lck_attr;
-extern lck_grp_t* dtrace_lck_grp;
-static lck_mtx_t        dtrace_systrace_lock;           /* probe state lock */
+static LCK_MTX_DECLARE_ATTR(dtrace_systrace_lock,
+    &dtrace_lck_grp, &dtrace_lck_attr);           /* probe state lock */
 
 systrace_sysent_t *systrace_sysent = NULL;
 void (*systrace_probe)(dtrace_id_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
@@ -406,7 +405,6 @@ systrace_init(const struct sysent *actual, systrace_sysent_t **interposed)
 		s->stsy_underlying = a->sy_callc;
 		s->stsy_return_type = a->sy_return_type;
 	}
-	lck_mtx_init(&dtrace_systrace_lock, dtrace_lck_grp, dtrace_lck_attr);
 }
 
 
@@ -489,10 +487,12 @@ systrace_enable(void *arg, dtrace_id_t id, void *parg)
 
 	lck_mtx_lock(&dtrace_systrace_lock);
 	if (sysent[sysnum].sy_callc == systrace_sysent[sysnum].stsy_underlying) {
+		/* It is not possible to write to sysent[] directly because it is const. */
 		vm_offset_t dss = ptrauth_nop_cast(vm_offset_t, &dtrace_systrace_syscall);
 		ml_nofault_copy((vm_offset_t)&dss, (vm_offset_t)&sysent[sysnum].sy_callc, sizeof(vm_offset_t));
 	}
 	lck_mtx_unlock(&dtrace_systrace_lock);
+
 	return 0;
 }
 
@@ -507,9 +507,20 @@ systrace_disable(void *arg, dtrace_id_t id, void *parg)
 	    systrace_sysent[sysnum].stsy_return == DTRACE_IDNONE);
 
 	if (disable) {
+		/*
+		 * Usage of volatile protects the if statement below from being optimized away.
+		 *
+		 * Compilers are clever and know that const array values can't change in time
+		 * and the if below is always false. That is because it can't see that DTrace
+		 * injects dtrace_systrace_syscall dynamically and violates constness of the
+		 * array.
+		 */
+		volatile const struct sysent *syscallent = &sysent[sysnum];
+
 		lck_mtx_lock(&dtrace_systrace_lock);
-		if (sysent[sysnum].sy_callc == dtrace_systrace_syscall) {
-			ml_nofault_copy((vm_offset_t)&systrace_sysent[sysnum].stsy_underlying, (vm_offset_t)&sysent[sysnum].sy_callc, sizeof(systrace_sysent[sysnum].stsy_underlying));
+		if (syscallent->sy_callc == dtrace_systrace_syscall) {
+			ml_nofault_copy((vm_offset_t)&systrace_sysent[sysnum].stsy_underlying,
+			    (vm_offset_t)&syscallent->sy_callc, sizeof(vm_offset_t));
 		}
 		lck_mtx_unlock(&dtrace_systrace_lock);
 	}
@@ -605,10 +616,10 @@ typedef struct {
 #endif /* MACH_ASSERT */
 } mach_trap_t;
 
-extern const mach_trap_t              mach_trap_table[]; /* syscall_sw.h now declares this as const */
-extern int                      mach_trap_count;
+extern const mach_trap_t mach_trap_table[]; /* syscall_sw.h now declares this as const */
+extern const int         mach_trap_count;
 
-extern const char *mach_syscall_name_table[];
+extern const char *const mach_syscall_name_table[];
 
 /* XXX From osfmk/i386/bsd_i386.c */
 struct mach_call_args {
@@ -845,6 +856,7 @@ machtrace_enable(void *arg, dtrace_id_t id, void *parg)
 	lck_mtx_lock(&dtrace_systrace_lock);
 
 	if (mach_trap_table[sysnum].mach_trap_function == machtrace_sysent[sysnum].stsy_underlying) {
+		/* It is not possible to write to mach_trap_table[] directly because it is const. */
 		vm_offset_t dss = ptrauth_nop_cast(vm_offset_t, &dtrace_machtrace_syscall);
 		ml_nofault_copy((vm_offset_t)&dss, (vm_offset_t)&mach_trap_table[sysnum].mach_trap_function, sizeof(vm_offset_t));
 	}
@@ -865,10 +877,20 @@ machtrace_disable(void *arg, dtrace_id_t id, void *parg)
 	    machtrace_sysent[sysnum].stsy_return == DTRACE_IDNONE);
 
 	if (disable) {
-		lck_mtx_lock(&dtrace_systrace_lock);
+		/*
+		 * Usage of volatile protects the if statement below from being optimized away.
+		 *
+		 * Compilers are clever and know that const array values can't change in time
+		 * and the if below is always false. That is because it can't see that DTrace
+		 * injects dtrace_machtrace_syscall dynamically and violates constness of the
+		 * array.
+		 */
+		volatile const mach_trap_t *machtrap = &mach_trap_table[sysnum];
 
-		if (mach_trap_table[sysnum].mach_trap_function == (mach_call_t)dtrace_machtrace_syscall) {
-			ml_nofault_copy((vm_offset_t)&machtrace_sysent[sysnum].stsy_underlying, (vm_offset_t)&mach_trap_table[sysnum].mach_trap_function, sizeof(vm_offset_t));
+		lck_mtx_lock(&dtrace_systrace_lock);
+		if (machtrap->mach_trap_function == (mach_call_t)dtrace_machtrace_syscall) {
+			ml_nofault_copy((vm_offset_t)&machtrace_sysent[sysnum].stsy_underlying,
+			    (vm_offset_t)&machtrap->mach_trap_function, sizeof(vm_offset_t));
 		}
 		lck_mtx_unlock(&dtrace_systrace_lock);
 	}

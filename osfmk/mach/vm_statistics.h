@@ -309,6 +309,7 @@ typedef struct pmap_statistics  *pmap_statistics_t;
 #define VM_FLAGS_NO_CACHE       0x0010
 #define VM_FLAGS_RESILIENT_CODESIGN     0x0020
 #define VM_FLAGS_RESILIENT_MEDIA        0x0040
+#define VM_FLAGS_PERMANENT      0x0080
 #define VM_FLAGS_OVERWRITE      0x4000  /* delete any existing mappings first */
 /*
  * VM_FLAGS_SUPERPAGE_MASK
@@ -334,6 +335,7 @@ typedef struct pmap_statistics  *pmap_statistics_t;
 	                         VM_FLAGS_4GB_CHUNK |           \
 	                         VM_FLAGS_RANDOM_ADDR |         \
 	                         VM_FLAGS_NO_CACHE |            \
+	                         VM_FLAGS_PERMANENT |           \
 	                         VM_FLAGS_OVERWRITE |           \
 	                         VM_FLAGS_SUPERPAGE_MASK |      \
 	                         VM_FLAGS_ALIAS_MASK)
@@ -688,8 +690,9 @@ typedef struct {
 #define VM_KERN_MEMORY_SKYWALK          26
 #define VM_KERN_MEMORY_LTABLE           27
 #define VM_KERN_MEMORY_HV               28
+#define VM_KERN_MEMORY_RETIRED          29
 
-#define VM_KERN_MEMORY_FIRST_DYNAMIC    29
+#define VM_KERN_MEMORY_FIRST_DYNAMIC    30
 /* out of tags: */
 #define VM_KERN_MEMORY_ANY              255
 #define VM_KERN_MEMORY_COUNT            256

@@ -39,10 +39,12 @@ EXPORT_FILES = \
 	circle_queue.h \
 	clock.h \
 	coalition.h \
+	counter.h  \
 	cpu_number.h \
 	cpu_data.h \
 	energy_perf.h \
 	extmod_statistics.h \
+	hv_io_notifier.h \
 	hv_support.h \
 	hv_support_kext.h \
 	ipc_mig.h \
@@ -56,6 +58,7 @@ EXPORT_FILES = \
 	locks.h \
 	lock_group.h \
 	host.h \
+	hvg_hypercall.h \
 	mach_param.h \
 	macro_help.h \
 	mpqueue.h \

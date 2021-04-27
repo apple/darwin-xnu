@@ -65,8 +65,8 @@
 #include <uuid/uuid.h>
 
 extern int evh_debug;
-extern lck_grp_t        *el_lock_grp;
-extern lck_attr_t       *el_lock_attr;
+extern lck_grp_t        el_lock_grp;
+extern lck_attr_t       el_lock_attr;
 extern struct eventhandler_entry_arg eventhandler_entry_dummy_arg;
 
 struct eventhandler_lists_ctxt {
@@ -101,13 +101,13 @@ struct eventhandler_list {
 
 typedef struct eventhandler_entry       *eventhandler_tag;
 
-#define EHL_LOCK_INIT(p)        lck_mtx_init(&(p)->el_lock, el_lock_grp, el_lock_attr)
+#define EHL_LOCK_INIT(p)        lck_mtx_init(&(p)->el_lock, &el_lock_grp, &el_lock_attr)
 #define EHL_LOCK(p)             lck_mtx_lock(&(p)->el_lock)
 #define EHL_LOCK_SPIN(p)        lck_mtx_lock_spin(&(p)->el_lock)
 #define EHL_LOCK_CONVERT(p)     lck_mtx_convert_spin(&(p)->el_lock)
 #define EHL_UNLOCK(p)           lck_mtx_unlock(&(p)->el_lock)
 #define EHL_LOCK_ASSERT(p, x)   LCK_MTX_ASSERT(&(p)->el_lock, x)
-#define EHL_LOCK_DESTROY(p)     lck_mtx_destroy(&(p)->el_lock, el_lock_grp)
+#define EHL_LOCK_DESTROY(p)     lck_mtx_destroy(&(p)->el_lock, &el_lock_grp)
 
 #define evhlog(x)       do { if (evh_debug >= 1) log x; } while (0)
 

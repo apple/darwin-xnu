@@ -13,6 +13,7 @@ _ml_get_conttime_offset
 _ml_get_wake_timebase
 _ml_set_reset_time
 _proc_getcdhash
+_ml_cpu_init_completed
 _cpu_broadcast_xcall
 _cpu_xcall
 _cpu_broadcast_immediate_xcall

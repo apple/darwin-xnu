@@ -1058,7 +1058,7 @@ debugger_collect_diagnostics(unsigned int exception, unsigned int code, unsigned
 	 * conventional sense.
 	 */
 	if (debugger_current_op == DBOP_PANIC || ((debugger_current_op == DBOP_DEBUGGER) && debugger_is_panic))
-#endif
+#endif /* __x86_64__ */
 	{
 		kdp_callouts(KDP_EVENT_PANICLOG);
 
@@ -1075,6 +1075,7 @@ debugger_collect_diagnostics(unsigned int exception, unsigned int code, unsigned
 
 		/* DEBUGGER_OPTION_PANICLOGANDREBOOT is used for two finger resets on embedded so we get a paniclog */
 		if (debugger_panic_options & DEBUGGER_OPTION_PANICLOGANDREBOOT) {
+			PEHaltRestart(kPEPanicDiagnosticsDone);
 			PEHaltRestart(kPEPanicRestartCPUNoCallouts);
 		}
 	}
@@ -1087,6 +1088,7 @@ debugger_collect_diagnostics(unsigned int exception, unsigned int code, unsigned
 	 */
 	if ((debugger_panic_options & DEBUGGER_OPTION_SKIP_LOCAL_COREDUMP) &&
 	    (debug_boot_arg & DB_REBOOT_POST_CORE)) {
+		PEHaltRestart(kPEPanicDiagnosticsDone);
 		kdp_machine_reboot_type(kPEPanicRestartCPU, debugger_panic_options);
 	}
 
@@ -1097,7 +1099,7 @@ debugger_collect_diagnostics(unsigned int exception, unsigned int code, unsigned
 	if (on_device_corefile_enabled()) {
 		if (!kdp_has_polled_corefile()) {
 			if (debug_boot_arg & (DB_KERN_DUMP_ON_PANIC | DB_KERN_DUMP_ON_NMI)) {
-				paniclog_append_noflush("skipping local kernel core because core file could not be opened prior to panic (error : 0x%x)",
+				paniclog_append_noflush("skipping local kernel core because core file could not be opened prior to panic (error : 0x%x)\n",
 				    kdp_polled_corefile_error());
 #if defined(__arm__) || defined(__arm64__)
 				panic_info->eph_panic_flags |= EMBEDDED_PANIC_HEADER_FLAG_COREDUMP_FAILED;
@@ -1112,7 +1114,7 @@ debugger_collect_diagnostics(unsigned int exception, unsigned int code, unsigned
 		}
 #if XNU_MONITOR
 		else if ((pmap_get_cpu_data()->ppl_state == PPL_STATE_PANIC) && (debug_boot_arg & (DB_KERN_DUMP_ON_PANIC | DB_KERN_DUMP_ON_NMI))) {
-			paniclog_append_noflush("skipping local kernel core because the PPL is in PANIC state");
+			paniclog_append_noflush("skipping local kernel core because the PPL is in PANIC state\n");
 			panic_info->eph_panic_flags |= EMBEDDED_PANIC_HEADER_FLAG_COREDUMP_FAILED;
 			paniclog_flush();
 		}
@@ -1145,9 +1147,15 @@ debugger_collect_diagnostics(unsigned int exception, unsigned int code, unsigned
 			 */
 			if ((debug_boot_arg & DB_REBOOT_POST_CORE) &&
 			    ((ret == 0) || (debugger_panic_options & DEBUGGER_OPTION_ATTEMPTCOREDUMPANDREBOOT))) {
+				PEHaltRestart(kPEPanicDiagnosticsDone);
 				kdp_machine_reboot_type(kPEPanicRestartCPU, debugger_panic_options);
 			}
 		}
+	}
+
+	if (debugger_current_op == DBOP_PANIC ||
+	    ((debugger_current_op == DBOP_DEBUGGER) && debugger_is_panic)) {
+		PEHaltRestart(kPEPanicDiagnosticsDone);
 	}
 
 	if (debug_boot_arg & DB_REBOOT_ALWAYS) {
@@ -1179,6 +1187,11 @@ debugger_collect_diagnostics(unsigned int exception, unsigned int code, unsigned
 		panic_spin_shmcon();
 	}
 #endif /* defined(__arm__) || defined(__arm64__) */
+
+#else /* CONFIG_KDP_INTERACTIVE_DEBUGGING */
+
+	PEHaltRestart(kPEPanicDiagnosticsDone);
+
 #endif /* CONFIG_KDP_INTERACTIVE_DEBUGGING */
 
 	if (!panicDebugging) {
@@ -1565,10 +1578,6 @@ extern unsigned int     inuse_ptepages_count;
 extern long long alloc_ptepages_count;
 #endif
 
-extern boolean_t panic_include_zprint;
-extern mach_memory_info_t *panic_kext_memory_info;
-extern vm_size_t panic_kext_memory_size;
-
 __private_extern__ void
 panic_display_zprint(void)
 {
@@ -1579,10 +1588,10 @@ panic_display_zprint(void)
 		zone_index_foreach(i) {
 			if (ml_nofault_copy((vm_offset_t)&zone_array[i],
 			    (vm_offset_t)&zone_copy, sizeof(struct zone)) == sizeof(struct zone)) {
-				if (zone_copy.page_count > atop(1024 * 1024)) {
+				if (zone_copy.z_wired_cur > atop(1024 * 1024)) {
 					paniclog_append_noflush("%-8s%-20s %10llu %10lu\n",
 					    zone_heap_name(&zone_copy),
-					    zone_copy.z_name, ptoa_64(zone_copy.page_count),
+					    zone_copy.z_name, (uint64_t)zone_size_wired(&zone_copy),
 					    (uintptr_t)zone_size_free(&zone_copy));
 				}
 			}
@@ -1623,8 +1632,6 @@ panic_display_ecc_errors(void)
 #endif /* CONFIG_ECC_LOGGING */
 
 #if CONFIG_ZLEAKS
-extern boolean_t        panic_include_ztrace;
-extern struct ztrace* top_ztrace;
 void panic_print_symbol_name(vm_address_t search);
 
 /*

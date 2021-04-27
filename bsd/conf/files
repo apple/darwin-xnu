@@ -167,6 +167,7 @@ bsd/vfs/vfs_conf.c			standard
 bsd/vfs/vfs_conf.c			optional config_nfs4
 bsd/vfs/vfs_fslog.c			standard
 bsd/vfs/vfs_init.c			standard
+bsd/vfs/vfs_io_compression_stats.c	optional config_io_compression_stats
 bsd/vfs/vfs_lookup.c			standard
 bsd/vfs/vfs_quota.c			optional quota
 bsd/vfs/vfs_subr.c			standard
@@ -457,6 +458,7 @@ bsd/kern/subr_log.c			standard
 bsd/kern/subr_prf.c			standard
 bsd/kern/subr_sbuf.c			standard
 bsd/kern/subr_xxx.c			standard
+bsd/kern/counter_test.c			optional development
 bsd/kern/sys_eventlink.c		standard
 bsd/kern/sys_generic.c			standard
 bsd/kern/sys_pipe.c			standard

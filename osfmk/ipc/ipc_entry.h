@@ -235,12 +235,6 @@ extern kern_return_t ipc_entry_claim(
 	mach_port_name_t        *namep,
 	ipc_entry_t             *entryp);
 
-/* Allocate an entry in a space */
-extern kern_return_t ipc_entry_get(
-	ipc_space_t             space,
-	mach_port_name_t        *namep,
-	ipc_entry_t             *entryp);
-
 /* Allocate an entry in a space, growing the space if necessary */
 extern kern_return_t ipc_entry_alloc(
 	ipc_space_t             space,

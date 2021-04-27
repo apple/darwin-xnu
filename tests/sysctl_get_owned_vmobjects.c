@@ -89,7 +89,18 @@ main_test(void)
 	T_EXPECT_EQ(out_buffer->entries, 1ULL, "should have 1 vm object\n");
 	T_EXPECT_NE(out_buffer->data[0].object_id, 0ULL, "vm_object_id should not be 0\n");
 
-	/* get the list for the current process */
+	/* get the list for the current process with an overly large size */
+	out_size = SIZE_MAX;
+	memset(out_buffer, 0, output_size);
+	ret = sysctlbyname(g_sysctl_name, out_buffer, &out_size, &task_name, sizeof(task_name));
+
+	T_QUIET;
+	T_EXPECT_EQ(ret, 0, "sysctlbyname failed\n");
+	T_EXPECT_EQ(out_size, 2 * sizeof(vm_object_query_data_t) + sizeof(int64_t), "sysctl return size is incorrect\n");
+	T_EXPECT_EQ(out_buffer->entries, 2ULL, "should have 2 vm objects\n");
+	T_EXPECT_NE(out_buffer->data[0].object_id, 0ULL, "vm_object_id should not be 0\n");
+
+	/* get the list for the current process with the correct output size */
 	out_size = output_size;
 	memset(out_buffer, 0, output_size);
 	ret = sysctlbyname(g_sysctl_name, out_buffer, &out_size, &task_name, sizeof(task_name));

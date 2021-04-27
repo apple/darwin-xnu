@@ -30,3 +30,17 @@
 
 #define super IOService
 OSDefineMetaClassAndAbstractStructors(IOPMGR, IOService);
+
+void
+IOPMGR::enableCPUCore(unsigned int cpu_id, uint64_t entry_pa)
+{
+	// Fall back to the legacy method if the subclass doesn't override the
+	// new method.
+	enableCPUCore(cpu_id);
+}
+
+void
+IOPMGR::enableCPUCore(unsigned int cpu_id)
+{
+	panic("enableCPUCore is unimplemented");
+}

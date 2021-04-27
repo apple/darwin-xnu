@@ -237,7 +237,7 @@ sock_bind(socket_t sock, const struct sockaddr *to)
 	}
 
 	if (to->sa_len > sizeof(ss)) {
-		MALLOC(sa, struct sockaddr *, to->sa_len, M_SONAME, M_WAITOK);
+		sa = kheap_alloc(KHEAP_TEMP, to->sa_len, Z_WAITOK);
 		if (sa == NULL) {
 			return ENOBUFS;
 		}
@@ -250,7 +250,7 @@ sock_bind(socket_t sock, const struct sockaddr *to)
 	error = sobindlock(sock, sa, 1);        /* will lock socket */
 
 	if (sa != NULL && want_free == TRUE) {
-		FREE(sa, M_SONAME);
+		kheap_free(KHEAP_TEMP, sa, sa->sa_len);
 	}
 
 	return error;
@@ -270,8 +270,8 @@ sock_connect(socket_t sock, const struct sockaddr *to, int flags)
 	}
 
 	if (to->sa_len > sizeof(ss)) {
-		MALLOC(sa, struct sockaddr *, to->sa_len, M_SONAME,
-		    (flags & MSG_DONTWAIT) ? M_NOWAIT : M_WAITOK);
+		sa = kheap_alloc(KHEAP_TEMP, to->sa_len,
+		    (flags & MSG_DONTWAIT) ? Z_NOWAIT : Z_WAITOK);
 		if (sa == NULL) {
 			return ENOBUFS;
 		}
@@ -323,7 +323,7 @@ out:
 	socket_unlock(sock, 1);
 
 	if (sa != NULL && want_free == TRUE) {
-		FREE(sa, M_SONAME);
+		kheap_free(KHEAP_TEMP, sa, sa->sa_len);
 	}
 
 	return error;
@@ -475,9 +475,8 @@ sogetaddr_locked(struct socket *so, struct sockaddr **psa, int peer)
 
 	if (error == 0 && *psa == NULL) {
 		error = ENOMEM;
-	} else if (error != 0 && *psa != NULL) {
+	} else if (error != 0) {
 		FREE(*psa, M_SONAME);
-		*psa = NULL;
 	}
 	return error;
 }
@@ -501,9 +500,7 @@ sock_getaddr(socket_t sock, struct sockaddr **psa, int peer)
 void
 sock_freeaddr(struct sockaddr *sa)
 {
-	if (sa != NULL) {
-		FREE(sa, M_SONAME);
-	}
+	FREE(sa, M_SONAME);
 }
 
 errno_t
@@ -806,9 +803,7 @@ cleanup:
 	if (control != NULL) {
 		m_freem(control);
 	}
-	if (fromsa != NULL) {
-		FREE(fromsa, M_SONAME);
-	}
+	FREE(fromsa, M_SONAME);
 	return error;
 }
 

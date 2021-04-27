@@ -97,12 +97,16 @@ fq_alloc(classq_pkt_type_t ptype)
 	if (ptype == QP_MBUF) {
 		MBUFQ_INIT(&fq->fq_mbufq);
 	}
+	CLASSQ_PKT_INIT(&fq->fq_dq_head);
+	CLASSQ_PKT_INIT(&fq->fq_dq_tail);
+	fq->fq_in_dqlist = false;
 	return fq;
 }
 
 void
 fq_destroy(fq_t *fq)
 {
+	VERIFY(fq->fq_flags & FQF_DESTROYED);
 	VERIFY(fq_empty(fq));
 	VERIFY(!(fq->fq_flags & (FQF_NEW_FLOW | FQF_OLD_FLOW)));
 	VERIFY(fq->fq_bytes == 0);
@@ -127,6 +131,10 @@ fq_detect_dequeue_stall(fq_if_t *fqs, fq_t *flowq, fq_if_classq_t *fq_cl,
 		 */
 		FQ_SET_DELAY_HIGH(flowq);
 		fq_cl->fcl_stat.fcl_dequeue_stall++;
+		os_log_error(OS_LOG_DEFAULT, "%s: dequeue stall num: %d, "
+		    "scidx: %d, flow: 0x%x, iface: %s", __func__,
+		    fq_cl->fcl_stat.fcl_dequeue_stall, flowq->fq_sc_index,
+		    flowq->fq_flowhash, if_name(fqs->fqs_ifq->ifcq_ifp));
 	}
 }
 
@@ -314,8 +322,7 @@ fq_addq(fq_if_t *fqs, pktsched_pkt_t *pkt, fq_if_classq_t *fq_cl)
 
 	/* Set the return code correctly */
 	if (__improbable(fc_adv == 1 && droptype != DTYPE_FORCED)) {
-		if (fq_if_add_fcentry(fqs, pkt, pkt_flowid, pkt_flowsrc,
-		    fq_cl)) {
+		if (fq_if_add_fcentry(fqs, pkt, pkt_flowsrc, fq, fq_cl)) {
 			fq->fq_flags |= FQF_FLOWCTL_ON;
 			/* deliver flow control advisory error */
 			if (droptype == DTYPE_NODROP) {
@@ -375,7 +382,7 @@ fq_addq(fq_if_t *fqs, pktsched_pkt_t *pkt, fq_if_classq_t *fq_cl)
 				 */
 				if (fq_empty(fq) && !(fq->fq_flags &
 				    (FQF_NEW_FLOW | FQF_OLD_FLOW))) {
-					fq_if_destroy_flow(fqs, fq_cl, fq);
+					fq_if_destroy_flow(fqs, fq_cl, fq, true);
 					fq = NULL;
 				}
 			} else {
@@ -509,6 +516,11 @@ fq_getq_flow(fq_if_t *fqs, fq_t *fq, pktsched_pkt_t *pkt)
 		if (fq->fq_min_qdelay > fqs->fqs_target_qdelay) {
 			if (!FQ_IS_DELAYHIGH(fq)) {
 				FQ_SET_DELAY_HIGH(fq);
+				os_log_error(OS_LOG_DEFAULT,
+				    "%s: high delay idx: %d, %llu, flow: 0x%x, "
+				    "iface: %s", __func__, fq->fq_sc_index,
+				    fq->fq_min_qdelay, fq->fq_flowhash,
+				    if_name(fqs->fqs_ifq->ifcq_ifp));
 			}
 		} else {
 			FQ_CLEAR_DELAY_HIGH(fq);

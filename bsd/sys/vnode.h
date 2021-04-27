@@ -70,7 +70,9 @@
 #include <sys/kernel_types.h>
 #include <sys/param.h>
 #include <sys/signal.h>
-#endif
+#else
+#include <stdint.h>
+#endif /* KERNEL */
 
 /*
  * The vnode is the focus of all file activity in UNIX.  There is a
@@ -1513,6 +1515,30 @@ int     vfs_ctx_skipatime(vfs_context_t ctx);
 
 #endif
 
+/* Supported filesystem tags for vfs_[set|get]_thread_fs_private */
+#define FS_PRIVATE_TAG_APFS (1)
+
+/*!
+ *  @function vfs_set_thread_fs_private
+ *  @abstract Set the per-thread filesystem private data field.
+ *  @discussion Allows a filesystem to store an implementation specific value in the thread struct.
+ *  Note that this field is common to all filesystems thus re-entrancy should be taken into consideration.
+ *  @param tag Filesystem identification tag.
+ *  @param fs_private The value to be set.
+ *  @return 0 for success, ENOTSUP if the filesystem tag is not supported.
+ */
+int vfs_set_thread_fs_private(uint8_t tag, uint64_t fs_private);
+
+/*!
+ *  @function vfs_get_thread_fs_private
+ *  @abstract Return the per-thread filesystem private data field.
+ *  @discussion Returns the per-thread value that was set by vfs_set_thread_fs_private().
+ *  @param tag Filesystem identification tag.
+ *  @param fs_private The stored per-thread value.
+ *  @return 0 for success, ENOTSUP if the filesystem tag is not supported.
+ */
+int vfs_get_thread_fs_private(uint8_t tag, uint64_t *fs_private);
+
 /*!
  *  @function vflush
  *  @abstract Reclaim the vnodes associated with a mount.
@@ -2421,6 +2447,9 @@ vnode_t vfs_context_get_cwd(vfs_context_t); /* get cwd with iocount */
 int vnode_isnoflush(vnode_t);
 void vnode_setnoflush(vnode_t);
 void vnode_clearnoflush(vnode_t);
+#if CONFIG_IO_COMPRESSION_STATS
+void vnode_iocs_record_and_free(vnode_t);
+#endif /* CONFIG_IO_COMPRESSION_STATS */
 
 #define BUILDPATH_NO_FS_ENTER     0x1 /* Use cache values, do not enter file system */
 #define BUILDPATH_CHECKACCESS     0x2 /* Check if parents have search rights */
@@ -2438,5 +2467,35 @@ int vnode_issubdir(vnode_t vp, vnode_t dvp, int *is_subdir, vfs_context_t ctx);
 __END_DECLS
 
 #endif /* KERNEL */
+
+/*
+ * Structure for vnode level IO compression stats
+ */
+
+#define IOCS_BUFFER_NUM_SIZE_BUCKETS         10
+#define IOCS_BUFFER_MAX_BUCKET               9
+#define IOCS_BUFFER_NUM_COMPRESSION_BUCKETS  7
+#define IOCS_BLOCK_NUM_SIZE_BUCKETS          16
+
+struct io_compression_stats {
+	uint64_t uncompressed_size;
+	uint64_t compressed_size;
+	uint32_t buffer_size_compression_dist[IOCS_BUFFER_NUM_SIZE_BUCKETS][IOCS_BUFFER_NUM_COMPRESSION_BUCKETS];
+	uint32_t block_compressed_size_dist[IOCS_BLOCK_NUM_SIZE_BUCKETS];
+};
+typedef struct io_compression_stats *io_compression_stats_t;
+
+#define IOCS_SBE_PATH_LEN             128
+#define IOCS_PATH_START_BYTES_TO_COPY 108
+#define IOCS_PATH_END_BYTES_TO_COPY   20 /* Includes null termination */
+
+#define IOCS_SYSCTL_LIVE                  0x00000001
+#define IOCS_SYSCTL_STORE_BUFFER_RD_ONLY  0x00000002
+#define IOCS_SYSCTL_STORE_BUFFER_MARK     0x00000004
+
+struct iocs_store_buffer_entry {
+	char     path_name[IOCS_SBE_PATH_LEN];
+	struct io_compression_stats iocs;
+};
 
 #endif /* !_VNODE_H_ */

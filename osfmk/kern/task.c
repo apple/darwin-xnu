@@ -166,6 +166,7 @@
 #include <libkern/section_keywords.h>
 
 #include <mach-o/loader.h>
+#include <kdp/kdp_dyld.h>
 
 #include <kern/sfi.h>           /* picks up ledger.h */
 
@@ -212,6 +213,10 @@ expired_task_statistics_t               dead_task_statistics;
 LCK_SPIN_DECLARE_ATTR(dead_task_statistics_lock, &task_lck_grp, &task_lck_attr);
 
 ledger_template_t task_ledger_template = NULL;
+
+/* global lock for task_dyld_process_info_notify_{register, deregister, get_trap} */
+LCK_GRP_DECLARE(g_dyldinfo_mtx_grp, "g_dyldinfo");
+LCK_MTX_DECLARE(g_dyldinfo_mtx, &g_dyldinfo_mtx_grp);
 
 SECURITY_READ_ONLY_LATE(struct _task_ledger_indices) task_ledgers __attribute__((used)) =
 {.cpu_time = -1,
@@ -1318,6 +1323,8 @@ task_create_internal(
 		return KERN_RESOURCE_SHORTAGE;
 	}
 
+	counter_alloc(&(new_task->faults));
+
 #if defined(HAS_APPLE_PAC)
 	ml_task_set_rop_pid(new_task, parent_task, inherit_memory);
 	ml_task_set_jop_pid(new_task, parent_task, inherit_memory);
@@ -1447,6 +1454,8 @@ task_create_internal(
 	new_task->requested_policy = default_task_requested_policy;
 	new_task->effective_policy = default_task_effective_policy;
 
+	new_task->task_shared_region_slide = -1;
+
 	task_importance_init_from_parent(new_task, parent_task);
 
 	if (parent_task != TASK_NULL) {
@@ -1551,7 +1560,6 @@ task_create_internal(
 		new_task->total_system_time = 0;
 		new_task->total_ptime = 0;
 		new_task->total_runnable_time = 0;
-		new_task->faults = 0;
 		new_task->pageins = 0;
 		new_task->cow_faults = 0;
 		new_task->messages_sent = 0;
@@ -1700,7 +1708,7 @@ task_rollup_accounting_info(task_t to_task, task_t from_task)
 	to_task->total_system_time = from_task->total_system_time;
 	to_task->total_ptime = from_task->total_ptime;
 	to_task->total_runnable_time = from_task->total_runnable_time;
-	to_task->faults = from_task->faults;
+	counter_add(&to_task->faults, counter_load(&from_task->faults));
 	to_task->pageins = from_task->pageins;
 	to_task->cow_faults = from_task->cow_faults;
 	to_task->decompressions = from_task->decompressions;
@@ -1905,6 +1913,8 @@ task_deallocate(
 #if TASK_REFERENCE_LEAK_DEBUG
 	btlog_remove_entries_for_element(task_ref_btlog, task);
 #endif
+
+	counter_free(&task->faults);
 
 #if CONFIG_COALITIONS
 	task_release_coalitions(task);
@@ -2270,7 +2280,7 @@ task_mark_corpse(task_t task)
 	task_add_to_corpse_task_list(task);
 
 	task_start_halt(task);
-	thread_terminate_internal(self_thread);
+	thread_terminate_internal(self_thread, TH_TERMINATE_OPTION_NONE);
 
 	(void) thread_interrupt_level(wsave);
 	assert(task->halting == TRUE);
@@ -2298,6 +2308,7 @@ task_clear_corpse(task_t task)
 	{
 		thread_mtx_lock(th_iter);
 		th_iter->inspection = FALSE;
+		ipc_thread_disable(th_iter);
 		thread_mtx_unlock(th_iter);
 	}
 
@@ -2356,7 +2367,7 @@ task_port_with_flavor_notify(mach_msg_header_t *msg)
 		ip_unlock(port);
 		return;
 	}
-	task = (task_t)port->ip_kobject;
+	task = (task_t)ipc_kobject_get(port);
 	kotype = ip_kotype(port);
 	if (task != TASK_NULL) {
 		assert((IKOT_TASK_READ == kotype) || (IKOT_TASK_INSPECT == kotype));
@@ -2369,29 +2380,40 @@ task_port_with_flavor_notify(mach_msg_header_t *msg)
 		return;
 	}
 
+	if (kotype == IKOT_TASK_READ) {
+		flavor = TASK_FLAVOR_READ;
+	} else {
+		flavor = TASK_FLAVOR_INSPECT;
+	}
+
 	itk_lock(task);
 	ip_lock(port);
-	require_ip_active(port);
 	/*
+	 * If the port is no longer active, then ipc_task_terminate() ran
+	 * and destroyed the kobject already. Just deallocate the task
+	 * ref we took and go away.
+	 *
+	 * It is also possible that several nsrequests are in flight,
+	 * only one shall NULL-out the port entry, and this is the one
+	 * that gets to dealloc the port.
+	 *
 	 * Check for a stale no-senders notification. A call to any function
 	 * that vends out send rights to this port could resurrect it between
 	 * this notification being generated and actually being handled here.
 	 */
-	if (port->ip_srights > 0) {
+	if (!ip_active(port) ||
+	    task->itk_task_ports[flavor] != port ||
+	    port->ip_srights > 0) {
 		ip_unlock(port);
 		itk_unlock(task);
 		task_deallocate(task);
 		return;
 	}
 
-	if (kotype == IKOT_TASK_READ) {
-		flavor = TASK_FLAVOR_READ;
-	} else {
-		flavor = TASK_FLAVOR_INSPECT;
-	}
-	assert(task->itk_self[flavor] == port);
-	task->itk_self[flavor] = IP_NULL;
-	port->ip_kobject = IKOT_NONE;
+	assert(task->itk_task_ports[flavor] == port);
+	task->itk_task_ports[flavor] = IP_NULL;
+
+	ipc_kobject_set_atomically(port, IKO_NULL, IKOT_NONE);
 	ip_unlock(port);
 	itk_unlock(task);
 	task_deallocate(task);
@@ -2705,7 +2727,7 @@ task_terminate_internal(
 	 *	Terminate each thread in the task.
 	 */
 	queue_iterate(&task->threads, thread, thread_t, task_threads) {
-		thread_terminate_internal(thread);
+		thread_terminate_internal(thread, TH_TERMINATE_OPTION_NONE);
 	}
 
 #ifdef MACH_BSD
@@ -2931,7 +2953,7 @@ task_start_halt_locked(task_t task, boolean_t should_mark_corpse)
 			thread_mtx_unlock(thread);
 		}
 		if (thread != self) {
-			thread_terminate_internal(thread);
+			thread_terminate_internal(thread, TH_TERMINATE_OPTION_NONE);
 		}
 	}
 	task->dispatchqueue_offset = dispatchqueue_offset;
@@ -3224,6 +3246,8 @@ task_threads_internal(
 		return KERN_INVALID_ARGUMENT;
 	}
 
+	assert(flavor <= THREAD_FLAVOR_INSPECT);
+
 	for (;;) {
 		task_lock(task);
 		if (!task->active) {
@@ -3315,8 +3339,14 @@ task_threads_internal(
 
 		switch (flavor) {
 		case THREAD_FLAVOR_CONTROL:
-			for (i = 0; i < actual; ++i) {
-				((ipc_port_t *) thread_list)[i] = convert_thread_to_port(thread_list[i]);
+			if (task == current_task()) {
+				for (i = 0; i < actual; ++i) {
+					((ipc_port_t *) thread_list)[i] = convert_thread_to_port_pinned(thread_list[i]);
+				}
+			} else {
+				for (i = 0; i < actual; ++i) {
+					((ipc_port_t *) thread_list)[i] = convert_thread_to_port(thread_list[i]);
+				}
 			}
 			break;
 		case THREAD_FLAVOR_READ:
@@ -3329,8 +3359,6 @@ task_threads_internal(
 				((ipc_port_t *) thread_list)[i] = convert_thread_inspect_to_port(thread_list[i]);
 			}
 			break;
-		default:
-			return KERN_INVALID_ARGUMENT;
 		}
 	}
 
@@ -3550,7 +3578,8 @@ task_suspend(
 	 * notification on that port (if none outstanding).
 	 */
 	(void)ipc_kobject_make_send_lazy_alloc_port((ipc_port_t *) &task->itk_resume,
-	    (ipc_kobject_t)task, IKOT_TASK_RESUME, true, OS_PTRAUTH_DISCRIMINATOR("task.itk_resume"));
+	    (ipc_kobject_t)task, IKOT_TASK_RESUME, IPC_KOBJECT_ALLOC_NONE, true,
+	    OS_PTRAUTH_DISCRIMINATOR("task.itk_resume"));
 	port = task->itk_resume;
 	task_unlock(task);
 
@@ -3559,12 +3588,19 @@ task_suspend(
 	 * but we'll look it up when calling a traditional resume.  Any IPC operations that
 	 * deallocate the send right will auto-release the suspension.
 	 */
-	if ((kr = ipc_kmsg_copyout_object(current_task()->itk_space, ip_to_object(port),
-	    MACH_MSG_TYPE_MOVE_SEND, NULL, NULL, &name)) != KERN_SUCCESS) {
-		printf("warning: %s(%d) failed to copyout suspension token for pid %d with error: %d\n",
-		    proc_name_address(current_task()->bsd_info), proc_pid(current_task()->bsd_info),
+	if (IP_VALID(port)) {
+		kr = ipc_object_copyout(current_space(), ip_to_object(port),
+		    MACH_MSG_TYPE_MOVE_SEND, IPC_OBJECT_COPYOUT_FLAGS_NONE,
+		    NULL, NULL, &name);
+	} else {
+		kr = KERN_SUCCESS;
+	}
+	if (kr != KERN_SUCCESS) {
+		printf("warning: %s(%d) failed to copyout suspension "
+		    "token for pid %d with error: %d\n",
+		    proc_name_address(current_task()->bsd_info),
+		    proc_pid(current_task()->bsd_info),
 		    task_pid(task), kr);
-		return kr;
 	}
 
 	return kr;
@@ -4622,6 +4658,7 @@ task_info(
 {
 	kern_return_t error = KERN_SUCCESS;
 	mach_msg_type_number_t  original_task_info_count;
+	bool is_kernel_task = (task == kernel_task);
 
 	if (task == TASK_NULL) {
 		return KERN_INVALID_ARGUMENT;
@@ -5135,7 +5172,7 @@ task_info(
 		events_info = (task_events_info_t) task_info_out;
 
 
-		events_info->faults = task->faults;
+		events_info->faults = (int32_t) MIN(counter_load(&task->faults), INT32_MAX);
 		events_info->pageins = task->pageins;
 		events_info->cow_faults = task->cow_faults;
 		events_info->messages_sent = task->messages_sent;
@@ -5233,11 +5270,19 @@ task_info(
 
 		vm_info = (task_vm_info_t)task_info_out;
 
-		if (task == kernel_task) {
+		/*
+		 * Do not hold both the task and map locks,
+		 * so convert the task lock into a map reference,
+		 * drop the task lock, then lock the map.
+		 */
+		if (is_kernel_task) {
 			map = kernel_map;
-			/* no lock */
+			task_unlock(task);
+			/* no lock, no reference */
 		} else {
 			map = task->map;
+			vm_map_reference(map);
+			task_unlock(task);
 			vm_map_lock_read(map);
 		}
 
@@ -5268,7 +5313,7 @@ task_info(
 		vm_info->purgeable_volatile_pmap = 0;
 		vm_info->purgeable_volatile_resident = 0;
 		vm_info->purgeable_volatile_virtual = 0;
-		if (task == kernel_task) {
+		if (is_kernel_task) {
 			/*
 			 * We do not maintain the detailed stats for the
 			 * kernel_pmap, so just count everything as
@@ -5318,16 +5363,41 @@ task_info(
 		}
 		*task_info_count = TASK_VM_INFO_REV0_COUNT;
 
+		if (original_task_info_count >= TASK_VM_INFO_REV2_COUNT) {
+			/* must be captured while we still have the map lock */
+			vm_info->min_address = map->min_offset;
+			vm_info->max_address = map->max_offset;
+		}
+
+		/*
+		 * Done with vm map things, can drop the map lock and reference,
+		 * and take the task lock back.
+		 *
+		 * Re-validate that the task didn't die on us.
+		 */
+		if (!is_kernel_task) {
+			vm_map_unlock_read(map);
+			vm_map_deallocate(map);
+		}
+		map = VM_MAP_NULL;
+
+		task_lock(task);
+
+		if ((task != current_task()) && (!task->active)) {
+			error = KERN_INVALID_ARGUMENT;
+			break;
+		}
+
 		if (original_task_info_count >= TASK_VM_INFO_REV1_COUNT) {
 			vm_info->phys_footprint =
 			    (mach_vm_size_t) get_task_phys_footprint(task);
 			*task_info_count = TASK_VM_INFO_REV1_COUNT;
 		}
 		if (original_task_info_count >= TASK_VM_INFO_REV2_COUNT) {
-			vm_info->min_address = map->min_offset;
-			vm_info->max_address = map->max_offset;
+			/* data was captured above */
 			*task_info_count = TASK_VM_INFO_REV2_COUNT;
 		}
+
 		if (original_task_info_count >= TASK_VM_INFO_REV3_COUNT) {
 			ledger_get_lifetime_max(task->ledger,
 			    task_ledgers.phys_footprint,
@@ -5411,10 +5481,6 @@ task_info(
 			}
 			vm_info->decompressions = total;
 			*task_info_count = TASK_VM_INFO_REV5_COUNT;
-		}
-
-		if (task != kernel_task) {
-			vm_map_unlock_read(map);
 		}
 
 		break;
@@ -5560,7 +5626,7 @@ task_info(
  * checks on task_port.
  *
  * In the case of TASK_DYLD_INFO, we require the more
- * privileged task_port not the less-privileged task_name_port.
+ * privileged task_read_port not the less-privileged task_name_port.
  *
  */
 kern_return_t
@@ -5574,7 +5640,7 @@ task_info_from_user(
 	kern_return_t ret;
 
 	if (flavor == TASK_DYLD_INFO) {
-		task = convert_port_to_task(task_port);
+		task = convert_port_to_task_read(task_port);
 	} else {
 		task = convert_port_to_task_name(task_port);
 	}
@@ -5584,6 +5650,298 @@ task_info_from_user(
 	task_deallocate(task);
 
 	return ret;
+}
+
+/*
+ * Routine: task_dyld_process_info_update_helper
+ *
+ * Release send rights in release_ports.
+ *
+ * If no active ports found in task's dyld notifier array, unset the magic value
+ * in user space to indicate so.
+ *
+ * Condition:
+ *      task's itk_lock is locked, and is unlocked upon return.
+ *      Global g_dyldinfo_mtx is locked, and is unlocked upon return.
+ */
+void
+task_dyld_process_info_update_helper(
+	task_t                  task,
+	size_t                  active_count,
+	vm_map_address_t        magic_addr,    /* a userspace address */
+	ipc_port_t             *release_ports,
+	size_t                  release_count)
+{
+	void *notifiers_ptr = NULL;
+
+	assert(release_count <= DYLD_MAX_PROCESS_INFO_NOTIFY_COUNT);
+
+	if (active_count == 0) {
+		assert(task->itk_dyld_notify != NULL);
+		notifiers_ptr = task->itk_dyld_notify;
+		task->itk_dyld_notify = NULL;
+		itk_unlock(task);
+
+		kfree(notifiers_ptr, (vm_size_t)sizeof(ipc_port_t) * DYLD_MAX_PROCESS_INFO_NOTIFY_COUNT);
+		(void)copyoutmap_atomic32(task->map, MACH_PORT_NULL, magic_addr); /* unset magic */
+	} else {
+		itk_unlock(task);
+		(void)copyoutmap_atomic32(task->map, (mach_port_name_t)DYLD_PROCESS_INFO_NOTIFY_MAGIC,
+		    magic_addr);     /* reset magic */
+	}
+
+	lck_mtx_unlock(&g_dyldinfo_mtx);
+
+	for (size_t i = 0; i < release_count; i++) {
+		ipc_port_release_send(release_ports[i]);
+	}
+}
+
+/*
+ * Routine: task_dyld_process_info_notify_register
+ *
+ * Insert a send right to target task's itk_dyld_notify array. Allocate kernel
+ * memory for the array if it's the first port to be registered. Also cleanup
+ * any dead rights found in the array.
+ *
+ * Consumes sright if returns KERN_SUCCESS, otherwise MIG will destroy it.
+ *
+ * Args:
+ *     task:   Target task for the registration.
+ *     sright: A send right.
+ *
+ * Returns:
+ *     KERN_SUCCESS: Registration succeeded.
+ *     KERN_INVALID_TASK: task is invalid.
+ *     KERN_INVALID_RIGHT: sright is invalid.
+ *     KERN_DENIED: Security policy denied this call.
+ *     KERN_RESOURCE_SHORTAGE: Kernel memory allocation failed.
+ *     KERN_NO_SPACE: No available notifier port slot left for this task.
+ *     KERN_RIGHT_EXISTS: The notifier port is already registered and active.
+ *
+ *     Other error code see task_info().
+ *
+ * See Also:
+ *     task_dyld_process_info_notify_get_trap() in mach_kernelrpc.c
+ */
+kern_return_t
+task_dyld_process_info_notify_register(
+	task_t                  task,
+	ipc_port_t              sright)
+{
+	struct task_dyld_info dyld_info;
+	mach_msg_type_number_t info_count = TASK_DYLD_INFO_COUNT;
+	ipc_port_t release_ports[DYLD_MAX_PROCESS_INFO_NOTIFY_COUNT];
+	uint32_t release_count = 0, active_count = 0;
+	mach_vm_address_t ports_addr; /* a user space address */
+	kern_return_t kr;
+	boolean_t right_exists = false;
+	ipc_port_t *notifiers_ptr = NULL;
+	ipc_port_t *portp;
+
+	if (task == TASK_NULL || task == kernel_task) {
+		return KERN_INVALID_TASK;
+	}
+
+	if (!IP_VALID(sright)) {
+		return KERN_INVALID_RIGHT;
+	}
+
+#if CONFIG_MACF
+	if (mac_task_check_dyld_process_info_notify_register()) {
+		return KERN_DENIED;
+	}
+#endif
+
+	kr = task_info(task, TASK_DYLD_INFO, (task_info_t)&dyld_info, &info_count);
+	if (kr) {
+		return kr;
+	}
+
+	if (dyld_info.all_image_info_format == TASK_DYLD_ALL_IMAGE_INFO_32) {
+		ports_addr = (mach_vm_address_t)(dyld_info.all_image_info_addr +
+		    offsetof(struct user32_dyld_all_image_infos, notifyMachPorts));
+	} else {
+		ports_addr = (mach_vm_address_t)(dyld_info.all_image_info_addr +
+		    offsetof(struct user64_dyld_all_image_infos, notifyMachPorts));
+	}
+
+	if (task->itk_dyld_notify == NULL) {
+		notifiers_ptr = (ipc_port_t *)
+		    kalloc_flags(sizeof(ipc_port_t) * DYLD_MAX_PROCESS_INFO_NOTIFY_COUNT, Z_ZERO);
+		if (!notifiers_ptr) {
+			return KERN_RESOURCE_SHORTAGE;
+		}
+	}
+
+	lck_mtx_lock(&g_dyldinfo_mtx);
+	itk_lock(task);
+
+	if (task->itk_dyld_notify == NULL) {
+		task->itk_dyld_notify = notifiers_ptr;
+		notifiers_ptr = NULL;
+	}
+
+	assert(task->itk_dyld_notify != NULL);
+	/* First pass: clear dead names and check for duplicate registration */
+	for (int slot = 0; slot < DYLD_MAX_PROCESS_INFO_NOTIFY_COUNT; slot++) {
+		portp = &task->itk_dyld_notify[slot];
+		if (*portp != IPC_PORT_NULL && !ip_active(*portp)) {
+			release_ports[release_count++] = *portp;
+			*portp = IPC_PORT_NULL;
+		} else if (*portp == sright) {
+			/* the port is already registered and is active */
+			right_exists = true;
+		}
+
+		if (*portp != IPC_PORT_NULL) {
+			active_count++;
+		}
+	}
+
+	if (right_exists) {
+		/* skip second pass */
+		kr = KERN_RIGHT_EXISTS;
+		goto out;
+	}
+
+	/* Second pass: register the port */
+	kr = KERN_NO_SPACE;
+	for (int slot = 0; slot < DYLD_MAX_PROCESS_INFO_NOTIFY_COUNT; slot++) {
+		portp = &task->itk_dyld_notify[slot];
+		if (*portp == IPC_PORT_NULL) {
+			*portp = sright;
+			active_count++;
+			kr = KERN_SUCCESS;
+			break;
+		}
+	}
+
+out:
+	assert(active_count > 0);
+
+	task_dyld_process_info_update_helper(task, active_count,
+	    (vm_map_address_t)ports_addr, release_ports, release_count);
+	/* itk_lock, g_dyldinfo_mtx are unlocked upon return */
+
+	if (notifiers_ptr) {
+		kfree(notifiers_ptr, sizeof(ipc_port_t) * DYLD_MAX_PROCESS_INFO_NOTIFY_COUNT);
+	}
+
+	return kr;
+}
+
+/*
+ * Routine: task_dyld_process_info_notify_deregister
+ *
+ * Remove a send right in target task's itk_dyld_notify array matching the receive
+ * right name passed in. Deallocate kernel memory for the array if it's the last port to
+ * be deregistered, or all ports have died. Also cleanup any dead rights found in the array.
+ *
+ * Does not consume any reference.
+ *
+ * Args:
+ *     task: Target task for the deregistration.
+ *     rcv_name: The name denoting the receive right in caller's space.
+ *
+ * Returns:
+ *     KERN_SUCCESS: A matching entry found and degistration succeeded.
+ *     KERN_INVALID_TASK: task is invalid.
+ *     KERN_INVALID_NAME: name is invalid.
+ *     KERN_DENIED: Security policy denied this call.
+ *     KERN_FAILURE: A matching entry is not found.
+ *     KERN_INVALID_RIGHT: The name passed in does not represent a valid rcv right.
+ *
+ *     Other error code see task_info().
+ *
+ * See Also:
+ *     task_dyld_process_info_notify_get_trap() in mach_kernelrpc.c
+ */
+kern_return_t
+task_dyld_process_info_notify_deregister(
+	task_t                  task,
+	mach_port_name_t        rcv_name)
+{
+	struct task_dyld_info dyld_info;
+	mach_msg_type_number_t info_count = TASK_DYLD_INFO_COUNT;
+	ipc_port_t release_ports[DYLD_MAX_PROCESS_INFO_NOTIFY_COUNT];
+	uint32_t release_count = 0, active_count = 0;
+	boolean_t port_found = false;
+	mach_vm_address_t ports_addr; /* a user space address */
+	ipc_port_t sright;
+	kern_return_t kr;
+	ipc_port_t *portp;
+
+	if (task == TASK_NULL || task == kernel_task) {
+		return KERN_INVALID_TASK;
+	}
+
+	if (!MACH_PORT_VALID(rcv_name)) {
+		return KERN_INVALID_NAME;
+	}
+
+#if CONFIG_MACF
+	if (mac_task_check_dyld_process_info_notify_register()) {
+		return KERN_DENIED;
+	}
+#endif
+
+	kr = task_info(task, TASK_DYLD_INFO, (task_info_t)&dyld_info, &info_count);
+	if (kr) {
+		return kr;
+	}
+
+	if (dyld_info.all_image_info_format == TASK_DYLD_ALL_IMAGE_INFO_32) {
+		ports_addr = (mach_vm_address_t)(dyld_info.all_image_info_addr +
+		    offsetof(struct user32_dyld_all_image_infos, notifyMachPorts));
+	} else {
+		ports_addr = (mach_vm_address_t)(dyld_info.all_image_info_addr +
+		    offsetof(struct user64_dyld_all_image_infos, notifyMachPorts));
+	}
+
+	kr = ipc_port_translate_receive(current_space(), rcv_name, &sright); /* does not produce port ref */
+	if (kr) {
+		return KERN_INVALID_RIGHT;
+	}
+
+	ip_reference(sright);
+	ip_unlock(sright);
+
+	assert(sright != IPC_PORT_NULL);
+
+	lck_mtx_lock(&g_dyldinfo_mtx);
+	itk_lock(task);
+
+	if (task->itk_dyld_notify == NULL) {
+		itk_unlock(task);
+		lck_mtx_unlock(&g_dyldinfo_mtx);
+		ip_release(sright);
+		return KERN_FAILURE;
+	}
+
+	for (int slot = 0; slot < DYLD_MAX_PROCESS_INFO_NOTIFY_COUNT; slot++) {
+		portp = &task->itk_dyld_notify[slot];
+		if (*portp == sright) {
+			release_ports[release_count++] = *portp;
+			*portp = IPC_PORT_NULL;
+			port_found = true;
+		} else if ((*portp != IPC_PORT_NULL && !ip_active(*portp))) {
+			release_ports[release_count++] = *portp;
+			*portp = IPC_PORT_NULL;
+		}
+
+		if (*portp != IPC_PORT_NULL) {
+			active_count++;
+		}
+	}
+
+	task_dyld_process_info_update_helper(task, active_count,
+	    (vm_map_address_t)ports_addr, release_ports, release_count);
+	/* itk_lock, g_dyldinfo_mtx are unlocked upon return */
+
+	ip_release(sright);
+
+	return port_found ? KERN_SUCCESS : KERN_FAILURE;
 }
 
 /*

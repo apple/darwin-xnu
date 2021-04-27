@@ -142,6 +142,7 @@ void serverAdd(IOUserServer * server);
 void serverRemove(IOUserServer * server);
 void serverAck(IOUserServer * server);
 bool serverSlept(void);
+void systemHalt(void);
 };
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -204,6 +205,7 @@ public:
 	void                   setDriverKitUUID(OSKext *kext);
 	void                   setCheckInToken(IOUserServerCheckInToken *token);
 	void                   systemPower(bool powerOff);
+	void                               systemHalt(void);
 	IOReturn                                setPowerState(unsigned long state, IOService * service) APPLE_KEXT_OVERRIDE;
 	IOReturn                                powerStateWillChangeTo(IOPMPowerFlags flags, unsigned long state, IOService * service) APPLE_KEXT_OVERRIDE;
 	IOReturn                                powerStateDidChangeTo(IOPMPowerFlags flags, unsigned long state, IOService * service) APPLE_KEXT_OVERRIDE;

@@ -975,7 +975,9 @@ OSKext::removeKextBootstrap(void)
 	int                        dt_symtab_size        = 0;
 	int                        dt_result             = 0;
 
-	kernel_segment_command_t * seg_to_remove         = NULL;
+	kernel_segment_command_t * seg_kld               = NULL;
+	kernel_segment_command_t * seg_klddata           = NULL;
+	kernel_segment_command_t * seg_linkedit          = NULL;
 
 	const char __unused      * dt_segment_name       = NULL;
 	void       __unused      * segment_paddress      = NULL;
@@ -1015,41 +1017,59 @@ OSKext::removeKextBootstrap(void)
 	}
 
 	/*****
-	 * KLD bootstrap segment.
+	 * KLD & KLDDATA bootstrap segments.
 	 */
 	// xxx - should rename KLD segment
-	seg_to_remove = getsegbyname("__KLD");
-	if (seg_to_remove) {
-		OSRuntimeUnloadCPPForSegment(seg_to_remove);
+	seg_kld = getsegbyname("__KLD");
+	seg_klddata = getsegbyname("__KLDDATA");
+	if (seg_klddata) {
+		// __mod_term_func is part of __KLDDATA
+		OSRuntimeUnloadCPPForSegment(seg_klddata);
 	}
 
 #if __arm__ || __arm64__
-	/* Free the memory that was set up by bootx.
+	/* Free the memory that was set up by iBoot.
+	 */
+#if !defined(KERNEL_INTEGRITY_KTRR) && !defined(KERNEL_INTEGRITY_CTRR)
+	/* We cannot free the KLD segment with CTRR enabled as it contains text and
+	 * is covered by the contiguous rorgn.
 	 */
 	dt_segment_name = "Kernel-__KLD";
 	if (0 == IODTGetLoaderInfo(dt_segment_name, &segment_paddress, &segment_size)) {
-		/* We cannot free this with KTRR enabled, as we cannot
-		 * update the permissions on the KLD range this late
-		 * in the boot process.
-		 */
 		IODTFreeLoaderInfo(dt_segment_name, (void *)segment_paddress,
-		    (int)segment_size);
+		    (int)segment_size); // calls ml_static_mfree
+	} else if (seg_kld && seg_kld->vmaddr && seg_kld->vmsize) {
+		/* With fileset KCs, the Kernel KLD segment is not recorded in the DT. */
+		ml_static_mfree(ml_static_ptovirt(seg_kld->vmaddr - gVirtBase + gPhysBase),
+		    seg_kld->vmsize);
+	}
+#endif
+	dt_segment_name = "Kernel-__KLDDATA";
+	if (0 == IODTGetLoaderInfo(dt_segment_name, &segment_paddress, &segment_size)) {
+		IODTFreeLoaderInfo(dt_segment_name, (void *)segment_paddress,
+		    (int)segment_size);  // calls ml_static_mfree
+	} else if (seg_klddata && seg_klddata->vmaddr && seg_klddata->vmsize) {
+		/* With fileset KCs, the Kernel KLDDATA segment is not recorded in the DT. */
+		ml_static_mfree(ml_static_ptovirt(seg_klddata->vmaddr - gVirtBase + gPhysBase),
+		    seg_klddata->vmsize);
 	}
 #elif __i386__ || __x86_64__
 	/* On x86, use the mapping data from the segment load command to
-	 * unload KLD directly.
+	 * unload KLD & KLDDATA directly.
 	 * This may invalidate any assumptions about  "avail_start"
 	 * defining the lower bound for valid physical addresses.
 	 */
-	if (seg_to_remove && seg_to_remove->vmaddr && seg_to_remove->vmsize) {
-		bzero((void *)seg_to_remove->vmaddr, seg_to_remove->vmsize);
-		ml_static_mfree(seg_to_remove->vmaddr, seg_to_remove->vmsize);
+	if (seg_kld && seg_kld->vmaddr && seg_kld->vmsize) {
+		bzero((void *)seg_kld->vmaddr, seg_kld->vmsize);
+		ml_static_mfree(seg_kld->vmaddr, seg_kld->vmsize);
+	}
+	if (seg_klddata && seg_klddata->vmaddr && seg_klddata->vmsize) {
+		bzero((void *)seg_klddata->vmaddr, seg_klddata->vmsize);
+		ml_static_mfree(seg_klddata->vmaddr, seg_klddata->vmsize);
 	}
 #else
 #error arch
 #endif
-
-	seg_to_remove = NULL;
 
 	/*****
 	 * Prelinked kernel's symtab (if there is one).
@@ -1062,7 +1082,7 @@ OSKext::removeKextBootstrap(void)
 		}
 	}
 
-	seg_to_remove = (kernel_segment_command_t *)getsegbyname("__LINKEDIT");
+	seg_linkedit = (kernel_segment_command_t *)getsegbyname("__LINKEDIT");
 
 	/* kxld always needs the kernel's __LINKEDIT segment, but we can make it
 	 * pageable, unless keepsyms is set.  To do that, we have to copy it from
@@ -1084,9 +1104,9 @@ OSKext::removeKextBootstrap(void)
 		vm_map_offset_t seg_copy_offset = 0;
 		vm_map_size_t seg_length = 0;
 
-		seg_data = (void *) seg_to_remove->vmaddr;
-		seg_offset = (vm_map_offset_t) seg_to_remove->vmaddr;
-		seg_length = (vm_map_size_t) seg_to_remove->vmsize;
+		seg_data = (void *) seg_linkedit->vmaddr;
+		seg_offset = (vm_map_offset_t) seg_linkedit->vmaddr;
+		seg_length = (vm_map_size_t) seg_linkedit->vmsize;
 
 		/* Allocate space for the LINKEDIT copy.
 		 */
@@ -1168,8 +1188,6 @@ OSKext::removeKextBootstrap(void)
 		    "keepsyms boot arg specified; keeping linkedit segment for symbols.");
 	}
 #endif // VM_MAPPED_KEXTS
-
-	seg_to_remove = NULL;
 
 	result = kOSReturnSuccess;
 
@@ -1590,7 +1608,7 @@ bool
 OSKext::setAutounloadEnabled(bool flag)
 {
 	bool result = flags.autounloadEnabled ? true : false;
-	flags.autounloadEnabled = flag ? 1 : 0;
+	flags.autounloadEnabled = flag ? (0 == flags.unloadUnsupported) : 0;
 
 	if (result != (flag ? true : false)) {
 		OSKextLog(this,
@@ -1891,6 +1909,8 @@ OSKext::initWithPrelinkedInfoDict(
 				getPropertyForHostArch(kOSBundleAllowUserLoadKey) == kOSBooleanTrue);
 			if (shouldSaveSegments) {
 				flags.resetSegmentsFromImmutableCopy = 1;
+			} else {
+				flags.unloadUnsupported = 1;
 			}
 			break;
 		case KCKindPageable:
@@ -1901,6 +1921,8 @@ OSKext::initWithPrelinkedInfoDict(
 				flags.resetSegmentsFromImmutableCopy = 1;
 			} else if (resetAuxKCSegmentOnUnload) {
 				flags.resetSegmentsFromVnode = 1;
+			} else {
+				flags.unloadUnsupported = 1;
 			}
 			break;
 		default:
@@ -4082,6 +4104,15 @@ OSKext::removeKext(
 
 		/* make sure there are no resource requests in flight - 17187548 */
 		if (aKext->countRequestCallbacks()) {
+			goto finish;
+		}
+		if (aKext->flags.unloadUnsupported) {
+			result = kOSKextReturnInUse;
+			OSKextLog(aKext,
+			    kOSKextLogErrorLevel |
+			    kOSKextLogKextBookkeepingFlag,
+			    "Can't remove kext %s; unsupported by cache.",
+			    aKext->getIdentifierCString());
 			goto finish;
 		}
 
@@ -8978,7 +9009,7 @@ OSKext::addClass(
 				    getIdentifierCString(),
 				    aClass->getClassName());
 
-				flags.autounloadEnabled = 1;
+				flags.autounloadEnabled = (0 == flags.unloadUnsupported);
 				break;
 			}
 		}
@@ -11830,6 +11861,24 @@ OSKext::loadFileSetKexts(OSDictionary * requestDict __unused)
 #endif
 
 	/*
+	 * Change with 70582300
+	 */
+#if 0 || !defined(VM_MAPPED_KEXTS)
+	/*
+	 * On platforms that don't support the SystemKC or a file-backed
+	 * AuxKC, the kext receipt for 3rd party kexts loaded by the booter
+	 * needs to be queried before we load any codeless kexts or release
+	 * any 3rd party kexts to run. On platforms that support a file-backed
+	 * AuxKC, this process is done via the kext audit mechanism.
+	 */
+
+	printf("KextLog: waiting for kext receipt to be queried.\n");
+	while (!IOServiceWaitForMatchingResource(kOSKextReceiptQueried, UINT64_MAX)) {
+		IOSleep(30);
+	}
+#endif /* !VM_MAPPED_KEXTS */
+
+	/*
 	 * Get the args from the request. Right now we need the file
 	 * name for the pageable and the aux kext collection file sets.
 	 */
@@ -11910,6 +11959,21 @@ try_auxkc:
 		OSDictionary          *infoDict;
 		parsedXML = consumeDeferredKextCollection(KCKindAuxiliary);
 		infoDict = OSDynamicCast(OSDictionary, parsedXML.get());
+#if !defined(VM_MAPPED_KEXTS)
+		/*
+		 * On platforms where we don't dynamically wire-down / page-in
+		 * kext memory, we need to maintain the invariant that if the
+		 * AuxKC in memory does not contain a kext receipt, then we
+		 * should not load any of the kexts.
+		 */
+		size_t receipt_sz = 0;
+		if (getsectdatafromheader(akc_mh, kReceiptInfoSegment, kAuxKCReceiptSection, &receipt_sz) == NULL || receipt_sz == 0) {
+			OSKextLog(/* kext */ NULL, kOSKextLogErrorLevel | kOSKextLogArchiveFlag,
+			    "KextLog: WARNING: Failed to load AuxKC from memory: missing receipt");
+			ret = kOSKextReturnKCLoadFailure;
+			goto try_codeless;
+		}
+#endif
 		if (infoDict) {
 			bool added;
 			printf("KextLog: Adding kexts from in-memory AuxKC\n");
@@ -15249,6 +15313,17 @@ OSKextSavedMutableSegment::restoreContents(kernel_segment_command_t *seg)
 	}
 	memcpy((void *)seg->vmaddr, data, vmsize);
 	return kOSReturnSuccess;
+}
+
+extern "C" kern_return_t
+OSKextSetReceiptQueried(void)
+{
+	OSKextLog(/* kext */ NULL,
+	    kOSKextLogStepLevel | kOSKextLogGeneralFlag,
+	    "Setting kext receipt as queried");
+
+	IOService::publishResource(kOSKextReceiptQueried, kOSBooleanTrue);
+	return KERN_SUCCESS;
 }
 
 extern "C" const vm_allocation_site_t *

@@ -569,8 +569,11 @@ vm_setup()
 static void
 vm_cleanup()
 {
-    T_ASSERT_EQ(hv_vm_destroy(), HV_SUCCESS, "Destroyed vm");
+	T_ASSERT_EQ(hv_vm_destroy(), HV_SUCCESS, "Destroyed vm");
 	free_page_cache();
+
+	pml4 = NULL;
+	pml4_gpa = 0;
 }
 
 static pthread_cond_t ready_cond = PTHREAD_COND_INITIALIZER;
@@ -1245,4 +1248,393 @@ T_DECL(radar63641279, "rdar://63641279 (Evaluate \"no SMT\" scheduling option/si
 	T_ASSERT_POSIX_SUCCESS(pthread_join(vcpu_thread, NULL), "join vcpu");
 
 	vm_cleanup();
+}
+
+// Get the number of  messages waiting for the specified port
+static int
+get_count(mach_port_t port)
+{
+	int count;
+
+	count = 0;
+	while (true) {
+		hv_ion_message_t msg = {
+			.header.msgh_size = sizeof (msg),
+			.header.msgh_local_port = port,
+		};
+
+		kern_return_t ret = mach_msg(&msg.header, MACH_RCV_MSG | MACH_RCV_TIMEOUT,
+		    0, sizeof (msg), port, 0, MACH_PORT_NULL);
+
+		if (ret != MACH_MSG_SUCCESS) {
+			break;
+		}
+
+		T_QUIET; T_ASSERT_TRUE(msg.addr == 0xab || msg.addr == 0xcd || msg.addr == 0xef,
+		    "address is 0xab, 0xcd or 0xef");
+		T_QUIET; T_ASSERT_EQ(msg.value, 0xaaULL, "value written is 0xaa");
+		T_QUIET; T_ASSERT_TRUE(msg.size == 1 || msg.size == 4, "size is 1 or 4");
+
+		count++;
+	}
+
+	return count;
+}
+
+static void *
+pio_monitor(void *arg, hv_vcpuid_t vcpu)
+{
+
+	size_t guest_pages_size = round_page((uintptr_t)&hvtest_end - (uintptr_t)&hvtest_begin);
+	const size_t mem_size = 1 * 1024 * 1024;
+	uint8_t *guest_pages_shadow = valloc(mem_size);
+	int handle_io_count = 0;
+	uint64_t exit_reason = 0;
+
+	setup_real_mode(vcpu);
+
+	bzero(guest_pages_shadow, mem_size);
+	memcpy(guest_pages_shadow+0x1000, &hvtest_begin, guest_pages_size);
+
+	T_ASSERT_EQ(hv_vm_map(guest_pages_shadow, 0x0, mem_size, HV_MEMORY_READ | HV_MEMORY_EXEC), HV_SUCCESS,
+	    "map guest memory");
+
+	while (true) {
+	    T_QUIET; T_ASSERT_EQ(hv_vcpu_run_until(vcpu, ~(uint64_t)0), HV_SUCCESS, "run VCPU");
+	    exit_reason = get_vmcs(vcpu, VMCS_RO_EXIT_REASON);
+
+		if (exit_reason == VMX_REASON_VMCALL) {
+			break;
+		}
+
+		if (exit_reason == VMX_REASON_IRQ) {
+			continue;
+		}
+
+		T_QUIET; T_ASSERT_EQ(exit_reason, (uint64_t)VMX_REASON_IO, "exit reason is IO");
+
+		union {
+			struct {
+				uint64_t io_size:3;
+				uint64_t io_dirn:1;
+				uint64_t io_string:1;
+				uint64_t io_rep:1;
+				uint64_t io_encoding:1;
+				uint64_t __io_resvd0:9;
+				uint64_t io_port:16;
+				uint64_t __io_resvd1:32;
+			} io;
+			uint64_t reg64;
+		} info = {
+			.reg64 = get_vmcs(vcpu, VMCS_RO_EXIT_QUALIFIC),
+		};
+
+		T_QUIET; T_ASSERT_EQ(info.io.io_port, 0xefULL, "exit is a port IO on 0xef");
+
+		handle_io_count++;
+
+		set_vmcs(vcpu, VMCS_GUEST_RIP, get_reg(vcpu, HV_X86_RIP) + get_vmcs(vcpu, VMCS_RO_VMEXIT_INSTR_LEN));
+	}
+
+	free(guest_pages_shadow);
+
+	*((int *)arg) = handle_io_count;
+
+	return NULL;
+}
+
+T_DECL(pio_notifier_arguments, "test adding and removing port IO notifiers")
+{
+	mach_port_t notify_port = MACH_PORT_NULL;
+	kern_return_t kret = KERN_FAILURE;
+	hv_return_t hret = HV_ERROR;
+
+	T_SETUPBEGIN;
+
+	/* Setup notification port. */
+	kret = mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE,
+	    &notify_port);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kret, "allocate mach port");
+
+	kret = mach_port_insert_right(mach_task_self(), notify_port, notify_port,
+	   MACH_MSG_TYPE_MAKE_SEND);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kret, "insert send right");
+
+	/* Setup VM */
+	vm_setup();
+
+	T_SETUPEND;
+
+	/* Add with bad size. */
+	hret = hv_vm_add_pio_notifier(0xab, 7, 1, notify_port, HV_ION_NONE);
+	T_ASSERT_NE(hret, HV_SUCCESS, "adding notifier with bad size");
+
+	/* Add with bad data. */
+	hret = hv_vm_add_pio_notifier(0xab, 1, UINT16_MAX, notify_port, HV_ION_NONE);
+	T_ASSERT_NE(hret, HV_SUCCESS, "adding notifier with bad data");
+
+	/* Add with bad mach port. */
+	hret = hv_vm_add_pio_notifier(0xab, 1, UINT16_MAX, MACH_PORT_NULL, HV_ION_NONE);
+	T_ASSERT_NE(hret, HV_SUCCESS, "adding notifier with bad port");
+
+	/* Add with bad flags. */
+	hret = hv_vm_add_pio_notifier(0xab, 1, 1, notify_port, 0xffff);
+	T_ASSERT_NE(hret, HV_SUCCESS, "adding notifier with bad flags");
+
+	/* Remove when none are installed. */
+	hret = hv_vm_remove_pio_notifier(0xab, 1, 1, notify_port, HV_ION_NONE);
+	T_ASSERT_NE(hret, HV_SUCCESS, "removing a non-existent notifier");
+
+	/* Add duplicate. */
+	hret = hv_vm_add_pio_notifier(0xab, 1, 1, notify_port, HV_ION_NONE);
+	T_QUIET; T_ASSERT_EQ(hret, HV_SUCCESS, "adding notifier");
+	hret = hv_vm_add_pio_notifier(0xab, 1, 1, notify_port, HV_ION_NONE);
+	T_ASSERT_NE(hret, HV_SUCCESS, "adding duplicate notifier");
+	hret = hv_vm_remove_pio_notifier(0xab, 1, 1, notify_port, HV_ION_NONE);
+	T_QUIET; T_ASSERT_EQ(hret, HV_SUCCESS, "removing notifier");
+
+	/* Add then remove. */
+	hret = hv_vm_add_pio_notifier(0xab, 1, 1, notify_port, HV_ION_NONE);
+	T_ASSERT_EQ(hret, HV_SUCCESS, "adding notifier");
+	hret = hv_vm_remove_pio_notifier(0xab, 1, 1, notify_port, HV_ION_NONE);
+	T_ASSERT_EQ(hret, HV_SUCCESS, "removing notifier");
+
+	/* Add two, remove in reverse order. */
+	hret = hv_vm_add_pio_notifier(0xab, 1, 1, notify_port, HV_ION_NONE);
+	T_QUIET; T_ASSERT_EQ(hret, HV_SUCCESS, "adding 1st notifier");
+	hret = hv_vm_add_pio_notifier(0xab, 2, 1, notify_port, HV_ION_NONE);
+	T_QUIET; T_ASSERT_EQ(hret, HV_SUCCESS, "adding 2nd notifier");
+	hret = hv_vm_remove_pio_notifier(0xab, 2, 1, notify_port, HV_ION_NONE);
+	T_QUIET; T_ASSERT_EQ(hret, HV_SUCCESS, "removing 2nd notifier");
+	hret = hv_vm_remove_pio_notifier(0xab, 1, 1, notify_port, HV_ION_NONE);
+	T_ASSERT_EQ(hret, HV_SUCCESS, "removing notifier in reverse order");
+
+	/* Add with ANY_SIZE and remove. */
+	hret = hv_vm_add_pio_notifier(0xab, 0, 1, notify_port, HV_ION_ANY_SIZE);
+	T_ASSERT_EQ(hret, HV_SUCCESS, "adding notifier with ANY_SIZE");
+	hret = hv_vm_remove_pio_notifier(0xab, 0, 1, notify_port, HV_ION_ANY_SIZE);
+	T_QUIET; T_ASSERT_EQ(hret, HV_SUCCESS, "removing notifier with ANY_SIZE");
+
+	/* Add with ANY_VALUE and remove. */
+	hret = hv_vm_add_pio_notifier(0xab, 1, 1, notify_port, HV_ION_ANY_VALUE);
+	T_ASSERT_EQ(hret, HV_SUCCESS, "adding notifier with ANY_VALUE");
+	hret = hv_vm_remove_pio_notifier(0xab, 1, 1, notify_port, HV_ION_ANY_VALUE);
+	T_QUIET; T_ASSERT_EQ(hret, HV_SUCCESS, "removing notifier with ANY_VALUE");
+
+	vm_cleanup();
+
+	mach_port_mod_refs(mach_task_self(), notify_port, MACH_PORT_RIGHT_RECEIVE, -1);
+}
+
+T_DECL(pio_notifier_bad_port, "test port IO notifiers when the port is destroyed/deallocated/has no receive right")
+{
+	pthread_t vcpu_thread;
+	mach_port_t notify_port = MACH_PORT_NULL;
+	int handle_io_count = 0;
+	kern_return_t kret = KERN_FAILURE;
+	hv_return_t hret = HV_ERROR;
+
+	/* Setup VM */
+	vm_setup();
+
+	/*
+	 * Test that nothing bad happens when the notification port is
+	 * added and mach_port_destroy() is called.
+	 */
+
+	/* Add a notification port. */
+	kret = mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE,
+	    &notify_port);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kret, "allocate mach port");
+
+	/* Insert send right. */
+	kret = mach_port_insert_right(mach_task_self(), notify_port, notify_port,
+	   MACH_MSG_TYPE_MAKE_SEND);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kret, "insert send right");
+
+	/* All port writes to 0xef. */
+	hret = hv_vm_add_pio_notifier(0xef, 0, 0, notify_port,
+	    HV_ION_ANY_VALUE | HV_ION_ANY_SIZE);
+	T_QUIET; T_ASSERT_EQ(hret, HV_SUCCESS, "adding notifier for all writes "
+	    "to port 0xef");
+
+	/* After adding, destroy the port. */
+	kret = mach_port_destroy(mach_task_self(), notify_port);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kret, "destroying notify port");
+
+	vcpu_thread = create_vcpu_thread((vcpu_entry_function)
+	    (((uintptr_t)pio_entry_basic & PAGE_MASK) + 0x1000), 0, pio_monitor,
+	    &handle_io_count);
+	T_ASSERT_POSIX_SUCCESS(pthread_join(vcpu_thread, NULL), "join vcpu");
+
+	/* Expect the messages to be lost. */
+	T_ASSERT_EQ(0, handle_io_count, "0 expected IO exits when port destroyed");
+
+	hret = hv_vm_remove_pio_notifier(0xef, 0, 0, notify_port, HV_ION_ANY_SIZE | HV_ION_ANY_VALUE);
+	T_QUIET; T_ASSERT_EQ(hret, HV_SUCCESS, "removing notifier for all writes to port 0xef");
+
+	vm_cleanup();
+
+
+	vm_setup();
+	/*
+	 * Test that nothing bad happens when the notification port is added and
+	 * mach_port_mod_refs() is called.
+	 */
+
+	/* Add a notification port. */
+	kret = mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE,
+	    &notify_port);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kret, "allocate mach port");
+
+	/* Insert send right. */
+	kret = mach_port_insert_right(mach_task_self(), notify_port, notify_port,
+	   MACH_MSG_TYPE_MAKE_SEND);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kret, "insert send right");
+
+	/* All port writes to 0xef. */
+	hret = hv_vm_add_pio_notifier(0xef, 0, 0, notify_port,
+	    HV_ION_ANY_VALUE | HV_ION_ANY_SIZE);
+	T_QUIET; T_ASSERT_EQ(hret, HV_SUCCESS, "adding notifier for all writes "
+	    "to port 0xef");
+
+	/* After adding, remove receive right. */
+	mach_port_mod_refs(mach_task_self(), notify_port, MACH_PORT_RIGHT_RECEIVE, -1);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kret, "removing receive right");
+
+	vcpu_thread = create_vcpu_thread((vcpu_entry_function)
+	    (((uintptr_t)pio_entry_basic & PAGE_MASK) + 0x1000), 0, pio_monitor,
+	    &handle_io_count);
+	T_ASSERT_POSIX_SUCCESS(pthread_join(vcpu_thread, NULL), "join vcpu");
+
+	/* Expect messages to be lost. */
+	T_ASSERT_EQ(0, handle_io_count, "0 expected IO exits when receive right removed");
+
+	hret = hv_vm_remove_pio_notifier(0xef, 0, 0, notify_port, HV_ION_ANY_SIZE | HV_ION_ANY_VALUE);
+	T_QUIET; T_ASSERT_EQ(hret, HV_SUCCESS, "removing notifier for all writes to port 0xef");
+
+	vm_cleanup();
+
+
+	vm_setup();
+	/*
+	 * Test that nothing bad happens when the notification port is added and
+	 * mach_port_deallocate() is called.
+	 */
+
+	/* Add a notification port. */
+	kret = mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE,
+	    &notify_port);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kret, "allocate mach port");
+
+	/* Insert send right. */
+	kret = mach_port_insert_right(mach_task_self(), notify_port, notify_port,
+	   MACH_MSG_TYPE_MAKE_SEND);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kret, "insert send right");
+
+	/* All port writes to 0xef. */
+	hret = hv_vm_add_pio_notifier(0xef, 0, 0, notify_port,
+	    HV_ION_ANY_VALUE | HV_ION_ANY_SIZE);
+	T_QUIET; T_ASSERT_EQ(hret, HV_SUCCESS, "adding notifier for all writes "
+	    "to port 0xef");
+
+	/* After adding, call mach_port_deallocate(). */
+	kret = mach_port_deallocate(mach_task_self(), notify_port);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kret, "destroying notify port");
+
+	vcpu_thread = create_vcpu_thread((vcpu_entry_function)
+	    (((uintptr_t)pio_entry_basic & PAGE_MASK) + 0x1000), 0, pio_monitor,
+	    &handle_io_count);
+	T_ASSERT_POSIX_SUCCESS(pthread_join(vcpu_thread, NULL), "join vcpu");
+
+	/* Expect messages to be lost. */
+	T_ASSERT_EQ(0, handle_io_count, "0 expected IO exits when port deallocated");
+
+	hret = hv_vm_remove_pio_notifier(0xef, 0, 0, notify_port, HV_ION_ANY_SIZE | HV_ION_ANY_VALUE);
+	T_QUIET; T_ASSERT_EQ(hret, HV_SUCCESS, "removing notifier for all writes to port 0xef");
+
+	vm_cleanup();
+}
+
+T_DECL(pio_notifier, "test port IO notifiers")
+{
+	#define MACH_PORT_COUNT 4
+	mach_port_t notify_port[MACH_PORT_COUNT] = { MACH_PORT_NULL };
+	int handle_io_count = 0;
+	kern_return_t kret = KERN_FAILURE;
+	hv_return_t hret = HV_ERROR;
+
+	T_SETUPBEGIN;
+
+	/* Setup notification ports. */
+	for (int i = 0; i  < MACH_PORT_COUNT; i++) {
+		kret = mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE,
+		    &notify_port[i]);
+		T_QUIET; T_ASSERT_MACH_SUCCESS(kret, "allocate mach port");
+
+		kret = mach_port_insert_right(mach_task_self(), notify_port[i], notify_port[i],
+		   MACH_MSG_TYPE_MAKE_SEND);
+		T_QUIET; T_ASSERT_MACH_SUCCESS(kret, "insert send right");
+	}
+	/* Setup VM */
+	vm_setup();
+
+	T_SETUPEND;
+
+	/* Test that messages are properly sent to mach port notifiers. */
+
+	/* One for all port writes to 0xab. */
+	hret = hv_vm_add_pio_notifier(0xab, 0, 0, notify_port[0],
+	    HV_ION_ANY_VALUE | HV_ION_ANY_SIZE);
+	T_QUIET; T_ASSERT_EQ(hret, HV_SUCCESS, "adding notifier for all writes "
+	    "to port 0xab");
+
+	/* One for for 4 byte writes of 0xaa. */
+	hret = hv_vm_add_pio_notifier(0xab, 4, 0xaa, notify_port[1], HV_ION_NONE);
+	T_QUIET; T_ASSERT_EQ(hret, HV_SUCCESS, "adding notifier for 4 byte writes "
+	    "to port 0xab");
+
+	/* One for all writes to 0xcd (ignoring queue full errors). */
+	hret = hv_vm_add_pio_notifier(0xcd, 0, 0, notify_port[2],
+	    HV_ION_ANY_SIZE | HV_ION_ANY_VALUE);
+	T_QUIET; T_ASSERT_EQ(hret, HV_SUCCESS, "adding notifier for all writes "
+	    "to port 0xcd, ignoring if the queue fills");
+
+	/* One for writes to 0xef asking for exits when the queue is full. */
+	hret = hv_vm_add_pio_notifier(0xef, 0, 0, notify_port[3],
+	    HV_ION_ANY_SIZE | HV_ION_ANY_VALUE | HV_ION_EXIT_FULL);
+	T_QUIET; T_ASSERT_EQ(hret, HV_SUCCESS, "adding notifier for all writes "
+	    "to port 0xef, not ignoring if the queue fills");
+
+	pthread_t vcpu_thread = create_vcpu_thread((vcpu_entry_function)
+	    (((uintptr_t)pio_entry & PAGE_MASK) + 0x1000), 0, pio_monitor,
+	    &handle_io_count);
+	T_ASSERT_POSIX_SUCCESS(pthread_join(vcpu_thread, NULL), "join vcpu");
+
+	/* Expect messages to be waiting. */
+	T_ASSERT_EQ(4, get_count(notify_port[0]), "expected 4 messages");
+	T_ASSERT_EQ(1, get_count(notify_port[1]), "expected 1 messages");
+	T_ASSERT_EQ(10, get_count(notify_port[2]) + handle_io_count, "expected IO exits");
+	T_ASSERT_EQ(5, get_count(notify_port[3]), "expected 5 messages");
+
+	hret = hv_vm_remove_pio_notifier(0xab, 0, 0, notify_port[0], HV_ION_ANY_SIZE | HV_ION_ANY_VALUE);
+	T_QUIET; T_ASSERT_EQ(hret, HV_SUCCESS, "removing notifier for all writes to port 0xab");
+
+	hret = hv_vm_remove_pio_notifier(0xab, 4, 0xaa, notify_port[1], HV_ION_NONE);
+	T_QUIET; T_ASSERT_EQ(hret, HV_SUCCESS, "removing notifier for 4 byte writes "
+	    "to port 0xab");
+
+	hret = hv_vm_remove_pio_notifier(0xcd, 0, 0, notify_port[2], HV_ION_ANY_SIZE | HV_ION_ANY_VALUE);
+	T_QUIET; T_ASSERT_EQ(hret, HV_SUCCESS, "removing notifier for all writes "
+	    "to port 0xcd, ignoring if the queue fills");
+
+	hret = hv_vm_remove_pio_notifier(0xef, 0, 0, notify_port[3], HV_ION_ANY_SIZE | HV_ION_ANY_VALUE | HV_ION_EXIT_FULL);
+	T_QUIET; T_ASSERT_EQ(hret, HV_SUCCESS, "removing notifier for all writes "
+	    "to port 0xef, not ignoring if the queue fills");
+
+	vm_cleanup();
+
+	for (int i = 0; i < MACH_PORT_COUNT; i++) {
+		mach_port_mod_refs(mach_task_self(), notify_port[i], MACH_PORT_RIGHT_RECEIVE, -1);
+	}
 }

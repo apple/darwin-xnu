@@ -17,9 +17,9 @@
 #  -------- ----- -- ---------------
 #
 #  ARM_EXTRAS_BASE = [ nos_arm_pmap nos_arm_asm ]
-#  KERNEL_BASE =    [ arm64 xsmall msgb_small config_embedded config_requires_u32_munging config_zcache ARM_EXTRAS_BASE ]
+#  KERNEL_BASE =    [ arm64 xsmall msgb_small config_embedded config_requires_u32_munging ARM_EXTRAS_BASE ]
 #  KERNEL_RELEASE = [ KERNEL_BASE ]
-#  KERNEL_DEV =     [ KERNEL_BASE development mach_assert config_xnupost proc_ref_debug os_reason_debug pgtrace ]
+#  KERNEL_DEV =     [ KERNEL_BASE development mach_assert config_xnupost proc_ref_debug pgtrace ]
 #  KERNEL_DEBUG =   [ KERNEL_BASE debug mach_assert config_xnupost config_ltable_stats config_ltable_debug config_waitq_stats config_workloop_debug config_waitq_debug pgtrace ]
 #  BSD_BASE =       [ mach_bsd config_workqueue psynch config_proc_uuid_policy config_personas ]
 #  BSD_RELEASE =    [ BSD_BASE no_printf_str no_kprintf_str secure_kernel ]

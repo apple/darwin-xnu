@@ -26,7 +26,6 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#include <arm64/pac_asm.h>
 #include <pexpert/arm64/board_config.h>
 #include "assym.s"
 

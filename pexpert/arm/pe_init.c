@@ -394,7 +394,10 @@ PE_init_platform(boolean_t vm_initialized, void *args)
 		PE_state.video.v_width = boot_args_ptr->Video.v_width;
 		PE_state.video.v_height = boot_args_ptr->Video.v_height;
 		PE_state.video.v_depth = (boot_args_ptr->Video.v_depth >> kBootVideoDepthDepthShift) & kBootVideoDepthMask;
-		PE_state.video.v_rotate = (boot_args_ptr->Video.v_depth >> kBootVideoDepthRotateShift) & kBootVideoDepthMask;
+		PE_state.video.v_rotate = (
+			((boot_args_ptr->Video.v_depth >> kBootVideoDepthRotateShift) & kBootVideoDepthMask) +    // rotation
+			((boot_args_ptr->Video.v_depth >> kBootVideoDepthBootRotateShift)  & kBootVideoDepthMask) // add extra boot rotation
+			) % 4;
 		PE_state.video.v_scale = ((boot_args_ptr->Video.v_depth >> kBootVideoDepthScaleShift) & kBootVideoDepthMask) + 1;
 		PE_state.video.v_display = boot_args_ptr->Video.v_display;
 		strlcpy(PE_state.video.v_pixelFormat, "BBBBBBBBGGGGGGGGRRRRRRRR", sizeof(PE_state.video.v_pixelFormat));

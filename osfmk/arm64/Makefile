@@ -27,6 +27,10 @@ INSTALL_KF_MD_LCL_LIST = \
 	tlb.h \
 	$(ARM_HEADER_FILES)
 
+# Headers installed into System.framework/PrivateHeaders
+INSTALL_MD_LCL_LIST = \
+	$(ARM_PRIVATE_HEADERS)
+
 # TODO: Is there a reason that machine_machdep.h is not in this list? If not, these lists can be consolidated.
 # Headers used to compile xnu
 EXPORT_MD_LIST = \
@@ -43,6 +47,8 @@ EXPORT_MD_LIST = \
 
 # These headers will be available with #include <arm64/header_file.h>
 EXPORT_MD_DIR = arm64
+
+INSTALL_MD_DIR = arm64
 
 else # $(PLATFORM),MacOSX
 

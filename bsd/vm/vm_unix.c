@@ -230,6 +230,13 @@ extern int cs_executable_wire;
 SYSCTL_INT(_vm, OID_AUTO, cs_executable_create_upl, CTLFLAG_RD | CTLFLAG_LOCKED, &cs_executable_create_upl, 0, "");
 SYSCTL_INT(_vm, OID_AUTO, cs_executable_wire, CTLFLAG_RD | CTLFLAG_LOCKED, &cs_executable_wire, 0, "");
 
+extern int apple_protect_pager_count;
+extern int apple_protect_pager_count_mapped;
+extern unsigned int apple_protect_pager_cache_limit;
+SYSCTL_INT(_vm, OID_AUTO, apple_protect_pager_count, CTLFLAG_RD | CTLFLAG_LOCKED, &apple_protect_pager_count, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, apple_protect_pager_count_mapped, CTLFLAG_RD | CTLFLAG_LOCKED, &apple_protect_pager_count_mapped, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, apple_protect_pager_cache_limit, CTLFLAG_RW | CTLFLAG_LOCKED, &apple_protect_pager_cache_limit, 0, "");
+
 #if DEVELOPMENT || DEBUG
 extern int radar_20146450;
 SYSCTL_INT(_vm, OID_AUTO, radar_20146450, CTLFLAG_RW | CTLFLAG_LOCKED, &radar_20146450, 0, "");
@@ -316,7 +323,7 @@ SYSCTL_INT(_vm, OID_AUTO, vm_shadow_max_enabled, CTLFLAG_RW | CTLFLAG_LOCKED, &v
 SYSCTL_INT(_vm, OID_AUTO, vm_debug_events, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_debug_events, 0, "");
 
 __attribute__((noinline)) int __KERNEL_WAITING_ON_TASKGATED_CHECK_ACCESS_UPCALL__(
-	mach_port_t task_access_port, int32_t calling_pid, uint32_t calling_gid, int32_t target_pid);
+	mach_port_t task_access_port, int32_t calling_pid, uint32_t calling_gid, int32_t target_pid, mach_task_flavor_t flavor);
 /*
  * Sysctl's related to data/stack execution.  See osfmk/vm/vm_map.c
  */
@@ -844,9 +851,9 @@ out:
  */
 __attribute__((noinline)) int
 __KERNEL_WAITING_ON_TASKGATED_CHECK_ACCESS_UPCALL__(
-	mach_port_t task_access_port, int32_t calling_pid, uint32_t calling_gid, int32_t target_pid)
+	mach_port_t task_access_port, int32_t calling_pid, uint32_t calling_gid, int32_t target_pid, mach_task_flavor_t flavor)
 {
-	return check_task_access(task_access_port, calling_pid, calling_gid, target_pid);
+	return check_task_access_with_flavor(task_access_port, calling_pid, calling_gid, target_pid, flavor);
 }
 
 /*
@@ -885,14 +892,14 @@ task_for_pid(
 
 	/* Always check if pid == 0 */
 	if (pid == 0) {
-		(void) copyout((char *)&t1, task_addr, sizeof(mach_port_name_t));
+		(void) copyout((char *)&tret, task_addr, sizeof(mach_port_name_t));
 		AUDIT_MACH_SYSCALL_EXIT(KERN_FAILURE);
 		return KERN_FAILURE;
 	}
 
 	t1 = port_name_to_task(target_tport);
 	if (t1 == TASK_NULL) {
-		(void) copyout((char *)&t1, task_addr, sizeof(mach_port_name_t));
+		(void) copyout((char *)&tret, task_addr, sizeof(mach_port_name_t));
 		AUDIT_MACH_SYSCALL_EXIT(KERN_FAILURE);
 		return KERN_FAILURE;
 	}
@@ -931,7 +938,7 @@ task_for_pid(
 	p = PROC_NULL;
 
 #if CONFIG_MACF
-	error = mac_proc_check_get_task(kauth_cred_get(), &pident);
+	error = mac_proc_check_get_task(kauth_cred_get(), &pident, TASK_FLAVOR_CONTROL);
 	if (error) {
 		error = KERN_FAILURE;
 		goto tfpout;
@@ -949,7 +956,8 @@ task_for_pid(
 		}
 
 		/* Call up to the task access server */
-		error = __KERNEL_WAITING_ON_TASKGATED_CHECK_ACCESS_UPCALL__(tfpport, proc_selfpid(), kauth_getgid(), pid);
+		error = __KERNEL_WAITING_ON_TASKGATED_CHECK_ACCESS_UPCALL__(tfpport,
+		    proc_selfpid(), kauth_getgid(), pid, TASK_FLAVOR_CONTROL);
 
 		if (error != MACH_MSG_SUCCESS) {
 			if (error == MACH_RCV_INTERRUPTED) {
@@ -963,7 +971,13 @@ task_for_pid(
 
 	/* Grant task port access */
 	extmod_statistics_incr_task_for_pid(task);
-	sright = (void *) convert_task_to_port(task);
+
+	if (task == current_task()) {
+		/* return pinned self if current_task() so equality check with mach_task_self_ passes */
+		sright = (void *)convert_task_to_port_pinned(task);
+	} else {
+		sright = (void *)convert_task_to_port(task);
+	}
 
 	/* Check if the task has been corpsified */
 	if (is_corpsetask(task)) {
@@ -1019,9 +1033,9 @@ task_name_for_pid(
 	mach_port_name_t        target_tport = args->target_tport;
 	int                     pid = args->pid;
 	user_addr_t             task_addr = args->t;
-	proc_t          p = PROC_NULL;
-	task_t          t1;
-	mach_port_name_t        tret;
+	proc_t                  p = PROC_NULL;
+	task_t                  t1 = TASK_NULL;
+	mach_port_name_t        tret = MACH_PORT_NULL;
 	void * sright;
 	int error = 0, refheld = 0;
 	kauth_cred_t target_cred;
@@ -1032,7 +1046,7 @@ task_name_for_pid(
 
 	t1 = port_name_to_task(target_tport);
 	if (t1 == TASK_NULL) {
-		(void) copyout((char *)&t1, task_addr, sizeof(mach_port_name_t));
+		(void) copyout((char *)&tret, task_addr, sizeof(mach_port_name_t));
 		AUDIT_MACH_SYSCALL_EXIT(KERN_FAILURE);
 		return KERN_FAILURE;
 	}
@@ -1057,7 +1071,7 @@ task_name_for_pid(
 				proc_rele(p);
 				p = PROC_NULL;
 #if CONFIG_MACF
-				error = mac_proc_check_get_task_name(kauth_cred_get(), &pident);
+				error = mac_proc_check_get_task(kauth_cred_get(), &pident, TASK_FLAVOR_NAME);
 				if (error) {
 					task_deallocate(task);
 					goto noperm;
@@ -1122,13 +1136,13 @@ task_inspect_for_pid(struct proc *p __unused, struct task_inspect_for_pid_args *
 
 	/* Disallow inspect port for kernel_task */
 	if (pid == 0) {
-		(void) copyout((char *)&t1, task_addr, sizeof(mach_port_name_t));
+		(void) copyout((char *)&tret, task_addr, sizeof(mach_port_name_t));
 		return EPERM;
 	}
 
 	t1 = port_name_to_task(target_tport);
 	if (t1 == TASK_NULL) {
-		(void) copyout((char *) &t1, task_addr, sizeof(mach_port_name_t));
+		(void) copyout((char *) &tret, task_addr, sizeof(mach_port_name_t));
 		return EINVAL;
 	}
 
@@ -1158,12 +1172,8 @@ task_inspect_for_pid(struct proc *p __unused, struct task_inspect_for_pid_args *
 	proc_rele(proc);
 	proc = PROC_NULL;
 
-	/*
-	 * For now, it performs the same set of permission checks as task_for_pid. This
-	 * will be addressed in rdar://problem/53478660
-	 */
 #if CONFIG_MACF
-	error = mac_proc_check_get_task(kauth_cred_get(), &pident);
+	error = mac_proc_check_get_task(kauth_cred_get(), &pident, TASK_FLAVOR_INSPECT);
 	if (error) {
 		error = EPERM;
 		goto tifpout;
@@ -1182,7 +1192,8 @@ task_inspect_for_pid(struct proc *p __unused, struct task_inspect_for_pid_args *
 
 
 		/* Call up to the task access server */
-		error = __KERNEL_WAITING_ON_TASKGATED_CHECK_ACCESS_UPCALL__(tfpport, proc_selfpid(), kauth_getgid(), pid);
+		error = __KERNEL_WAITING_ON_TASKGATED_CHECK_ACCESS_UPCALL__(tfpport,
+		    proc_selfpid(), kauth_getgid(), pid, TASK_FLAVOR_INSPECT);
 
 		if (error != MACH_MSG_SUCCESS) {
 			if (error == MACH_RCV_INTERRUPTED) {
@@ -1247,13 +1258,13 @@ task_read_for_pid(struct proc *p __unused, struct task_read_for_pid_args *args, 
 
 	/* Disallow read port for kernel_task */
 	if (pid == 0) {
-		(void) copyout((char *)&t1, task_addr, sizeof(mach_port_name_t));
+		(void) copyout((char *)&tret, task_addr, sizeof(mach_port_name_t));
 		return EPERM;
 	}
 
 	t1 = port_name_to_task(target_tport);
 	if (t1 == TASK_NULL) {
-		(void) copyout((char *) &t1, task_addr, sizeof(mach_port_name_t));
+		(void) copyout((char *)&tret, task_addr, sizeof(mach_port_name_t));
 		return EINVAL;
 	}
 
@@ -1283,12 +1294,8 @@ task_read_for_pid(struct proc *p __unused, struct task_read_for_pid_args *args, 
 	proc_rele(proc);
 	proc = PROC_NULL;
 
-	/*
-	 * For now, it performs the same set of permission checks as task_for_pid. This
-	 * will be addressed in rdar://problem/53478660
-	 */
 #if CONFIG_MACF
-	error = mac_proc_check_get_task(kauth_cred_get(), &pident);
+	error = mac_proc_check_get_task(kauth_cred_get(), &pident, TASK_FLAVOR_READ);
 	if (error) {
 		error = EPERM;
 		goto trfpout;
@@ -1307,7 +1314,8 @@ task_read_for_pid(struct proc *p __unused, struct task_read_for_pid_args *args, 
 
 
 		/* Call up to the task access server */
-		error = __KERNEL_WAITING_ON_TASKGATED_CHECK_ACCESS_UPCALL__(tfpport, proc_selfpid(), kauth_getgid(), pid);
+		error = __KERNEL_WAITING_ON_TASKGATED_CHECK_ACCESS_UPCALL__(tfpport,
+		    proc_selfpid(), kauth_getgid(), pid, TASK_FLAVOR_READ);
 
 		if (error != MACH_MSG_SUCCESS) {
 			if (error == MACH_RCV_INTERRUPTED) {
@@ -1382,7 +1390,7 @@ pid_suspend(struct proc *p __unused, struct pid_suspend_args *args, int *ret)
 #endif
 
 	target = targetproc->task;
-#ifndef CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX
 	if (target != TASK_NULL) {
 		/* If we aren't root and target's task access port is set... */
 		if (!kauth_cred_issuser(kauth_cred_get()) &&
@@ -1395,7 +1403,8 @@ pid_suspend(struct proc *p __unused, struct pid_suspend_args *args, int *ret)
 			}
 
 			/* Call up to the task access server */
-			error = __KERNEL_WAITING_ON_TASKGATED_CHECK_ACCESS_UPCALL__(tfpport, proc_selfpid(), kauth_getgid(), pid);
+			error = __KERNEL_WAITING_ON_TASKGATED_CHECK_ACCESS_UPCALL__(tfpport,
+			    proc_selfpid(), kauth_getgid(), pid, TASK_FLAVOR_CONTROL);
 
 			if (error != MACH_MSG_SUCCESS) {
 				if (error == MACH_RCV_INTERRUPTED) {
@@ -1407,7 +1416,7 @@ pid_suspend(struct proc *p __unused, struct pid_suspend_args *args, int *ret)
 			}
 		}
 	}
-#endif
+#endif /* XNU_TARGET_OS_OSX */
 
 	task_reference(target);
 	error = task_pidsuspend(target);
@@ -1460,14 +1469,14 @@ debug_control_port_for_pid(struct debug_control_port_for_pid_args *args)
 
 	/* Always check if pid == 0 */
 	if (pid == 0) {
-		(void) copyout((char *)&t1, task_addr, sizeof(mach_port_name_t));
+		(void) copyout((char *)&tret, task_addr, sizeof(mach_port_name_t));
 		AUDIT_MACH_SYSCALL_EXIT(KERN_FAILURE);
 		return KERN_FAILURE;
 	}
 
 	t1 = port_name_to_task(target_tport);
 	if (t1 == TASK_NULL) {
-		(void) copyout((char *)&t1, task_addr, sizeof(mach_port_name_t));
+		(void) copyout((char *)&tret, task_addr, sizeof(mach_port_name_t));
 		AUDIT_MACH_SYSCALL_EXIT(KERN_FAILURE);
 		return KERN_FAILURE;
 	}
@@ -1505,7 +1514,7 @@ debug_control_port_for_pid(struct debug_control_port_for_pid_args *args)
 
 	if (!IOTaskHasEntitlement(current_task(), DEBUG_PORT_ENTITLEMENT)) {
 #if CONFIG_MACF
-		error = mac_proc_check_get_task(kauth_cred_get(), &pident);
+		error = mac_proc_check_get_task(kauth_cred_get(), &pident, TASK_FLAVOR_CONTROL);
 		if (error) {
 			error = KERN_FAILURE;
 			goto tfpout;
@@ -1524,7 +1533,8 @@ debug_control_port_for_pid(struct debug_control_port_for_pid_args *args)
 
 
 			/* Call up to the task access server */
-			error = __KERNEL_WAITING_ON_TASKGATED_CHECK_ACCESS_UPCALL__(tfpport, proc_selfpid(), kauth_getgid(), pid);
+			error = __KERNEL_WAITING_ON_TASKGATED_CHECK_ACCESS_UPCALL__(tfpport,
+			    proc_selfpid(), kauth_getgid(), pid, TASK_FLAVOR_CONTROL);
 
 			if (error != MACH_MSG_SUCCESS) {
 				if (error == MACH_RCV_INTERRUPTED) {
@@ -1607,7 +1617,7 @@ pid_resume(struct proc *p __unused, struct pid_resume_args *args, int *ret)
 #endif
 
 	target = targetproc->task;
-#ifndef CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX
 	if (target != TASK_NULL) {
 		/* If we aren't root and target's task access port is set... */
 		if (!kauth_cred_issuser(kauth_cred_get()) &&
@@ -1620,7 +1630,8 @@ pid_resume(struct proc *p __unused, struct pid_resume_args *args, int *ret)
 			}
 
 			/* Call up to the task access server */
-			error = __KERNEL_WAITING_ON_TASKGATED_CHECK_ACCESS_UPCALL__(tfpport, proc_selfpid(), kauth_getgid(), pid);
+			error = __KERNEL_WAITING_ON_TASKGATED_CHECK_ACCESS_UPCALL__(tfpport,
+			    proc_selfpid(), kauth_getgid(), pid, TASK_FLAVOR_CONTROL);
 
 			if (error != MACH_MSG_SUCCESS) {
 				if (error == MACH_RCV_INTERRUPTED) {
@@ -1632,7 +1643,7 @@ pid_resume(struct proc *p __unused, struct pid_resume_args *args, int *ret)
 			}
 		}
 	}
-#endif
+#endif /* XNU_TARGET_OS_OSX */
 
 #if !XNU_TARGET_OS_OSX
 #if SOCKETS
@@ -1675,7 +1686,7 @@ out:
 	return error;
 }
 
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 /*
  * Freeze the specified process (provided in args->pid), or find and freeze a PID.
  * When a process is specified, this call is blocking, otherwise we wake up the
@@ -1737,7 +1748,7 @@ out:
 	*ret = error;
 	return error;
 }
-#endif /* CONFIG_EMBEDDED */
+#endif /* !XNU_TARGET_OS_OSX */
 
 #if SOCKETS
 int
@@ -1750,7 +1761,7 @@ networking_memstatus_callout(proc_t p, uint32_t status)
 	 * proc lock NOT held
 	 * a reference on the proc has been held / shall be dropped by the caller.
 	 */
-	LCK_MTX_ASSERT(proc_list_mlock, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(&proc_list_mlock, LCK_MTX_ASSERT_NOTOWNED);
 	LCK_MTX_ASSERT(&p->p_mlock, LCK_MTX_ASSERT_NOTOWNED);
 
 	proc_fdlock(p);
@@ -1946,6 +1957,7 @@ shared_region_check_np(
 	mach_vm_offset_t        start_address = 0;
 	int                     error = 0;
 	kern_return_t           kr;
+	task_t                  task = current_task();
 
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: %p [%d(%s)] -> check_np(0x%llx)\n",
@@ -1954,10 +1966,10 @@ shared_region_check_np(
 		(uint64_t)uap->start_address));
 
 	/* retrieve the current tasks's shared region */
-	shared_region = vm_shared_region_get(current_task());
+	shared_region = vm_shared_region_get(task);
 	if (shared_region != NULL) {
 		/* retrieve address of its first mapping... */
-		kr = vm_shared_region_start_address(shared_region, &start_address);
+		kr = vm_shared_region_start_address(shared_region, &start_address, task);
 		if (kr != KERN_SUCCESS) {
 			error = ENOMEM;
 		} else {
@@ -2714,7 +2726,11 @@ done:
  * a max value. The kernel will choose a random value based on that, then use it
  * for all shared regions.
  */
-#define SLIDE_AMOUNT_MASK ~PAGE_MASK
+#if defined (__x86_64__)
+#define SLIDE_AMOUNT_MASK ~FOURK_PAGE_MASK
+#else
+#define SLIDE_AMOUNT_MASK ~SIXTEENK_PAGE_MASK
+#endif
 
 int
 shared_region_map_and_slide_2_np(
@@ -2827,7 +2843,7 @@ shared_region_map_and_slide_2_np(
 				}
 				mappings[m].sms_address += slide_amount;
 				if (mappings[m].sms_slide_size != 0) {
-					mappings[i].sms_slide_start += slide_amount;
+					mappings[m].sms_slide_start += slide_amount;
 				}
 			}
 		}
@@ -2894,19 +2910,8 @@ static int vm_mixed_pagesize_supported = 0;
 SYSCTL_INT(_debug, OID_AUTO, vm_mixed_pagesize_supported, CTLFLAG_ANYBODY | CTLFLAG_RD | CTLFLAG_LOCKED,
     &vm_mixed_pagesize_supported, 0, "kernel support for mixed pagesize");
 
-
-extern uint64_t get_pages_grabbed_count(void);
-
-static int
-pages_grabbed SYSCTL_HANDLER_ARGS
-{
-#pragma unused(arg1, arg2, oidp)
-	uint64_t value = get_pages_grabbed_count();
-	return SYSCTL_OUT(req, &value, sizeof(value));
-}
-
-SYSCTL_PROC(_vm, OID_AUTO, pages_grabbed, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED,
-    0, 0, &pages_grabbed, "QU", "Total pages grabbed");
+SCALABLE_COUNTER_DECLARE(vm_page_grab_count);
+SYSCTL_SCALABLE_COUNTER(_vm, pages_grabbed, vm_page_grab_count, "Total pages grabbed");
 SYSCTL_ULONG(_vm, OID_AUTO, pages_freed, CTLFLAG_RD | CTLFLAG_LOCKED,
     &vm_pageout_vminfo.vm_page_pages_freed, "Total pages freed");
 
@@ -3344,6 +3349,47 @@ extern int pmap_ledgers_panic_leeway;
 SYSCTL_INT(_vm, OID_AUTO, pmap_ledgers_panic_leeway, CTLFLAG_RW | CTLFLAG_LOCKED, &pmap_ledgers_panic_leeway, 0, "");
 #endif /* MACH_ASSERT */
 
+
+extern uint64_t vm_map_lookup_locked_copy_slowly_count;
+extern uint64_t vm_map_lookup_locked_copy_slowly_size;
+extern uint64_t vm_map_lookup_locked_copy_slowly_max;
+extern uint64_t vm_map_lookup_locked_copy_slowly_restart;
+extern uint64_t vm_map_lookup_locked_copy_slowly_error;
+extern uint64_t vm_map_lookup_locked_copy_strategically_count;
+extern uint64_t vm_map_lookup_locked_copy_strategically_size;
+extern uint64_t vm_map_lookup_locked_copy_strategically_max;
+extern uint64_t vm_map_lookup_locked_copy_strategically_restart;
+extern uint64_t vm_map_lookup_locked_copy_strategically_error;
+extern uint64_t vm_map_lookup_locked_copy_shadow_count;
+extern uint64_t vm_map_lookup_locked_copy_shadow_size;
+extern uint64_t vm_map_lookup_locked_copy_shadow_max;
+SYSCTL_QUAD(_vm, OID_AUTO, map_lookup_locked_copy_slowly_count,
+    CTLFLAG_RD | CTLFLAG_LOCKED, &vm_map_lookup_locked_copy_slowly_count, "");
+SYSCTL_QUAD(_vm, OID_AUTO, map_lookup_locked_copy_slowly_size,
+    CTLFLAG_RD | CTLFLAG_LOCKED, &vm_map_lookup_locked_copy_slowly_size, "");
+SYSCTL_QUAD(_vm, OID_AUTO, map_lookup_locked_copy_slowly_max,
+    CTLFLAG_RD | CTLFLAG_LOCKED, &vm_map_lookup_locked_copy_slowly_max, "");
+SYSCTL_QUAD(_vm, OID_AUTO, map_lookup_locked_copy_slowly_restart,
+    CTLFLAG_RD | CTLFLAG_LOCKED, &vm_map_lookup_locked_copy_slowly_restart, "");
+SYSCTL_QUAD(_vm, OID_AUTO, map_lookup_locked_copy_slowly_error,
+    CTLFLAG_RD | CTLFLAG_LOCKED, &vm_map_lookup_locked_copy_slowly_error, "");
+SYSCTL_QUAD(_vm, OID_AUTO, map_lookup_locked_copy_strategically_count,
+    CTLFLAG_RD | CTLFLAG_LOCKED, &vm_map_lookup_locked_copy_strategically_count, "");
+SYSCTL_QUAD(_vm, OID_AUTO, map_lookup_locked_copy_strategically_size,
+    CTLFLAG_RD | CTLFLAG_LOCKED, &vm_map_lookup_locked_copy_strategically_size, "");
+SYSCTL_QUAD(_vm, OID_AUTO, map_lookup_locked_copy_strategically_max,
+    CTLFLAG_RD | CTLFLAG_LOCKED, &vm_map_lookup_locked_copy_strategically_max, "");
+SYSCTL_QUAD(_vm, OID_AUTO, map_lookup_locked_copy_strategically_restart,
+    CTLFLAG_RD | CTLFLAG_LOCKED, &vm_map_lookup_locked_copy_strategically_restart, "");
+SYSCTL_QUAD(_vm, OID_AUTO, map_lookup_locked_copy_strategically_error,
+    CTLFLAG_RD | CTLFLAG_LOCKED, &vm_map_lookup_locked_copy_strategically_error, "");
+SYSCTL_QUAD(_vm, OID_AUTO, map_lookup_locked_copy_shadow_count,
+    CTLFLAG_RD | CTLFLAG_LOCKED, &vm_map_lookup_locked_copy_shadow_count, "");
+SYSCTL_QUAD(_vm, OID_AUTO, map_lookup_locked_copy_shadow_size,
+    CTLFLAG_RD | CTLFLAG_LOCKED, &vm_map_lookup_locked_copy_shadow_size, "");
+SYSCTL_QUAD(_vm, OID_AUTO, map_lookup_locked_copy_shadow_max,
+    CTLFLAG_RD | CTLFLAG_LOCKED, &vm_map_lookup_locked_copy_shadow_max, "");
+
 extern int vm_protect_privileged_from_untrusted;
 SYSCTL_INT(_vm, OID_AUTO, protect_privileged_from_untrusted,
     CTLFLAG_RW | CTLFLAG_LOCKED, &vm_protect_privileged_from_untrusted, 0, "");
@@ -3416,8 +3462,84 @@ SYSCTL_PROC(_vm, OID_AUTO, shared_region_pivot,
     CTLTYPE_INT | CTLFLAG_WR | CTLFLAG_LOCKED,
     0, 0, shared_region_pivot, "I", "");
 
-extern int vm_remap_old_path, vm_remap_new_path;
-SYSCTL_INT(_vm, OID_AUTO, remap_old_path,
-    CTLFLAG_RD | CTLFLAG_LOCKED, &vm_remap_old_path, 0, "");
-SYSCTL_INT(_vm, OID_AUTO, remap_new_path,
-    CTLFLAG_RD | CTLFLAG_LOCKED, &vm_remap_new_path, 0, "");
+/*
+ * sysctl to return the number of pages on retired_pages_object
+ */
+static int
+retired_pages_count SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2, oidp)
+	extern uint32_t vm_retired_pages_count(void);
+	uint32_t value = vm_retired_pages_count();
+
+	return SYSCTL_OUT(req, &value, sizeof(value));
+}
+SYSCTL_PROC(_vm, OID_AUTO, retired_pages_count, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED,
+    0, 0, &retired_pages_count, "I", "");
+
+SYSCTL_INT(_vm, OID_AUTO, vmtc_total, CTLFLAG_RD | CTLFLAG_LOCKED,
+    &vmtc_total, 0, "total text page corruptions detected");
+SYSCTL_INT(_vm, OID_AUTO, vmtc_undiagnosed, CTLFLAG_RD | CTLFLAG_LOCKED,
+    &vmtc_undiagnosed, 0, "undiagnosed text page corruptions");
+SYSCTL_INT(_vm, OID_AUTO, vmtc_not_eligible, CTLFLAG_RD | CTLFLAG_LOCKED,
+    &vmtc_not_eligible, 0, "text page corruptions not eligible for correction");
+SYSCTL_INT(_vm, OID_AUTO, vmtc_copyin_fail, CTLFLAG_RD | CTLFLAG_LOCKED,
+    &vmtc_copyin_fail, 0, "undiagnosed text page corruptions due to copyin failure");
+SYSCTL_INT(_vm, OID_AUTO, vmtc_not_found, CTLFLAG_RD | CTLFLAG_LOCKED,
+    &vmtc_not_found, 0, "text page corruptions but no diff found");
+SYSCTL_INT(_vm, OID_AUTO, vmtc_one_bit_flip, CTLFLAG_RD | CTLFLAG_LOCKED,
+    &vmtc_one_bit_flip, 0, "text page corruptions that had a single bit flip");
+
+SYSCTL_INT(_vm, OID_AUTO, vmtc_1_byte, CTLFLAG_RD | CTLFLAG_LOCKED,
+    &vmtc_byte_counts[0], 0, "text page corruptions with 1 changed byte");
+
+SYSCTL_INT(_vm, OID_AUTO, vmtc_2_byte, CTLFLAG_RD | CTLFLAG_LOCKED,
+    &vmtc_byte_counts[1], 0, "text page corruptions with 2 changed bytes");
+
+SYSCTL_INT(_vm, OID_AUTO, vmtc_4_byte, CTLFLAG_RD | CTLFLAG_LOCKED,
+    &vmtc_byte_counts[2], 0, "text page corruptions with 3 to 4 changed bytes");
+
+SYSCTL_INT(_vm, OID_AUTO, vmtc_8_byte, CTLFLAG_RD | CTLFLAG_LOCKED,
+    &vmtc_byte_counts[3], 0, "text page corruptions with 5 to 8 changed bytes");
+
+SYSCTL_INT(_vm, OID_AUTO, vmtc_16_byte, CTLFLAG_RD | CTLFLAG_LOCKED,
+    &vmtc_byte_counts[4], 0, "text page corruptions with 9 to 16 changed bytes");
+
+SYSCTL_INT(_vm, OID_AUTO, vmtc_32_byte, CTLFLAG_RD | CTLFLAG_LOCKED,
+    &vmtc_byte_counts[5], 0, "text page corruptions with 17 to 32 changed bytes");
+
+SYSCTL_INT(_vm, OID_AUTO, vmtc_64_byte, CTLFLAG_RD | CTLFLAG_LOCKED,
+    &vmtc_byte_counts[6], 0, "text page corruptions with 33 to 64 changed bytes");
+
+SYSCTL_INT(_vm, OID_AUTO, vmtc_128byte, CTLFLAG_RD | CTLFLAG_LOCKED,
+    &vmtc_byte_counts[7], 0, "text page corruptions with 65 to 128 changed bytes");
+
+SYSCTL_INT(_vm, OID_AUTO, vmtc_256_byte, CTLFLAG_RD | CTLFLAG_LOCKED,
+    &vmtc_byte_counts[8], 0, "text page corruptions with >128 changed bytes");
+
+#if DEBUG || DEVELOPMENT
+/*
+ * A sysctl that can be used to corrupt a text page with an illegal instruction.
+ * Used for testing text page self healing.
+ */
+extern kern_return_t vm_corrupt_text_addr(uintptr_t);
+static int
+corrupt_text_addr(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+{
+	uint64_t value = 0;
+	int error = sysctl_handle_quad(oidp, &value, 0, req);
+	if (error || !req->newptr) {
+		return error;
+	}
+
+	if (vm_corrupt_text_addr((uintptr_t)value) == KERN_SUCCESS) {
+		return 0;
+	} else {
+		return EINVAL;
+	}
+}
+
+SYSCTL_PROC(_vm, OID_AUTO, corrupt_text_addr,
+    CTLTYPE_QUAD | CTLFLAG_WR | CTLFLAG_LOCKED | CTLFLAG_MASKED,
+    0, 0, corrupt_text_addr, "-", "");
+#endif /* DEBUG || DEVELOPMENT */

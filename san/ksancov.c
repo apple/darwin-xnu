@@ -106,7 +106,7 @@ static uint32_t __unused npcs = 0;
 static _Atomic unsigned active_devs;
 
 static LCK_GRP_DECLARE(ksancov_lck_grp, "ksancov_lck_grp");
-static lck_rw_t *ksancov_devs_lck;
+static LCK_RW_DECLARE(ksancov_devs_lck, &ksancov_lck_grp);
 
 /* array of devices indexed by devnode minor */
 static ksancov_dev_t ksancov_devs[KSANCOV_MAX_DEV];
@@ -386,21 +386,21 @@ ksancov_open(dev_t dev, int flags, int devtype, proc_t p)
 		return EBUSY;
 	}
 
-	lck_rw_lock_exclusive(ksancov_devs_lck);
+	lck_rw_lock_exclusive(&ksancov_devs_lck);
 
 	if (ksancov_devs[minor_num]) {
-		lck_rw_unlock_exclusive(ksancov_devs_lck);
+		lck_rw_unlock_exclusive(&ksancov_devs_lck);
 		return EBUSY;
 	}
 
 	ksancov_dev_t d = create_dev(dev);
 	if (!d) {
-		lck_rw_unlock_exclusive(ksancov_devs_lck);
+		lck_rw_unlock_exclusive(&ksancov_devs_lck);
 		return ENOMEM;
 	}
 	ksancov_devs[minor_num] = d;
 
-	lck_rw_unlock_exclusive(ksancov_devs_lck);
+	lck_rw_unlock_exclusive(&ksancov_devs_lck);
 
 	return 0;
 }
@@ -531,6 +531,9 @@ ksancov_detach(ksancov_dev_t d)
 		thread_wait(d->thread, TRUE);
 	}
 
+	assert(active_devs >= 1);
+	os_atomic_sub(&active_devs, 1, relaxed);
+
 	/* drop our thread reference */
 	thread_deallocate(d->thread);
 	d->thread = THREAD_NULL;
@@ -542,10 +545,10 @@ ksancov_close(dev_t dev, int flags, int devtype, proc_t p)
 #pragma unused(flags,devtype,p)
 	const int minor_num = minor(dev);
 
-	lck_rw_lock_exclusive(ksancov_devs_lck);
+	lck_rw_lock_exclusive(&ksancov_devs_lck);
 	ksancov_dev_t d = ksancov_devs[minor_num];
 	ksancov_devs[minor_num] = NULL; /* dev no longer discoverable */
-	lck_rw_unlock_exclusive(ksancov_devs_lck);
+	lck_rw_unlock_exclusive(&ksancov_devs_lck);
 
 	/*
 	 * No need to lock d here as there is and will be no one having its
@@ -558,10 +561,8 @@ ksancov_close(dev_t dev, int flags, int devtype, proc_t p)
 	}
 
 	if (d->mode == KS_MODE_TRACE && d->trace) {
-		os_atomic_sub(&active_devs, 1, relaxed);
 		os_atomic_store(&d->trace->enabled, 0, relaxed); /* stop tracing */
 	} else if (d->mode == KS_MODE_COUNTERS && d->counters) {
-		os_atomic_sub(&active_devs, 1, relaxed);
 		os_atomic_store(&d->counters->enabled, 0, relaxed);         /* stop tracing */
 	}
 
@@ -620,10 +621,10 @@ ksancov_ioctl(dev_t dev, unsigned long cmd, caddr_t _data, int fflag, proc_t p)
 	struct ksancov_buf_desc *mcmd;
 	void *data = (void *)_data;
 
-	lck_rw_lock_shared(ksancov_devs_lck);
+	lck_rw_lock_shared(&ksancov_devs_lck);
 	ksancov_dev_t d = ksancov_devs[minor(dev)];
 	if (!d) {
-		lck_rw_unlock_shared(ksancov_devs_lck);
+		lck_rw_unlock_shared(&ksancov_devs_lck);
 		return EINVAL;         /* dev not open */
 	}
 
@@ -666,7 +667,7 @@ ksancov_ioctl(dev_t dev, unsigned long cmd, caddr_t _data, int fflag, proc_t p)
 		break;
 	}
 
-	lck_rw_unlock_shared(ksancov_devs_lck);
+	lck_rw_unlock_shared(&ksancov_devs_lck);
 
 	return ret;
 }
@@ -735,8 +736,6 @@ ksancov_init_dev(void)
 	ksancov_edgemap->magic = KSANCOV_EDGEMAP_MAGIC;
 	ksancov_edgemap->nedges = (uint32_t)nedges;
 	ksancov_edgemap->offset = KSANCOV_PC_OFFSET;
-
-	ksancov_devs_lck = lck_rw_alloc_init(&ksancov_lck_grp, LCK_ATTR_NULL);
 
 	return 0;
 }

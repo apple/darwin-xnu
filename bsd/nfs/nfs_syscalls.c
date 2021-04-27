@@ -358,7 +358,7 @@ void
 nfsiod_terminate(struct nfsiod *niod)
 {
 	nfsiod_thread_count--;
-	lck_mtx_unlock(nfsiod_mutex);
+	lck_mtx_unlock(&nfsiod_mutex);
 	if (niod) {
 		FREE(niod, M_TEMP);
 	} else {
@@ -377,21 +377,21 @@ nfsiod_thread(void)
 
 	MALLOC(niod, struct nfsiod *, sizeof(struct nfsiod), M_TEMP, M_WAITOK);
 	if (!niod) {
-		lck_mtx_lock(nfsiod_mutex);
+		lck_mtx_lock(&nfsiod_mutex);
 		nfsiod_thread_count--;
 		wakeup(current_thread());
-		lck_mtx_unlock(nfsiod_mutex);
+		lck_mtx_unlock(&nfsiod_mutex);
 		thread_terminate(current_thread());
 		/*NOTREACHED*/
 	}
 	bzero(niod, sizeof(*niod));
-	lck_mtx_lock(nfsiod_mutex);
+	lck_mtx_lock(&nfsiod_mutex);
 	TAILQ_INSERT_HEAD(&nfsiodfree, niod, niod_link);
 	wakeup(current_thread());
-	error = msleep0(niod, nfsiod_mutex, PWAIT | PDROP, "nfsiod", NFS_ASYNCTHREADMAXIDLE * hz, nfsiod_continue);
+	error = msleep0(niod, &nfsiod_mutex, PWAIT | PDROP, "nfsiod", NFS_ASYNCTHREADMAXIDLE * hz, nfsiod_continue);
 	/* shouldn't return... so we have an error */
 	/* remove an old nfsiod struct and terminate */
-	lck_mtx_lock(nfsiod_mutex);
+	lck_mtx_lock(&nfsiod_mutex);
 	if ((niod = TAILQ_LAST(&nfsiodfree, nfsiodlist))) {
 		TAILQ_REMOVE(&nfsiodfree, niod, niod_link);
 	}
@@ -408,18 +408,18 @@ nfsiod_start(void)
 {
 	thread_t thd = THREAD_NULL;
 
-	lck_mtx_lock(nfsiod_mutex);
+	lck_mtx_lock(&nfsiod_mutex);
 	if ((nfsiod_thread_count >= NFSIOD_MAX) && (nfsiod_thread_count > 0)) {
-		lck_mtx_unlock(nfsiod_mutex);
+		lck_mtx_unlock(&nfsiod_mutex);
 		return EBUSY;
 	}
 	nfsiod_thread_count++;
 	if (kernel_thread_start((thread_continue_t)nfsiod_thread, NULL, &thd) != KERN_SUCCESS) {
-		lck_mtx_unlock(nfsiod_mutex);
+		lck_mtx_unlock(&nfsiod_mutex);
 		return EBUSY;
 	}
 	/* wait for the thread to complete startup */
-	msleep(thd, nfsiod_mutex, PWAIT | PDROP, "nfsiodw", NULL);
+	msleep(thd, &nfsiod_mutex, PWAIT | PDROP, "nfsiodw", NULL);
 	thread_deallocate(thd);
 	return 0;
 }
@@ -438,7 +438,7 @@ nfsiod_continue(int error)
 	struct nfs_reqqhead iodq;
 	int morework;
 
-	lck_mtx_lock(nfsiod_mutex);
+	lck_mtx_lock(&nfsiod_mutex);
 	niod = TAILQ_FIRST(&nfsiodwork);
 	if (!niod) {
 		/* there's no work queued up */
@@ -478,7 +478,7 @@ worktodo:
 			req->r_flags |= R_IOD;
 			lck_mtx_unlock(&req->r_mtx);
 		}
-		lck_mtx_unlock(nfsiod_mutex);
+		lck_mtx_unlock(&nfsiod_mutex);
 
 		/* process the queue */
 		TAILQ_FOREACH_SAFE(req, &iodq, r_achain, treq) {
@@ -488,7 +488,7 @@ worktodo:
 		}
 
 		/* now check if there's more/other work to be done */
-		lck_mtx_lock(nfsiod_mutex);
+		lck_mtx_lock(&nfsiod_mutex);
 		morework = !TAILQ_EMPTY(&nmp->nm_iodq);
 		if (!morework || !TAILQ_EMPTY(&nfsiodmounts)) {
 			/*
@@ -516,10 +516,10 @@ worktodo:
 	/* queue ourselves back up - if there aren't too many threads running */
 	if (nfsiod_thread_count <= NFSIOD_MAX) {
 		TAILQ_INSERT_HEAD(&nfsiodfree, niod, niod_link);
-		error = msleep0(niod, nfsiod_mutex, PWAIT | PDROP, "nfsiod", NFS_ASYNCTHREADMAXIDLE * hz, nfsiod_continue);
+		error = msleep0(niod, &nfsiod_mutex, PWAIT | PDROP, "nfsiod", NFS_ASYNCTHREADMAXIDLE * hz, nfsiod_continue);
 		/* shouldn't return... so we have an error */
 		/* remove an old nfsiod struct and terminate */
-		lck_mtx_lock(nfsiod_mutex);
+		lck_mtx_lock(&nfsiod_mutex);
 		if ((niod = TAILQ_LAST(&nfsiodfree, nfsiodlist))) {
 			TAILQ_REMOVE(&nfsiodfree, niod, niod_link);
 		}
@@ -1028,16 +1028,16 @@ nfssvc_addsock(socket_t so, mbuf_t mynam)
 		return ENOMEM;
 	}
 	bzero((caddr_t)slp, sizeof(struct nfsrv_sock));
-	lck_rw_init(&slp->ns_rwlock, nfsrv_slp_rwlock_group, LCK_ATTR_NULL);
-	lck_mtx_init(&slp->ns_wgmutex, nfsrv_slp_mutex_group, LCK_ATTR_NULL);
+	lck_rw_init(&slp->ns_rwlock, &nfsrv_slp_rwlock_group, LCK_ATTR_NULL);
+	lck_mtx_init(&slp->ns_wgmutex, &nfsrv_slp_mutex_group, LCK_ATTR_NULL);
 
-	lck_mtx_lock(nfsd_mutex);
+	lck_mtx_lock(&nfsd_mutex);
 
 	if (soprotocol == IPPROTO_UDP) {
 		if (sodomain == AF_INET) {
 			/* There should be only one UDP/IPv4 socket */
 			if (nfsrv_udpsock) {
-				lck_mtx_unlock(nfsd_mutex);
+				lck_mtx_unlock(&nfsd_mutex);
 				nfsrv_slpfree(slp);
 				mbuf_freem(mynam);
 				return EEXIST;
@@ -1047,7 +1047,7 @@ nfssvc_addsock(socket_t so, mbuf_t mynam)
 		if (sodomain == AF_INET6) {
 			/* There should be only one UDP/IPv6 socket */
 			if (nfsrv_udp6sock) {
-				lck_mtx_unlock(nfsd_mutex);
+				lck_mtx_unlock(&nfsd_mutex);
 				nfsrv_slpfree(slp);
 				mbuf_freem(mynam);
 				return EEXIST;
@@ -1130,7 +1130,7 @@ nfssvc_addsock(socket_t so, mbuf_t mynam)
 	slp->ns_flag = SLP_VALID | SLP_NEEDQ;
 
 	nfsrv_wakenfsd(slp);
-	lck_mtx_unlock(nfsd_mutex);
+	lck_mtx_unlock(&nfsd_mutex);
 
 	return 0;
 }
@@ -1194,12 +1194,12 @@ nfssvc_nfsd(void)
 		return ENOMEM;
 	}
 	bzero(nfsd, sizeof(struct nfsd));
-	lck_mtx_lock(nfsd_mutex);
+	lck_mtx_lock(&nfsd_mutex);
 	if (nfsd_thread_count++ == 0) {
 		nfsrv_initcache();              /* Init the server request cache */
 	}
 	TAILQ_INSERT_TAIL(&nfsd_head, nfsd, nfsd_chain);
-	lck_mtx_unlock(nfsd_mutex);
+	lck_mtx_unlock(&nfsd_mutex);
 
 	context.vc_thread = current_thread();
 
@@ -1222,7 +1222,7 @@ nfssvc_nfsd(void)
 		} else {
 			/* need to find work to do */
 			error = 0;
-			lck_mtx_lock(nfsd_mutex);
+			lck_mtx_lock(&nfsd_mutex);
 			while (!nfsd->nfsd_slp && TAILQ_EMPTY(&nfsrv_sockwait) && TAILQ_EMPTY(&nfsrv_sockwork)) {
 				if (nfsd_thread_count > nfsd_thread_max) {
 					/*
@@ -1234,7 +1234,7 @@ nfssvc_nfsd(void)
 				}
 				nfsd->nfsd_flag |= NFSD_WAITING;
 				TAILQ_INSERT_HEAD(&nfsd_queue, nfsd, nfsd_queue);
-				error = msleep(nfsd, nfsd_mutex, PSOCK | PCATCH, "nfsd", &to);
+				error = msleep(nfsd, &nfsd_mutex, PSOCK | PCATCH, "nfsd", &to);
 				if (error) {
 					if (nfsd->nfsd_flag & NFSD_WAITING) {
 						TAILQ_REMOVE(&nfsd_queue, nfsd, nfsd_queue);
@@ -1290,7 +1290,7 @@ nfssvc_nfsd(void)
 				slp->ns_flag |= SLP_WORKQ;
 				lck_rw_done(&slp->ns_rwlock);
 			}
-			lck_mtx_unlock(nfsd_mutex);
+			lck_mtx_unlock(&nfsd_mutex);
 			if (!slp) {
 				continue;
 			}
@@ -1495,7 +1495,7 @@ nfssvc_nfsd(void)
 					}
 					NFS_ZFREE(nfsrv_descript_zone, nd);
 					nfsrv_slpderef(slp);
-					lck_mtx_lock(nfsd_mutex);
+					lck_mtx_lock(&nfsd_mutex);
 					goto done;
 				}
 				break;
@@ -1553,14 +1553,14 @@ nfssvc_nfsd(void)
 			nfsrv_slpderef(slp);
 		}
 	}
-	lck_mtx_lock(nfsd_mutex);
+	lck_mtx_lock(&nfsd_mutex);
 done:
 	TAILQ_REMOVE(&nfsd_head, nfsd, nfsd_chain);
 	FREE(nfsd, M_NFSD);
 	if (--nfsd_thread_count == 0) {
 		nfsrv_cleanup();
 	}
-	lck_mtx_unlock(nfsd_mutex);
+	lck_mtx_unlock(&nfsd_mutex);
 	return error;
 }
 
@@ -1677,8 +1677,8 @@ nfsrv_slpfree(struct nfsrv_sock *slp)
 	}
 	LIST_INIT(&slp->ns_tq);
 
-	lck_rw_destroy(&slp->ns_rwlock, nfsrv_slp_rwlock_group);
-	lck_mtx_destroy(&slp->ns_wgmutex, nfsrv_slp_mutex_group);
+	lck_rw_destroy(&slp->ns_rwlock, &nfsrv_slp_rwlock_group);
+	lck_mtx_destroy(&slp->ns_wgmutex, &nfsrv_slp_mutex_group);
 	FREE(slp, M_NFSSVC);
 }
 
@@ -1734,9 +1734,9 @@ nfsrv_slpderef_locked(struct nfsrv_sock *slp)
 void
 nfsrv_slpderef(struct nfsrv_sock *slp)
 {
-	lck_mtx_lock(nfsd_mutex);
+	lck_mtx_lock(&nfsd_mutex);
 	nfsrv_slpderef_locked(slp);
-	lck_mtx_unlock(nfsd_mutex);
+	lck_mtx_unlock(&nfsd_mutex);
 }
 
 /*
@@ -1751,7 +1751,7 @@ nfsrv_idlesock_timer(__unused void *param0, __unused void *param1)
 	time_t time_to_wait = nfsrv_sock_idle_timeout;
 
 	microuptime(&now);
-	lck_mtx_lock(nfsd_mutex);
+	lck_mtx_lock(&nfsd_mutex);
 
 	/* Turn off the timer if we're suppose to and get out */
 	if (nfsrv_sock_idle_timeout < NFSD_MIN_IDLE_TIMEOUT) {
@@ -1759,7 +1759,7 @@ nfsrv_idlesock_timer(__unused void *param0, __unused void *param1)
 	}
 	if ((nfsrv_sock_tcp_cnt <= 2 * nfsd_thread_max) || (nfsrv_sock_idle_timeout == 0)) {
 		nfsrv_idlesock_timer_on = 0;
-		lck_mtx_unlock(nfsd_mutex);
+		lck_mtx_unlock(&nfsd_mutex);
 		return;
 	}
 
@@ -1800,7 +1800,7 @@ nfsrv_idlesock_timer(__unused void *param0, __unused void *param1)
 	nfs_interval_timer_start(nfsrv_idlesock_timer_call, time_to_wait * 1000);
 	/* Remember when the next timer will fire for nfssvc_addsock. */
 	nfsrv_idlesock_timer_on = now.tv_sec + time_to_wait;
-	lck_mtx_unlock(nfsd_mutex);
+	lck_mtx_unlock(&nfsd_mutex);
 }
 
 /*
@@ -1832,7 +1832,7 @@ nfsrv_cleanup(void)
 	/*
 	 * Flush pending file write fsevents
 	 */
-	lck_mtx_lock(nfsrv_fmod_mutex);
+	lck_mtx_lock(&nfsrv_fmod_mutex);
 	for (i = 0; i < NFSRVFMODHASHSZ; i++) {
 		for (fp = LIST_FIRST(&nfsrv_fmod_hashtbl[i]); fp; fp = nfp) {
 			/*
@@ -1853,7 +1853,7 @@ nfsrv_cleanup(void)
 		}
 	}
 	nfsrv_fmod_pending = 0;
-	lck_mtx_unlock(nfsrv_fmod_mutex);
+	lck_mtx_unlock(&nfsrv_fmod_mutex);
 #endif
 
 	nfsrv_uc_cleanup();     /* Stop nfs socket up-call threads */

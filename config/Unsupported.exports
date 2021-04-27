@@ -1,9 +1,4 @@
 _Debugger
-_KUNCExecute
-_KUNCGetNotificationID
-_KUNCUserNotificationDisplayAlert
-_KUNCUserNotificationDisplayFromBundle
-_KUNCUserNotificationDisplayNotice
 _NDR_record
 _OSSpinLockTry
 _OSSpinLockUnlock

@@ -202,14 +202,20 @@ typedef struct boot_args {
 	/* Version 2, Revision 1 */
 	uint64_t    KC_hdrs_vaddr;
 
-	uint64_t    arvRootHashStart; /* Physical address of root hash file */
+	uint64_t    arvRootHashStart; /* Physical address of system volume root hash file */
 	uint64_t    arvRootHashSize;
 
-	uint64_t    arvManifestStart; /* Physical address of manifest file */
+	uint64_t    arvManifestStart; /* Physical address of system volume manifest file */
 	uint64_t    arvManifestSize;
 
+	uint64_t    bsARVRootHashStart;/* Physical address of base system root hash file */
+	uint64_t    bsARVRootHashSize;
+
+	uint64_t    bsARVManifestStart;/* Physical address of base system manifest file */
+	uint64_t    bsARVManifestSize;
+
 	/* Reserved */
-	uint32_t    __reserved4[700];
+	uint32_t    __reserved4[692];
 } boot_args;
 
 extern char assert_boot_args_size_is_4096[sizeof(boot_args) == 4096 ? 1 : -1];

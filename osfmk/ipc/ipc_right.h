@@ -74,13 +74,6 @@
 #define ipc_right_lookup_read           ipc_right_lookup_write
 #define ipc_right_lookup_two_read       ipc_right_lookup_two_write
 
-typedef uint32_t ipc_right_copyin_flags_t;
-
-#define IPC_RIGHT_COPYIN_FLAGS_NONE                   0x0
-#define IPC_RIGHT_COPYIN_FLAGS_DEADOK                 0x1
-#define IPC_RIGHT_COPYIN_FLAGS_ALLOW_IMMOVABLE_SEND   0x2
-#define IPC_RIGHT_COPYIN_FLAGS_ALLOW_DEAD_SEND_ONCE   0x4   /* allow copyin of a send once right to a dead port with no dead name requests */
-
 /* Find an entry in a space, given the name */
 extern kern_return_t ipc_right_lookup_write(
 	ipc_space_t             space,
@@ -96,7 +89,7 @@ extern kern_return_t ipc_right_lookup_two_write(
 	ipc_entry_t             *entryp2);
 
 /* Translate (space, object) -> (name, entry) */
-extern boolean_t ipc_right_reverse(
+extern bool          ipc_right_reverse(
 	ipc_space_t             space,
 	ipc_object_t            object,
 	mach_port_name_t        *namep,
@@ -123,9 +116,7 @@ extern ipc_port_t ipc_right_request_cancel(
 	         ipc_right_request_cancel((space), (port), (name), (entry)))
 
 /* Check if an entry is being used */
-extern boolean_t ipc_right_inuse(
-	ipc_space_t             space,
-	mach_port_name_t        name,
+extern bool      ipc_right_inuse(
 	ipc_entry_t             entry);
 
 /* Check if the port has died */
@@ -134,7 +125,7 @@ extern boolean_t ipc_right_check(
 	ipc_port_t               port,
 	mach_port_name_t         name,
 	ipc_entry_t              entry,
-	ipc_right_copyin_flags_t flags);
+	ipc_object_copyin_flags_t flags);
 
 /* Clean up an entry in a dead space */
 extern void ipc_right_terminate(
@@ -193,7 +184,7 @@ extern kern_return_t ipc_right_copyin(
 	mach_port_name_t          name,
 	ipc_entry_t               entry,
 	mach_msg_type_name_t      msgt_name,
-	ipc_right_copyin_flags_t  flags,
+	ipc_object_copyin_flags_t  flags,
 	ipc_object_t              *objectp,
 	ipc_port_t                *sorightp,
 	ipc_port_t                *releasep,
@@ -218,6 +209,7 @@ extern kern_return_t ipc_right_copyout(
 	mach_port_name_t        name,
 	ipc_entry_t             entry,
 	mach_msg_type_name_t    msgt_name,
+	ipc_object_copyout_flags_t flags,
 	mach_port_context_t     *context,
 	mach_msg_guard_flags_t  *guard_flags,
 	ipc_object_t            object);

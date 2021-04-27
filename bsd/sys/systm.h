@@ -232,7 +232,8 @@ uint32_t throttle_lowpri_io(int sleep_amount);
 /* returns TRUE if the throttle_lowpri_io called with the same sleep_amount would've slept */
 int     throttle_lowpri_io_will_be_throttled(int sleep_amount);
 void    throttle_set_thread_io_policy(int policy);
-int             throttle_get_thread_effective_io_policy(void);
+int     throttle_get_thread_effective_io_policy(void);
+int     throttle_thread_io_tier_above_metadata(void);
 
 typedef struct __throttle_info_handle *throttle_info_handle_t;
 int     throttle_info_ref_by_mask(uint64_t throttle_mask, throttle_info_handle_t *throttle_info_handle);

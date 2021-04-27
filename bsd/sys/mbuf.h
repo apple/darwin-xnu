@@ -694,6 +694,9 @@ struct mbuf {
 /* checksum start adjustment has been done */
 #define CSUM_ADJUST_DONE        0x00020000
 
+/* VLAN encapsulation present */
+#define CSUM_VLAN_ENCAP_PRESENT    0x00040000      /* mbuf has vlan encapsulation */
+
 /* TCP Segment Offloading requested on this mbuf */
 #define CSUM_TSO_IPV4           0x00100000      /* This mbuf needs to be segmented by the NIC */
 #define CSUM_TSO_IPV6           0x00200000      /* This mbuf needs to be segmented by the NIC */
@@ -1079,6 +1082,7 @@ struct mbstat {
 	u_int32_t       m_bigclusters;  /* clusters obtained from page pool */
 	u_int32_t       m_bigclfree;    /* free clusters */
 	u_int32_t       m_bigmclbytes;  /* length of an mbuf cluster */
+	u_int32_t       m_forcedefunct; /* times we force defunct'ed an app's sockets */
 };
 
 /* Compatibillity with 10.3 */

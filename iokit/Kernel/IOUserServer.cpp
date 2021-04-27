@@ -2867,7 +2867,7 @@ IOUserServer::rpc(IORPC rpc)
 		    0, &message_moved);
 	} else {
 		assert(replySize >= (sizeof(IORPCMessageMach) + sizeof(IORPCMessage)));
-		ret = kernel_mach_msg_rpc(&mach->msgh, sendSize, replySize, FALSE, &message_moved);
+		ret = kernel_mach_msg_rpc(&mach->msgh, sendSize, replySize, FALSE, FALSE, &message_moved);
 	}
 
 	ipc_port_release_send(sendPort);
@@ -3365,6 +3365,44 @@ IOUserClient * IOUserServer::withTask(task_t owningTask)
 IOReturn
 IOUserServer::clientClose(void)
 {
+	OSArray   * services;
+
+	if (kIODKLogSetup & gIODKDebug) {
+		DKLOG("%s::clientClose(%p)\n", getName(), this);
+	}
+
+	services = NULL;
+	IOLockLock(fLock);
+	if (fServices) {
+		services = OSArray::withArray(fServices);
+	}
+	IOLockUnlock(fLock);
+
+	// if this was a an expected exit, termination and stop should have detached at this
+	// point, so send any provider still attached and not owned by this user server
+	// the ClientCrashed() notification
+	if (services) {
+		services->iterateObjects(^bool (OSObject * obj) {
+			IOService * service;
+			IOService * provider;
+
+			service = (IOService *) obj;
+			if (service->isInactive()) {
+			        return false;
+			}
+			provider = service->getProvider();
+			if (provider
+			&& (!provider->reserved->uvars || (provider->reserved->uvars->userServer != this))) {
+			        if (kIODKLogSetup & gIODKDebug) {
+			                DKLOG(DKS "::ClientCrashed(" DKS ")\n", DKN(provider), DKN(service));
+				}
+			        provider->ClientCrashed(service, 0);
+			}
+			return false;
+		});
+		services->release();
+	}
+
 	terminate();
 	return kIOReturnSuccess;
 }
@@ -3700,11 +3738,10 @@ IOUserServer::serviceNewUserClient(IOService * service, task_t owningTask, void 
 
 	if (!(kIODKDisableEntitlementChecking & gIODKDebug)) {
 		bundleID = NULL;
-		entitlements = NULL;
+		entitlements = IOUserClient::copyClientEntitlements(owningTask);
 		if (fEntitlements && fEntitlements->getObject(gIODriverKitUserClientEntitlementAllowAnyKey)) {
 			ok = true;
 		} else {
-			entitlements = IOUserClient::copyClientEntitlements(owningTask);
 			bundleID = service->copyProperty(gIOModuleIdentifierKey);
 			ok = (entitlements
 			    && bundleID
@@ -4115,6 +4152,48 @@ IOUserServer::systemPower(bool powerOff)
 }
 
 
+void
+IOUserServer::systemHalt(void)
+{
+	OSArray * services;
+
+	if (true || (kIODKLogPM & gIODKDebug)) {
+		DKLOG("%s::systemHalt()\n", getName());
+	}
+
+	IOLockLock(fLock);
+	services = OSArray::withArray(fServices);
+	IOLockUnlock(fLock);
+
+	if (services) {
+		services->iterateObjects(^bool (OSObject * obj) {
+			IOService  * service;
+			IOService  * provider;
+			IOOptionBits terminateOptions;
+			bool         root;
+
+			service = (IOService *) obj;
+			provider = service->getProvider();
+			if (!provider) {
+			        DKLOG("stale service " DKS " found, skipping termination\n", DKN(service));
+			        return false;
+			}
+			root = (NULL == provider->getProperty(gIOUserServerNameKey, gIOServicePlane));
+			if (true || (kIODKLogPM & gIODKDebug)) {
+			        DKLOG("%d: terminate(" DKS ")\n", root, DKN(service));
+			}
+			if (!root) {
+			        return false;
+			}
+			terminateOptions = kIOServiceRequired | kIOServiceTerminateNeedWillTerminate;
+			if (!service->terminate(terminateOptions)) {
+			        IOLog("failed to terminate service %s-0x%llx\n", service->getName(), service->getRegistryEntryID());
+			}
+			return false;
+		});
+	}
+	OSSafeReleaseNULL(services);
+}
 
 IOReturn
 IOUserServer::serviceStarted(IOService * service, IOService * provider, bool result)
@@ -4150,9 +4229,21 @@ IOUserServer::serviceStarted(IOService * service, IOService * provider, bool res
 		pmProvider = pmProvider->getProvider();
 	}
 	if (pmProvider) {
+		IOService * entry;
 		OSObject  * prop;
+		OSObject  * nextProp;
 		OSString  * str;
-		prop = pmProvider->copyProperty("non-removable");
+
+		entry = pmProvider;
+		prop  = NULL;
+		do {
+			nextProp = entry->copyProperty("non-removable");
+			if (nextProp) {
+				OSSafeReleaseNULL(prop);
+				prop = nextProp;
+			}
+			entry = entry->getProvider();
+		} while (entry);
 		if (prop) {
 			str = OSDynamicCast(OSString, prop);
 			if (str && str->isEqualTo("yes")) {
@@ -4287,7 +4378,7 @@ IOUserServer::serviceWillTerminate(IOService * client, IOService * provider, IOO
 	}
 
 	if (willTerminate) {
-		if (IOServicePH::serverSlept()) {
+		if ((true) || IOServicePH::serverSlept()) {
 			client->Stop_async(provider);
 			ret = kIOReturnOffline;
 		} else {
@@ -4352,6 +4443,14 @@ IOUserServer::serviceDidStop(IOService * client, IOService * provider)
 		bool defer = false;
 		client->didTerminate(provider, 0, &defer);
 	}
+}
+
+kern_return_t
+IOService::ClientCrashed_Impl(
+	IOService * client,
+	uint64_t    options)
+{
+	return kIOReturnUnsupported;
 }
 
 kern_return_t
@@ -4493,11 +4592,12 @@ IOUserUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments * 
 	}
 
 	if (MACH_PORT_NULL != args->asyncWakePort) {
+		// this retain is for the OSAction to release
+		iokit_make_port_send(args->asyncWakePort);
 		kr = CreateActionKernelCompletion(sizeof(IOUserUserClientActionRef), &action);
 		assert(KERN_SUCCESS == kr);
 		ref = (typeof(ref))action->GetReference();
 		bcopy(args->asyncReference, &ref->asyncRef[0], args->asyncReferenceCount * sizeof(ref->asyncRef[0]));
-
 		kr = action->SetAbortedHandler(^(void) {
 			IOUserUserClientActionRef * ref;
 			IOReturn ret;
@@ -4528,12 +4628,14 @@ IOUserUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments * 
 	OSSafeReleaseNULL(action);
 
 	if (kIOReturnSuccess != kr) {
-		if (ref) {
-			// mig will destroy any async port, remove our pointer to it
-			bzero(&ref->asyncRef[0], sizeof(ref->asyncRef));
-		}
+		// mig will destroy any async port
 		return kr;
 	}
+	if (MACH_PORT_NULL != args->asyncWakePort) {
+		// this release is for the mig created send right
+		iokit_release_port_send(args->asyncWakePort);
+	}
+
 	if (structureOutput) {
 		if (args->structureVariableOutputData) {
 			*args->structureVariableOutputData = structureOutput;

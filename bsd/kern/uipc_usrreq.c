@@ -110,14 +110,14 @@ ZONE_DECLARE(unp_zone, "unpzone", sizeof(struct unpcb), ZC_NONE);
 static  unp_gen_t unp_gencnt;
 static  u_int unp_count;
 
-static  lck_attr_t             *unp_mtx_attr;
-static  lck_grp_t              *unp_mtx_grp;
-static  lck_grp_attr_t         *unp_mtx_grp_attr;
-static  lck_rw_t                unp_list_mtx;
+static  LCK_ATTR_DECLARE(unp_mtx_attr, 0, 0);
+static  LCK_GRP_DECLARE(unp_mtx_grp, "unp_list");
+static  LCK_RW_DECLARE_ATTR(unp_list_mtx, &unp_mtx_grp, &unp_mtx_attr);
 
-static  lck_mtx_t               unp_disconnect_lock;
-static  lck_mtx_t               unp_connect_lock;
-static  lck_mtx_t               uipc_lock;
+static  LCK_MTX_DECLARE_ATTR(unp_disconnect_lock, &unp_mtx_grp, &unp_mtx_attr);
+static  LCK_MTX_DECLARE_ATTR(unp_connect_lock, &unp_mtx_grp, &unp_mtx_attr);
+static  LCK_MTX_DECLARE_ATTR(uipc_lock, &unp_mtx_grp, &unp_mtx_attr);
+
 static  u_int                   disconnect_in_progress;
 
 static struct unp_head unp_shead, unp_dhead;
@@ -917,8 +917,7 @@ unp_attach(struct socket *so)
 	}
 	bzero(unp, sizeof(*unp));
 
-	lck_mtx_init(&unp->unp_mtx,
-	    unp_mtx_grp, unp_mtx_attr);
+	lck_mtx_init(&unp->unp_mtx, &unp_mtx_grp, &unp_mtx_attr);
 
 	lck_rw_lock_exclusive(&unp_list_mtx);
 	LIST_INIT(&unp->unp_refs);
@@ -1743,8 +1742,8 @@ unp_pcblist SYSCTL_HANDLER_ARGS
 		return 0;
 	}
 
-	MALLOC(unp_list, struct unpcb **, n * sizeof(*unp_list),
-	    M_TEMP, M_WAITOK);
+	size_t unp_list_len = n * sizeof(*unp_list);
+	unp_list = kheap_alloc(KHEAP_TEMP, unp_list_len, Z_WAITOK);
 	if (unp_list == 0) {
 		lck_rw_done(&unp_list_mtx);
 		return ENOMEM;
@@ -1801,7 +1800,7 @@ unp_pcblist SYSCTL_HANDLER_ARGS
 		xug.xug_count = unp_count;
 		error = SYSCTL_OUT(req, &xug, sizeof(xug));
 	}
-	FREE(unp_list, M_TEMP);
+	kheap_free(KHEAP_TEMP, unp_list, unp_list_len);
 	lck_rw_done(&unp_list_mtx);
 	return error;
 }
@@ -1872,8 +1871,8 @@ unp_pcblist64 SYSCTL_HANDLER_ARGS
 		return 0;
 	}
 
-	MALLOC(unp_list, struct unpcb **, n * sizeof(*unp_list),
-	    M_TEMP, M_WAITOK);
+	size_t unp_list_size = n * sizeof(*unp_list);
+	unp_list = kheap_alloc(KHEAP_TEMP, unp_list_size, Z_WAITOK);
 	if (unp_list == 0) {
 		lck_rw_done(&unp_list_mtx);
 		return ENOMEM;
@@ -1954,7 +1953,7 @@ unp_pcblist64 SYSCTL_HANDLER_ARGS
 		xug.xug_count = unp_count;
 		error = SYSCTL_OUT(req, &xug, sizeof(xug));
 	}
-	FREE(unp_list, M_TEMP);
+	kheap_free(KHEAP_TEMP, unp_list, unp_list_size);
 	lck_rw_done(&unp_list_mtx);
 	return error;
 }
@@ -2156,8 +2155,8 @@ unp_externalize(struct mbuf *rights)
 	int newfds = (cm->cmsg_len - sizeof(*cm)) / sizeof(int);
 	int f, error = 0;
 
-	MALLOC(fileproc_l, struct fileproc **,
-	    newfds * sizeof(struct fileproc *), M_TEMP, M_WAITOK);
+	fileproc_l = kheap_alloc(KHEAP_TEMP,
+	    newfds * sizeof(struct fileproc *), Z_WAITOK);
 	if (fileproc_l == NULL) {
 		error = ENOMEM;
 		goto discard;
@@ -2222,9 +2221,8 @@ unp_externalize(struct mbuf *rights)
 	}
 
 discard:
-	if (fileproc_l != NULL) {
-		FREE(fileproc_l, M_TEMP);
-	}
+	kheap_free(KHEAP_TEMP, fileproc_l,
+	    newfds * sizeof(struct fileproc *));
 	if (error) {
 		for (i = 0; i < newfds; i++) {
 			unp_discard(*rp, p);
@@ -2240,20 +2238,6 @@ unp_init(void)
 	_CASSERT(UIPC_MAX_CMSG_FD >= (MCLBYTES / sizeof(int)));
 	LIST_INIT(&unp_dhead);
 	LIST_INIT(&unp_shead);
-
-	/*
-	 * allocate lock group attribute and group for udp pcb mutexes
-	 */
-	unp_mtx_grp_attr = lck_grp_attr_alloc_init();
-
-	unp_mtx_grp = lck_grp_alloc_init("unp_list", unp_mtx_grp_attr);
-
-	unp_mtx_attr = lck_attr_alloc_init();
-
-	lck_mtx_init(&uipc_lock, unp_mtx_grp, unp_mtx_attr);
-	lck_rw_init(&unp_list_mtx, unp_mtx_grp, unp_mtx_attr);
-	lck_mtx_init(&unp_disconnect_lock, unp_mtx_grp, unp_mtx_attr);
-	lck_mtx_init(&unp_connect_lock, unp_mtx_grp, unp_mtx_attr);
 }
 
 #ifndef MIN
@@ -2482,8 +2466,8 @@ unp_gc(void)
 	 *
 	 * 91/09/19, bsy@cs.cmu.edu
 	 */
-	MALLOC(extra_ref, struct fileglob **, nfiles * sizeof(struct fileglob *),
-	    M_TEMP, M_WAITOK);
+	size_t extra_ref_size = nfiles * sizeof(struct fileglob *);
+	extra_ref = kheap_alloc(KHEAP_TEMP, extra_ref_size, Z_WAITOK);
 	if (extra_ref == NULL) {
 		goto bail;
 	}
@@ -2539,7 +2523,8 @@ unp_gc(void)
 		fg_drop(PROC_NULL, *fpp);
 	}
 
-	FREE(extra_ref, M_TEMP);
+	kheap_free(KHEAP_TEMP, extra_ref, extra_ref_size);
+
 bail:
 	lck_mtx_lock(&uipc_lock);
 	unp_gcing = 0;
@@ -2708,7 +2693,7 @@ unp_unlock(struct socket *so, int refcount, void * lr)
 
 		lck_mtx_unlock(mutex_held);
 
-		lck_mtx_destroy(&unp->unp_mtx, unp_mtx_grp);
+		lck_mtx_destroy(&unp->unp_mtx, &unp_mtx_grp);
 		zfree(unp_zone, unp);
 
 		unp_gc();

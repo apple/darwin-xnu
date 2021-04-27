@@ -629,8 +629,8 @@ SECURITY_READ_ONLY_LATE(static struct pe_serial_functions) dockchannel_uart_seri
 
 /****************************************************************************/
 #ifdef  PI3_UART
-vm_offset_t pi3_gpio_base_vaddr = 0;
-vm_offset_t pi3_aux_base_vaddr = 0;
+static vm_offset_t pi3_gpio_base_vaddr = 0;
+static vm_offset_t pi3_aux_base_vaddr = 0;
 static int
 pi3_uart_tr0(void)
 {
@@ -716,6 +716,10 @@ SECURITY_READ_ONLY_LATE(static struct pe_serial_functions) pi3_uart_serial_funct
 };
 
 #endif /* PI3_UART */
+
+/*****************************************************************************/
+
+
 /*****************************************************************************/
 
 static void
@@ -777,6 +781,7 @@ serial_init(void)
 		register_serial_functions(&pi3_uart_serial_functions);
 	}
 #endif /* PI3_UART */
+
 
 #ifdef DOCKCHANNEL_UART
 	uint32_t no_dockchannel_uart = 0;

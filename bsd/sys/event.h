@@ -676,10 +676,6 @@ SLIST_HEAD(klist, knote);
 #include <kern/debug.h> /* panic */
 #include <pthread/priority_private.h>
 
-#ifdef MALLOC_DECLARE
-MALLOC_DECLARE(M_KQUEUE);
-#endif
-
 LIST_HEAD(knote_list, knote);
 TAILQ_HEAD(kqtailq, knote);     /* a list of "queued" events */
 

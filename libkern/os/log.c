@@ -37,6 +37,7 @@
 #include "trace_internal.h"
 
 #include "log_encode.h"
+#include "log_mem.h"
 
 struct os_log_s {
 	int a;
@@ -44,6 +45,9 @@ struct os_log_s {
 
 struct os_log_s _os_log_default;
 struct os_log_s _os_log_replay;
+
+LOGMEM_STATIC_INIT(os_log_mem, 14, 9, 10);
+
 extern vm_offset_t kernel_firehose_addr;
 extern firehose_chunk_t firehose_boot_chunk;
 
@@ -65,24 +69,26 @@ extern int oslog_stream_open;
 extern void *OSKextKextForAddress(const void *);
 
 /* Counters for persistence mode */
-uint32_t oslog_p_total_msgcount = 0;
-uint32_t oslog_p_metadata_saved_msgcount = 0;
-uint32_t oslog_p_metadata_dropped_msgcount = 0;
-uint32_t oslog_p_error_count = 0;
-uint32_t oslog_p_saved_msgcount = 0;
-uint32_t oslog_p_dropped_msgcount = 0;
-uint32_t oslog_p_boot_dropped_msgcount = 0;
-uint32_t oslog_p_coprocessor_total_msgcount = 0;
-uint32_t oslog_p_coprocessor_dropped_msgcount = 0;
+SCALABLE_COUNTER_DEFINE(oslog_p_total_msgcount);
+SCALABLE_COUNTER_DEFINE(oslog_p_metadata_saved_msgcount);
+SCALABLE_COUNTER_DEFINE(oslog_p_metadata_dropped_msgcount);
+SCALABLE_COUNTER_DEFINE(oslog_p_error_count);
+SCALABLE_COUNTER_DEFINE(oslog_p_saved_msgcount);
+SCALABLE_COUNTER_DEFINE(oslog_p_dropped_msgcount);
+SCALABLE_COUNTER_DEFINE(oslog_p_boot_dropped_msgcount);
+SCALABLE_COUNTER_DEFINE(oslog_p_coprocessor_total_msgcount);
+SCALABLE_COUNTER_DEFINE(oslog_p_coprocessor_dropped_msgcount);
+SCALABLE_COUNTER_DEFINE(oslog_p_unresolved_kc_msgcount);
 
 /* Counters for streaming mode */
-uint32_t oslog_s_total_msgcount = 0;
-uint32_t oslog_s_error_count = 0;
-uint32_t oslog_s_metadata_msgcount = 0;
+SCALABLE_COUNTER_DEFINE(oslog_s_error_count);
+/* Protected by the stream lock */
+uint32_t oslog_s_total_msgcount;
+uint32_t oslog_s_metadata_msgcount;
 
 /* Counters for msgbuf logging */
-uint32_t oslog_msgbuf_msgcount = 0;
-uint32_t oslog_msgbuf_dropped_msgcount = 0;
+SCALABLE_COUNTER_DEFINE(oslog_msgbuf_msgcount)
+SCALABLE_COUNTER_DEFINE(oslog_msgbuf_dropped_msgcount)
 
 static bool oslog_boot_done = false;
 
@@ -112,36 +118,36 @@ static void
 _os_log_to_msgbuf_internal(const char *format, va_list args, bool safe, bool logging, bool addcr);
 
 static void
-_os_log_to_log_internal(os_log_t oslog, os_log_type_t type,
-    const char *format, va_list args, void *addr, void *dso, bool driverKit);
+_os_log_to_log_internal(os_log_type_t type, const char *format, va_list args, void *addr, void *dso, bool driverKit);
 
-
-static void
-_os_log_actual(os_log_t oslog, os_log_type_t type, const char *format, void
-    *dso, void *addr, os_log_buffer_context_t context, bool driverKit);
+static bool
+os_log_turned_off(void)
+{
+	return atm_get_diagnostic_config() & (ATM_TRACE_DISABLE | ATM_TRACE_OFF);
+}
 
 bool
 os_log_info_enabled(os_log_t log __unused)
 {
-	return true;
+	return !os_log_turned_off();
 }
 
 bool
 os_log_debug_enabled(os_log_t log __unused)
 {
-	return true;
+	return !os_log_turned_off();
+}
+
+static bool
+os_log_disabled(void)
+{
+	return atm_get_diagnostic_config() & ATM_TRACE_DISABLE;
 }
 
 os_log_t
 os_log_create(const char *subsystem __unused, const char *category __unused)
 {
 	return &_os_log_default;
-}
-
-bool
-_os_log_string_is_public(const char *str __unused)
-{
-	return true;
 }
 
 __attribute__((noinline, not_tail_called)) void
@@ -226,29 +232,20 @@ static void
 _os_log_with_args_internal(os_log_t oslog, os_log_type_t type,
     const char *format, va_list args, void *addr, void *dso, bool driverKit, bool addcr)
 {
-	uint32_t  logging_config = atm_get_diagnostic_config();
-	boolean_t safe;
-	boolean_t logging;
-
 	if (format[0] == '\0') {
 		return;
 	}
 
 	/* early boot can log to dmesg for later replay (27307943) */
-	safe = (startup_phase < STARTUP_SUB_EARLY_BOOT || oslog_is_safe());
-
-	if (logging_config & ATM_TRACE_DISABLE || logging_config & ATM_TRACE_OFF) {
-		logging = false;
-	} else {
-		logging = true;
-	}
+	bool safe = (startup_phase < STARTUP_SUB_EARLY_BOOT || oslog_is_safe());
+	bool logging = !os_log_turned_off();
 
 	if (oslog != &_os_log_replay) {
 		_os_log_to_msgbuf_internal(format, args, safe, logging, addcr);
 	}
 
 	if (safe && logging) {
-		_os_log_to_log_internal(oslog, type, format, args, addr, dso, driverKit);
+		_os_log_to_log_internal(type, format, args, addr, dso, driverKit);
 	}
 }
 
@@ -268,7 +265,7 @@ _os_log_to_msgbuf_internal(const char *format, va_list args, bool safe, bool log
 	va_list args_copy;
 
 	if (!bsd_log_lock(safe)) {
-		os_atomic_inc(&oslog_msgbuf_dropped_msgcount, relaxed);
+		counter_inc(&oslog_msgbuf_dropped_msgcount);
 		return;
 	}
 
@@ -350,159 +347,24 @@ _os_log_to_msgbuf_internal(const char *format, va_list args, bool safe, bool log
 
 	bsd_log_unlock();
 	logwakeup(msgbufp);
-	os_atomic_inc(&oslog_msgbuf_msgcount, relaxed);
+	counter_inc(&oslog_msgbuf_msgcount);
+}
+
+static firehose_stream_t
+firehose_stream(os_log_type_t type)
+{
+	return (type == OS_LOG_TYPE_INFO || type == OS_LOG_TYPE_DEBUG) ?
+	       firehose_stream_memory : firehose_stream_persist;
 }
 
 static void
-_os_log_to_log_internal(os_log_t oslog, os_log_type_t type,
-    const char *format, va_list args, void *addr, void *dso, bool driverKit)
+_os_log_actual(os_log_type_t type, const char *format, void *dso, void *addr, uint8_t *logdata, size_t logdata_sz,
+    firehose_tracepoint_flags_t flags, bool driverKit)
 {
-	kc_format_t kcformat = KCFormatUnknown;
-	struct os_log_buffer_context_s context;
-	unsigned char buffer_data[OS_LOG_BUFFER_MAX_SIZE] __attribute__((aligned(8)));
-	os_log_buffer_t buffer = (os_log_buffer_t)buffer_data;
-	uint8_t pubdata[OS_LOG_BUFFER_MAX_SIZE];
-	va_list args_copy;
-
-	if (addr == NULL) {
-		return;
-	}
-
-	if (!PE_get_primary_kc_format(&kcformat)) {
-		return;
-	}
-
-	if (kcformat == KCFormatStatic || kcformat == KCFormatKCGEN) {
-		void *baseAddress = PE_get_kc_baseaddress(KCKindPrimary);
-		if (!baseAddress) {
-			return;
-		}
-		dso = baseAddress;
-	} else if (kcformat == KCFormatDynamic || kcformat == KCFormatFileset) {
-		if (dso == NULL) {
-			dso = (void *) OSKextKextForAddress(format);
-			if (dso == NULL) {
-				return;
-			}
-		}
-		if (!_os_trace_addr_in_text_segment(dso, format)) {
-			return;
-		}
-		if (!driverKit) {
-			void *dso_addr = (void *) OSKextKextForAddress(addr);
-			if (dso != dso_addr) {
-				return;
-			}
-		}
-	}
-
-	memset(&context, 0, sizeof(context));
-	memset(buffer, 0, OS_LOG_BUFFER_MAX_SIZE);
-
-	context.shimmed = true;
-	context.buffer = buffer;
-	context.content_sz = OS_LOG_BUFFER_MAX_SIZE - sizeof(*buffer);
-	context.pubdata = pubdata;
-	context.pubdata_sz = sizeof(pubdata);
-
-	va_copy(args_copy, args);
-
-	os_atomic_inc(&oslog_p_total_msgcount, relaxed);
-	if (_os_log_encode(format, args_copy, 0, &context)) {
-		_os_log_actual(oslog, type, format, dso, addr, &context, driverKit);
-	} else {
-		os_atomic_inc(&oslog_p_error_count, relaxed);
-	}
-
-	va_end(args_copy);
-}
-
-static inline size_t
-_os_trace_write_location_for_address(uint8_t buf[static sizeof(uint64_t)],
-    void *dso, const void *address, firehose_tracepoint_flags_t *flags, __unused bool driverKit)
-{
-	uintptr_t shift_addr = (uintptr_t)address - (uintptr_t)dso;
-
-	kc_format_t kcformat = KCFormatUnknown;
-	__assert_only bool result = PE_get_primary_kc_format(&kcformat);
-	assert(result);
-
-	if (kcformat == KCFormatStatic || kcformat == KCFormatKCGEN) {
-		*flags = _firehose_tracepoint_flags_pc_style_shared_cache;
-		memcpy(buf, (uint32_t[]){ (uint32_t)shift_addr }, sizeof(uint32_t));
-		return sizeof(uint32_t);
-	} else {
-		kernel_mach_header_t *mh = dso;
-
-		/*
-		 * driverKit will have the dso set as MH_EXECUTE
-		 * (it is logging from a syscall in the kernel)
-		 * but needs logd to parse the address as an
-		 * absolute pc.
-		 */
-		if (mh->filetype == MH_EXECUTE && !driverKit) {
-			*flags = _firehose_tracepoint_flags_pc_style_main_exe;
-			memcpy(buf, (uint32_t[]){ (uint32_t)shift_addr }, sizeof(uint32_t));
-			return sizeof(uint32_t);
-		} else {
-			*flags = _firehose_tracepoint_flags_pc_style_absolute;
-			if (!driverKit) {
-				shift_addr = VM_KERNEL_UNSLIDE(address);
-			} else {
-				shift_addr = (uintptr_t) address;
-			}
-			memcpy(buf, (uintptr_t[]){ shift_addr }, sizeof(uintptr_t));
-#if __LP64__
-			return 6; // 48 bits are enough
-#else
-			return sizeof(uintptr_t);
-#endif
-		}
-	}
-}
-
-
-OS_ALWAYS_INLINE
-static inline size_t
-_os_log_buffer_pack(uint8_t *buffdata, size_t buffdata_sz,
-    os_log_buffer_context_t ctx)
-{
-	os_log_buffer_t buffer = ctx->buffer;
-	size_t buffer_sz = sizeof(*ctx->buffer) + ctx->content_sz;
-	size_t total_sz  = buffer_sz + ctx->pubdata_sz;
-
-	if (total_sz > buffdata_sz) {
-		return 0;
-	}
-
-	memcpy(buffdata, buffer, buffer_sz);
-	memcpy(&buffdata[buffer_sz], ctx->pubdata, ctx->pubdata_sz);
-	return total_sz;
-}
-
-static void
-_os_log_actual(os_log_t oslog __unused, os_log_type_t type, const char *format,
-    void *dso, void *addr, os_log_buffer_context_t context, bool driverKit)
-{
-	firehose_stream_t stream;
-	firehose_tracepoint_flags_t flags = 0;
 	firehose_tracepoint_id_u trace_id;
-	uint8_t buffdata[OS_LOG_BUFFER_MAX_SIZE];
-	size_t addr_len = 0, buffdata_sz;
-	uint64_t timestamp;
-	uint64_t thread_id;
 
-	// dso == the start of the binary that was loaded
-	addr_len = _os_trace_write_location_for_address(buffdata, dso, addr, &flags, driverKit);
-	buffdata_sz = _os_log_buffer_pack(buffdata + addr_len,
-	    sizeof(buffdata) - addr_len, context);
-	if (buffdata_sz == 0) {
-		return;
-	}
-	buffdata_sz += addr_len;
-
-	timestamp = firehose_tracepoint_time(firehose_activity_flags_default);
-	thread_id = thread_tid(current_thread());
+	firehose_stream_t stream = firehose_stream(type);
+	uint64_t timestamp = firehose_tracepoint_time(firehose_activity_flags_default);
 
 	if (driverKit) {
 		// set FIREHOSE_TRACEPOINT_PC_DYNAMIC_BIT so logd will not try to find the format string in
@@ -515,12 +377,71 @@ _os_log_actual(os_log_t oslog __unused, os_log_type_t type, const char *format,
 		    type, flags, _os_trace_offset(dso, format, (_firehose_tracepoint_flags_activity_t)flags));
 	}
 
-	if (type == OS_LOG_TYPE_INFO || type == OS_LOG_TYPE_DEBUG) {
-		stream = firehose_stream_memory;
-	} else {
-		stream = firehose_stream_persist;
+
+	_firehose_trace(stream, trace_id, timestamp, logdata, logdata_sz, true);
+}
+
+static void *
+resolve_dso(const char *fmt, void *dso, void *addr, bool driverKit)
+{
+	kc_format_t kcformat = KCFormatUnknown;
+
+	if (!PE_get_primary_kc_format(&kcformat)) {
+		return NULL;
 	}
-	_firehose_trace(stream, trace_id, timestamp, buffdata, buffdata_sz, true);
+
+	switch (kcformat) {
+	case KCFormatStatic:
+	case KCFormatKCGEN:
+		dso = PE_get_kc_baseaddress(KCKindPrimary);
+		break;
+	case KCFormatDynamic:
+	case KCFormatFileset:
+		if (!dso && (dso = (void *)OSKextKextForAddress(fmt)) == NULL) {
+			return NULL;
+		}
+		if (!_os_trace_addr_in_text_segment(dso, fmt)) {
+			return NULL;
+		}
+		if (!driverKit && (dso != (void *)OSKextKextForAddress(addr))) {
+			return NULL;
+		}
+		break;
+	default:
+		panic("unknown KC format type");
+	}
+
+	return dso;
+}
+
+static void
+_os_log_to_log_internal(os_log_type_t type, const char *fmt, va_list args, void *addr, void *dso, bool driverKit)
+{
+	counter_inc(&oslog_p_total_msgcount);
+
+	if (addr == NULL) {
+		counter_inc(&oslog_p_unresolved_kc_msgcount);
+		return;
+	}
+
+	if ((dso = resolve_dso(fmt, dso, addr, driverKit)) == NULL) {
+		counter_inc(&oslog_p_unresolved_kc_msgcount);
+		return;
+	}
+
+	uint8_t buffer[OS_LOG_BUFFER_MAX_SIZE] __attribute__((aligned(8))) = { 0 };
+	struct os_log_context_s ctx;
+
+	os_log_context_init(&ctx, &os_log_mem, buffer, sizeof(buffer));
+
+	if (os_log_context_encode(&ctx, fmt, args, addr, dso, driverKit)) {
+		_os_log_actual(type, fmt, dso, addr, ctx.ctx_buffer, ctx.ctx_content_sz,
+		    ctx.ctx_ft_flags, driverKit);
+	} else {
+		counter_inc(&oslog_p_error_count);
+	}
+
+	os_log_context_free(&ctx);
 }
 
 bool
@@ -529,14 +450,18 @@ os_log_coprocessor(void *buff, uint64_t buff_len, os_log_type_t type,
 {
 	firehose_tracepoint_id_u trace_id;
 	firehose_tracepoint_id_t return_id = 0;
-	firehose_stream_t        stream;
 	uint8_t                  pubdata[OS_LOG_BUFFER_MAX_SIZE];
 	size_t                   wr_pos = 0;
+
+	if (os_log_turned_off()) {
+		return false;
+	}
 
 	if (buff_len + 16 + sizeof(uint32_t) > OS_LOG_BUFFER_MAX_SIZE) {
 		return false;
 	}
 
+	firehose_stream_t stream = firehose_stream(type);
 	// unlike kext, where pc is used to find uuid, in coprocessor logs the uuid is passed as part of the tracepoint
 	firehose_tracepoint_flags_t flags = _firehose_tracepoint_flags_pc_style_uuid_relative;
 
@@ -551,20 +476,14 @@ os_log_coprocessor(void *buff, uint64_t buff_len, os_log_type_t type,
 	trace_id.ftid_value = FIREHOSE_TRACE_ID_MAKE(firehose_tracepoint_namespace_log,
 	    type, flags, offset);
 
-	if (type == OS_LOG_TYPE_INFO || type == OS_LOG_TYPE_DEBUG) {
-		stream = firehose_stream_memory;
-	} else {
-		stream = firehose_stream_persist;
-	}
-
-	os_atomic_inc(&oslog_p_coprocessor_total_msgcount, relaxed);
+	counter_inc(&oslog_p_coprocessor_total_msgcount);
 
 	// send firehose tracepoint containing os log to firehose buffer
 	return_id = _firehose_trace(stream, trace_id, timestamp, pubdata,
 	    buff_len + wr_pos, stream_log);
 
 	if (return_id == 0) {
-		os_atomic_inc(&oslog_p_coprocessor_dropped_msgcount, relaxed);
+		counter_inc(&oslog_p_coprocessor_dropped_msgcount);
 		return false;
 	}
 	return true;
@@ -582,7 +501,7 @@ _firehose_trace(firehose_stream_t stream, firehose_tracepoint_id_u ftid,
 
 	if (slowpath(ft_size + publen > _firehose_chunk_payload_size)) {
 		// We'll need to have some handling here. For now - return 0
-		os_atomic_inc(&oslog_p_error_count, relaxed);
+		counter_inc(&oslog_p_error_count);
 		return 0;
 	}
 
@@ -604,11 +523,11 @@ out:
 	if (!fastpath(ft)) {
 		if (oslog_boot_done) {
 			if (stream == firehose_stream_metadata) {
-				os_atomic_inc(&oslog_p_metadata_dropped_msgcount, relaxed);
+				counter_inc(&oslog_p_metadata_dropped_msgcount);
 			} else {
 				// If we run out of space in the persistence buffer we're
 				// dropping the message.
-				os_atomic_inc(&oslog_p_dropped_msgcount, relaxed);
+				counter_inc(&oslog_p_dropped_msgcount);
 			}
 			return 0;
 		}
@@ -619,7 +538,7 @@ out:
 		offset = firehose_chunk_tracepoint_try_reserve(fbc, stamp,
 		    firehose_stream_persist, 0, (uint16_t)publen, 0, NULL);
 		if (offset <= 0) {
-			os_atomic_inc(&oslog_p_boot_dropped_msgcount, relaxed);
+			counter_inc(&oslog_p_boot_dropped_msgcount);
 			return 0;
 		}
 
@@ -627,7 +546,7 @@ out:
 		    thread_tid(current_thread()), offset);
 		memcpy(ft->ft_data, pubdata, publen);
 		firehose_chunk_tracepoint_end(fbc, ft, ftid);
-		os_atomic_inc(&oslog_p_saved_msgcount, relaxed);
+		counter_inc(&oslog_p_saved_msgcount);
 		return ftid.ftid_value;
 	}
 	if (!oslog_boot_done) {
@@ -637,9 +556,9 @@ out:
 
 	__firehose_buffer_tracepoint_flush(ft, ftid);
 	if (stream == firehose_stream_metadata) {
-		os_atomic_inc(&oslog_p_metadata_saved_msgcount, relaxed);
+		counter_inc(&oslog_p_metadata_saved_msgcount);
 	} else {
-		os_atomic_inc(&oslog_p_saved_msgcount, relaxed);
+		counter_inc(&oslog_p_saved_msgcount);
 	}
 	return ftid.ftid_value;
 }
@@ -686,6 +605,10 @@ os_log_coprocessor_register(const char *uuid, const char *file_path, bool copy)
 		char path[PATH_MAX + sizeof(struct firehose_trace_uuid_info_s)];
 	} buf;
 
+	if (os_log_disabled()) {
+		return;
+	}
+
 	if (path_size > PATH_MAX) {
 		return;
 	}
@@ -716,6 +639,10 @@ firehose_trace_metadata(firehose_stream_t stream, firehose_tracepoint_id_u ftid,
 {
 	oslog_stream_buf_entry_t m_entry = NULL;
 
+	if (os_log_disabled()) {
+		return;
+	}
+
 	// If streaming mode is not on, only log  the metadata
 	// in the persistence buffer
 
@@ -730,7 +657,7 @@ firehose_trace_metadata(firehose_stream_t stream, firehose_tracepoint_id_u ftid,
 	m_entry = oslog_stream_create_buf_entry(oslog_stream_link_type_metadata, ftid,
 	    stamp, pubdata, publen);
 	if (!m_entry) {
-		os_atomic_inc(&oslog_s_error_count, relaxed);
+		counter_inc(&oslog_s_error_count);
 		goto finish;
 	}
 
@@ -855,9 +782,9 @@ test_os_log()
 	T_ASSERT_EQ_INT(TRUE, os_log_debug_enabled(log_handle), "os_log_debug is enabled");
 	T_ASSERT_EQ_PTR(&_os_log_default, OS_LOG_DEFAULT, "ensure OS_LOG_DEFAULT is _os_log_default");
 
-	total_msg = oslog_p_total_msgcount;
-	saved_msg = oslog_p_saved_msgcount;
-	dropped_msg = oslog_p_dropped_msgcount;
+	total_msg = counter_load(&oslog_p_total_msgcount);
+	saved_msg = counter_load(&oslog_p_saved_msgcount);
+	dropped_msg = counter_load(&oslog_p_dropped_msgcount);
 	T_LOG("oslog internal counters total %u , saved %u, dropped %u", total_msg, saved_msg, dropped_msg);
 
 	T_LOG("Validating with uniqid %u u64 %llu", uniqid, a);
@@ -886,45 +813,45 @@ test_os_log()
 	}
 
 	/* for enabled logging printfs should be saved in oslog as well */
-	T_EXPECT_GE_UINT((oslog_p_total_msgcount - total_msg), 2, "atleast 2 msgs should be seen by oslog system");
+	T_EXPECT_GE_UINT((counter_load(&oslog_p_total_msgcount) - total_msg), 2, "atleast 2 msgs should be seen by oslog system");
 
 	a = mach_absolute_time();
 	total_seqno = 1;
 	seqno = 1;
-	total_msg = oslog_p_total_msgcount;
-	saved_msg = oslog_p_saved_msgcount;
-	dropped_msg = oslog_p_dropped_msgcount;
+	total_msg = counter_load(&oslog_p_total_msgcount);
+	saved_msg = counter_load(&oslog_p_saved_msgcount);
+	dropped_msg = counter_load(&oslog_p_dropped_msgcount);
 	datalen = scnprintf(databuffer, sizeof(databuffer), TESTOSLOGFMT("oslog_info"), uniqid, seqno, total_seqno);
 	checksum = crc32(0, databuffer, datalen);
 	os_log_info(log_handle, TESTOSLOG("oslog_info") "mat%llu", checksum, uniqid, seqno, total_seqno, a);
-	T_EXPECT_GE_UINT((oslog_p_total_msgcount - total_msg), 1, "total message count in buffer");
+	T_EXPECT_GE_UINT((counter_load(&oslog_p_total_msgcount) - total_msg), 1, "total message count in buffer");
 
 	datalen = scnprintf(databuffer, sizeof(databuffer), "kernel^0^test^oslog_info#mat%llu", a);
 	match_count = find_pattern_in_buffer(databuffer, datalen, total_seqno);
 	T_EXPECT_EQ_ULONG(match_count, total_seqno, "verify oslog_info does not go to systemlog buffer");
 
-	total_msg = oslog_p_total_msgcount;
+	total_msg = counter_load(&oslog_p_total_msgcount);
 	test_oslog_info_helper(uniqid, 10);
-	T_EXPECT_GE_UINT(oslog_p_total_msgcount - total_msg, 10, "test_oslog_info_helper: Should have seen 10 msgs");
+	T_EXPECT_GE_UINT(counter_load(&oslog_p_total_msgcount) - total_msg, 10, "test_oslog_info_helper: Should have seen 10 msgs");
 
-	total_msg = oslog_p_total_msgcount;
+	total_msg = counter_load(&oslog_p_total_msgcount);
 	test_oslog_debug_helper(uniqid, 10);
-	T_EXPECT_GE_UINT(oslog_p_total_msgcount - total_msg, 10, "test_oslog_debug_helper:Should have seen 10 msgs");
+	T_EXPECT_GE_UINT(counter_load(&oslog_p_total_msgcount) - total_msg, 10, "test_oslog_debug_helper:Should have seen 10 msgs");
 
-	total_msg = oslog_p_total_msgcount;
+	total_msg = counter_load(&oslog_p_total_msgcount);
 	test_oslog_error_helper(uniqid, 10);
-	T_EXPECT_GE_UINT(oslog_p_total_msgcount - total_msg, 10, "test_oslog_error_helper:Should have seen 10 msgs");
+	T_EXPECT_GE_UINT(counter_load(&oslog_p_total_msgcount) - total_msg, 10, "test_oslog_error_helper:Should have seen 10 msgs");
 
-	total_msg = oslog_p_total_msgcount;
+	total_msg = counter_load(&oslog_p_total_msgcount);
 	test_oslog_default_helper(uniqid, 10);
-	T_EXPECT_GE_UINT(oslog_p_total_msgcount - total_msg, 10, "test_oslog_default_helper:Should have seen 10 msgs");
+	T_EXPECT_GE_UINT(counter_load(&oslog_p_total_msgcount) - total_msg, 10, "test_oslog_default_helper:Should have seen 10 msgs");
 
-	total_msg = oslog_p_total_msgcount;
+	total_msg = counter_load(&oslog_p_total_msgcount);
 	test_oslog_fault_helper(uniqid, 10);
-	T_EXPECT_GE_UINT(oslog_p_total_msgcount - total_msg, 10, "test_oslog_fault_helper:Should have seen 10 msgs");
+	T_EXPECT_GE_UINT(counter_load(&oslog_p_total_msgcount) - total_msg, 10, "test_oslog_fault_helper:Should have seen 10 msgs");
 
-	T_LOG("oslog internal counters total %u , saved %u, dropped %u", oslog_p_total_msgcount, oslog_p_saved_msgcount,
-	    oslog_p_dropped_msgcount);
+	T_LOG("oslog internal counters total %u , saved %u, dropped %u", counter_load(&oslog_p_total_msgcount), counter_load(&oslog_p_saved_msgcount),
+	    counter_load(&oslog_p_dropped_msgcount));
 
 	return KERN_SUCCESS;
 }
@@ -945,8 +872,8 @@ test_os_log_parallel(void)
 	kern_return_t kr;
 	uint32_t uniqid = RandomULong();
 
-	printf("oslog internal counters total %u , saved %u, dropped %u", oslog_p_total_msgcount, oslog_p_saved_msgcount,
-	    oslog_p_dropped_msgcount);
+	printf("oslog internal counters total %lld , saved %lld, dropped %lld", counter_load(&oslog_p_total_msgcount), counter_load(&oslog_p_saved_msgcount),
+	    counter_load(&oslog_p_dropped_msgcount));
 
 	kr = kernel_thread_start(_test_log_loop, NULL, &thread[0]);
 	T_ASSERT_EQ_INT(kr, KERN_SUCCESS, "kernel_thread_start returned successfully");
@@ -964,8 +891,8 @@ test_os_log_parallel(void)
 	thread_deallocate(thread[0]);
 	thread_deallocate(thread[1]);
 
-	T_LOG("oslog internal counters total %u , saved %u, dropped %u", oslog_p_total_msgcount, oslog_p_saved_msgcount,
-	    oslog_p_dropped_msgcount);
+	T_LOG("oslog internal counters total %lld , saved %lld, dropped %lld", counter_load(&oslog_p_total_msgcount), counter_load(&oslog_p_saved_msgcount),
+	    counter_load(&oslog_p_dropped_msgcount));
 	T_PASS("parallel_logging tests is now complete");
 
 	return KERN_SUCCESS;
@@ -981,9 +908,9 @@ test_oslog_handleOSLogCtl(int32_t * in, int32_t * out, int32_t len)
 	case 1:
 	{
 		/* send out counters */
-		out[1] = oslog_p_total_msgcount;
-		out[2] = oslog_p_saved_msgcount;
-		out[3] = oslog_p_dropped_msgcount;
+		out[1] = counter_load(&oslog_p_total_msgcount);
+		out[2] = counter_load(&oslog_p_saved_msgcount);
+		out[3] = counter_load(&oslog_p_dropped_msgcount);
 		out[0] = KERN_SUCCESS;
 		break;
 	}
@@ -1035,16 +962,16 @@ kern_return_t
 test_stresslog_dropmsg(uint32_t uniqid)
 {
 	uint32_t total, saved, dropped;
-	total = oslog_p_total_msgcount;
-	saved = oslog_p_saved_msgcount;
-	dropped = oslog_p_dropped_msgcount;
+	total = counter_load(&oslog_p_total_msgcount);
+	saved = counter_load(&oslog_p_saved_msgcount);
+	dropped = counter_load(&oslog_p_dropped_msgcount);
 	uniqid = RandomULong();
 	test_oslog_debug_helper(uniqid, 100);
-	while ((oslog_p_dropped_msgcount - dropped) == 0) {
+	while ((counter_load(&oslog_p_dropped_msgcount) - dropped) == 0) {
 		test_oslog_debug_helper(uniqid, 100);
 	}
-	printf("test_stresslog_dropmsg: logged %u msgs, saved %u and caused a drop of %u msgs. \n", oslog_p_total_msgcount - total,
-	    oslog_p_saved_msgcount - saved, oslog_p_dropped_msgcount - dropped);
+	printf("test_stresslog_dropmsg: logged %lld msgs, saved %lld and caused a drop of %lld msgs. \n", counter_load(&oslog_p_total_msgcount) - total,
+	    counter_load(&oslog_p_saved_msgcount) - saved, counter_load(&oslog_p_dropped_msgcount) - dropped);
 	return KERN_SUCCESS;
 }
 

@@ -293,7 +293,9 @@ struct tcp_notify_ack_complete {
 #define MPTCP_SVCTYPE_INTERACTIVE       1
 #define MPTCP_SVCTYPE_AGGREGATE         2
 #define MPTCP_SVCTYPE_TARGET_BASED      3
-#define MPTCP_SVCTYPE_MAX               4
+#define MPTCP_SVCTYPE_PURE_HANDOVER     4
+#define MPTCP_SVCTYPE_MAX               5
+
 /*
  * Specify minimum time in seconds before which an established
  * TCP connection will not be dropped when there is no response from the
@@ -322,10 +324,15 @@ struct tcp_notify_ack_complete {
 #define TCPI_FLAG_STREAMING_ON  0x02    /* Streaming detection on */
 
 struct tcp_conn_status {
-	unsigned int    probe_activated : 1;
-	unsigned int    write_probe_failed : 1;
-	unsigned int    read_probe_failed : 1;
-	unsigned int    conn_probe_failed : 1;
+	union {
+		struct {
+			unsigned int    probe_activated : 1;
+			unsigned int    write_probe_failed : 1;
+			unsigned int    read_probe_failed : 1;
+			unsigned int    conn_probe_failed : 1;
+		};
+		uint32_t        pad_field;
+	};
 };
 
 /*

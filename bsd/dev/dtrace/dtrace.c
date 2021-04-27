@@ -309,10 +309,14 @@ static int dtrace_module_unloaded(struct kmod_info *kmod);
  * LCK_MTX_ASSERT(&cpu_lock, LCK_MTX_ASSERT_OWNED);
  *
  */
-static lck_mtx_t	dtrace_lock;		/* probe state lock */
-static lck_mtx_t	dtrace_provider_lock;	/* provider state lock */
-static lck_mtx_t	dtrace_meta_lock;	/* meta-provider state lock */
-static lck_rw_t		dtrace_dof_mode_lock;	/* dof mode lock */
+static LCK_MTX_DECLARE_ATTR(dtrace_lock,
+    &dtrace_lck_grp, &dtrace_lck_attr);		/* probe state lock */
+static LCK_MTX_DECLARE_ATTR(dtrace_provider_lock,
+    &dtrace_lck_grp, &dtrace_lck_attr);	/* provider state lock */
+static LCK_MTX_DECLARE_ATTR(dtrace_meta_lock,
+    &dtrace_lck_grp, &dtrace_lck_attr);	/* meta-provider state lock */
+static LCK_RW_DECLARE_ATTR(dtrace_dof_mode_lock,
+    &dtrace_lck_grp, &dtrace_lck_attr);	/* dof mode lock */
 
 /*
  * DTrace Provider Variables
@@ -426,7 +430,7 @@ int	dtrace_helptrace_enabled = 0;
 static dtrace_errhash_t	dtrace_errhash[DTRACE_ERRHASHSZ];
 static const char *dtrace_errlast;
 static kthread_t *dtrace_errthread;
-static lck_mtx_t dtrace_errlock;
+static LCK_MTX_DECLARE_ATTR(dtrace_errlock, &dtrace_lck_grp, &dtrace_lck_attr);
 #endif
 
 /*
@@ -19200,9 +19204,8 @@ static const struct cdevsw dtrace_cdevsw =
 	.d_reserved_2 = eno_putc,
 };
 
-lck_attr_t* dtrace_lck_attr;
-lck_grp_attr_t* dtrace_lck_grp_attr;
-lck_grp_t* dtrace_lck_grp;
+LCK_ATTR_DECLARE(dtrace_lck_attr, 0, 0);
+LCK_GRP_DECLARE(dtrace_lck_grp, "dtrace");
 
 static int gMajDevNo;
 
@@ -19278,34 +19281,12 @@ dtrace_init( void )
 		}
 
 		/*
-		 * Create the dtrace lock group and attrs.
-		 */
-		dtrace_lck_attr = lck_attr_alloc_init();
-		dtrace_lck_grp_attr= lck_grp_attr_alloc_init();
-		dtrace_lck_grp = lck_grp_alloc_init("dtrace",  dtrace_lck_grp_attr);
-
-		/*
-		 * We have to initialize all locks explicitly
-		 */
-		lck_mtx_init(&dtrace_lock, dtrace_lck_grp, dtrace_lck_attr);
-		lck_mtx_init(&dtrace_provider_lock, dtrace_lck_grp, dtrace_lck_attr);
-		lck_mtx_init(&dtrace_meta_lock, dtrace_lck_grp, dtrace_lck_attr);
-		lck_mtx_init(&dtrace_procwaitfor_lock, dtrace_lck_grp, dtrace_lck_attr);
-#if DEBUG
-		lck_mtx_init(&dtrace_errlock, dtrace_lck_grp, dtrace_lck_attr);
-#endif
-		lck_rw_init(&dtrace_dof_mode_lock, dtrace_lck_grp, dtrace_lck_attr);
-
-		/*
 		 * The cpu_core structure consists of per-CPU state available in any context.
 		 * On some architectures, this may mean that the page(s) containing the
 		 * NCPU-sized array of cpu_core structures must be locked in the TLB -- it
 		 * is up to the platform to assure that this is performed properly.  Note that
 		 * the structure is sized to avoid false sharing.
 		 */
-		lck_mtx_init(&cpu_lock, dtrace_lck_grp, dtrace_lck_attr);
-		lck_mtx_init(&cyc_lock, dtrace_lck_grp, dtrace_lck_attr);
-		lck_mtx_init(&mod_lock, dtrace_lck_grp, dtrace_lck_attr);
 
 		/*
 		 * Initialize the CPU offline/online hooks.
@@ -19316,7 +19297,7 @@ dtrace_init( void )
 
 		cpu_core = (cpu_core_t *)kmem_zalloc( ncpu * sizeof(cpu_core_t), KM_SLEEP );
 		for (i = 0; i < ncpu; ++i) {
-			lck_mtx_init(&cpu_core[i].cpuc_pid_lock, dtrace_lck_grp, dtrace_lck_attr);
+			lck_mtx_init(&cpu_core[i].cpuc_pid_lock, &dtrace_lck_grp, &dtrace_lck_attr);
 		}
 
 		cpu_list = (dtrace_cpu_t *)kmem_zalloc( ncpu * sizeof(dtrace_cpu_t), KM_SLEEP );
@@ -19324,7 +19305,7 @@ dtrace_init( void )
 			cpu_list[i].cpu_id = (processorid_t)i;
 			cpu_list[i].cpu_next = &(cpu_list[(i+1) % ncpu]);
 			LIST_INIT(&cpu_list[i].cpu_cyc_list);
-			lck_rw_init(&cpu_list[i].cpu_ft_lock, dtrace_lck_grp, dtrace_lck_attr);
+			lck_rw_init(&cpu_list[i].cpu_ft_lock, &dtrace_lck_grp, &dtrace_lck_attr);
 		}
 
 		lck_mtx_lock(&cpu_lock);
@@ -19340,7 +19321,6 @@ dtrace_init( void )
 		    offsetof(dtrace_string_t, dtst_next),
 		    offsetof(dtrace_string_t, dtst_prev));
 
-		dtrace_isa_init();
 		/*
 		 * See dtrace_impl.h for a description of dof modes.
 		 * The default is lazy dof.

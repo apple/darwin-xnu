@@ -43,6 +43,8 @@ void kext_free(vm_offset_t addr, vm_size_t size);
 
 kern_return_t kext_receipt(void **addrp, size_t *sizep);
 
+kern_return_t kext_receipt_set_queried(void);
+
 __END_DECLS
 
 #endif /* _KEXT_ALLOC_H_ */

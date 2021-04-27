@@ -116,12 +116,12 @@
 
 int nfsd_thread_count = 0;
 int nfsd_thread_max = 0;
-lck_grp_t *nfsd_lck_grp;
-lck_mtx_t *nfsd_mutex;
+static LCK_GRP_DECLARE(nfsd_lck_grp, "nfsd");
+LCK_MTX_DECLARE(nfsd_mutex, &nfsd_lck_grp);
 struct nfsd_head nfsd_head, nfsd_queue;
 
-lck_grp_t *nfsrv_slp_rwlock_group;
-lck_grp_t *nfsrv_slp_mutex_group;
+LCK_GRP_DECLARE(nfsrv_slp_rwlock_group, "nfsrv-slp-rwlock");
+LCK_GRP_DECLARE(nfsrv_slp_mutex_group, "nfsrv-slp-mutex");
 struct nfsrv_sockhead nfsrv_socklist, nfsrv_sockwg,
     nfsrv_sockwait, nfsrv_sockwork;
 struct nfsrv_sock *nfsrv_udpsock = NULL;
@@ -132,15 +132,15 @@ struct nfsrv_expfs_list nfsrv_exports;
 struct nfsrv_export_hashhead *nfsrv_export_hashtbl = NULL;
 int nfsrv_export_hash_size = NFSRVEXPHASHSZ;
 u_long nfsrv_export_hash;
-lck_grp_t *nfsrv_export_rwlock_group;
-lck_rw_t nfsrv_export_rwlock;
+static LCK_GRP_DECLARE(nfsrv_export_rwlock_group, "nfsrv-export-rwlock");
+LCK_RW_DECLARE(nfsrv_export_rwlock, &nfsrv_export_rwlock_group);
 
 #if CONFIG_FSE
 /* NFS server file modification event generator */
 struct nfsrv_fmod_hashhead *nfsrv_fmod_hashtbl;
 u_long nfsrv_fmod_hash;
-lck_grp_t *nfsrv_fmod_grp;
-lck_mtx_t *nfsrv_fmod_mutex;
+static LCK_GRP_DECLARE(nfsrv_fmod_grp, "nfsrv_fmod");
+LCK_MTX_DECLARE(nfsrv_fmod_mutex, &nfsrv_fmod_grp);
 static int nfsrv_fmod_timer_on = 0;
 int nfsrv_fsevents_enabled = 1;
 #endif
@@ -158,7 +158,7 @@ uint32_t nfsrv_user_stat_enabled = 1;
 uint32_t nfsrv_user_stat_node_count = 0;
 uint32_t nfsrv_user_stat_max_idle_sec = NFSRV_USER_STAT_DEF_IDLE_SEC;
 uint32_t nfsrv_user_stat_max_nodes = NFSRV_USER_STAT_DEF_MAX_NODES;
-lck_grp_t *nfsrv_active_user_mutex_group;
+LCK_GRP_DECLARE(nfsrv_active_user_mutex_group, "nfs-active-user-mutex");
 
 int nfsrv_wg_delay = NFSRV_WGATHERDELAY * 1000;
 int nfsrv_wg_delay_v3 = 0;
@@ -203,31 +203,12 @@ nfsrv_init(void)
 		printf("struct nfsrv_sock bloated (> %dbytes)\n", NFS_SVCALLOC);
 	}
 
-	/* init nfsd mutex */
-	nfsd_lck_grp = lck_grp_alloc_init("nfsd", LCK_GRP_ATTR_NULL);
-	nfsd_mutex = lck_mtx_alloc_init(nfsd_lck_grp, LCK_ATTR_NULL);
-
-	/* init slp rwlock */
-	nfsrv_slp_rwlock_group = lck_grp_alloc_init("nfsrv-slp-rwlock", LCK_GRP_ATTR_NULL);
-	nfsrv_slp_mutex_group  = lck_grp_alloc_init("nfsrv-slp-mutex", LCK_GRP_ATTR_NULL);
-
 	/* init export data structures */
 	LIST_INIT(&nfsrv_exports);
-	nfsrv_export_rwlock_group = lck_grp_alloc_init("nfsrv-export-rwlock", LCK_GRP_ATTR_NULL);
-	lck_rw_init(&nfsrv_export_rwlock, nfsrv_export_rwlock_group, LCK_ATTR_NULL);
-
-	/* init active user list mutex structures */
-	nfsrv_active_user_mutex_group = lck_grp_alloc_init("nfs-active-user-mutex", LCK_GRP_ATTR_NULL);
-
-	/* init nfs server request cache mutex */
-	nfsrv_reqcache_lck_grp = lck_grp_alloc_init("nfsrv_reqcache", LCK_GRP_ATTR_NULL);
-	nfsrv_reqcache_mutex = lck_mtx_alloc_init(nfsrv_reqcache_lck_grp, LCK_ATTR_NULL);
 
 #if CONFIG_FSE
 	/* init NFS server file modified event generation */
 	nfsrv_fmod_hashtbl = hashinit(NFSRVFMODHASHSZ, M_TEMP, &nfsrv_fmod_hash);
-	nfsrv_fmod_grp = lck_grp_alloc_init("nfsrv_fmod", LCK_GRP_ATTR_NULL);
-	nfsrv_fmod_mutex = lck_mtx_alloc_init(nfsrv_fmod_grp, LCK_ATTR_NULL);
 #endif
 
 	/* initialize NFS server timer callouts */
@@ -1146,7 +1127,7 @@ nfsrv_fmod_timer(__unused void *param0, __unused void *param1)
 	int i, fmod_fire;
 
 	LIST_INIT(&firehead);
-	lck_mtx_lock(nfsrv_fmod_mutex);
+	lck_mtx_lock(&nfsrv_fmod_mutex);
 again:
 	clock_get_uptime(&timenow);
 	clock_interval_to_deadline(nfsrv_fmod_pendtime, 1000 * 1000,
@@ -1194,7 +1175,7 @@ again:
 	}
 
 	if (fmod_fire) {
-		lck_mtx_unlock(nfsrv_fmod_mutex);
+		lck_mtx_unlock(&nfsrv_fmod_mutex);
 		/*
 		 * Fire off the content modified fsevent for each
 		 * entry and free it.
@@ -1211,7 +1192,7 @@ again:
 			LIST_REMOVE(fp, fm_link);
 			FREE(fp, M_TEMP);
 		}
-		lck_mtx_lock(nfsrv_fmod_mutex);
+		lck_mtx_lock(&nfsrv_fmod_mutex);
 		nfsrv_fmod_pending -= fmod_fire;
 		goto again;
 	}
@@ -1234,7 +1215,7 @@ again:
 		nfs_interval_timer_start(nfsrv_fmod_timer_call, interval);
 	}
 
-	lck_mtx_unlock(nfsrv_fmod_mutex);
+	lck_mtx_unlock(&nfsrv_fmod_mutex);
 }
 
 /*
@@ -1250,7 +1231,7 @@ nfsrv_modified(vnode_t vp, vfs_context_t ctx)
 	struct nfsrv_fmod *fp;
 	struct nfsrv_fmod_hashhead *head;
 
-	lck_mtx_lock(nfsrv_fmod_mutex);
+	lck_mtx_lock(&nfsrv_fmod_mutex);
 
 	/*
 	 * Compute the time in the future when the
@@ -1271,7 +1252,7 @@ nfsrv_modified(vnode_t vp, vfs_context_t ctx)
 				LIST_REMOVE(fp, fm_link);
 				LIST_INSERT_HEAD(head, fp, fm_link);
 			}
-			lck_mtx_unlock(nfsrv_fmod_mutex);
+			lck_mtx_unlock(&nfsrv_fmod_mutex);
 			return;
 		}
 	}
@@ -1306,7 +1287,7 @@ nfsrv_modified(vnode_t vp, vfs_context_t ctx)
 		    nfsrv_fmod_pendtime);
 	}
 done:
-	lck_mtx_unlock(nfsrv_fmod_mutex);
+	lck_mtx_unlock(&nfsrv_fmod_mutex);
 	return;
 }
 #endif /* CONFIG_FSE */
@@ -1856,7 +1837,7 @@ loop1:
 	 *
 	 * Add/Remove the socket in the nfsrv_sockwg queue as needed.
 	 */
-	lck_mtx_lock(nfsd_mutex);
+	lck_mtx_lock(&nfsd_mutex);
 	if (slp->ns_wgtime) {
 		if (slp->ns_wgq.tqe_next == SLPNOLIST) {
 			TAILQ_INSERT_HEAD(&nfsrv_sockwg, slp, ns_wgq);
@@ -1870,7 +1851,7 @@ loop1:
 		TAILQ_REMOVE(&nfsrv_sockwg, slp, ns_wgq);
 		slp->ns_wgq.tqe_next = SLPNOLIST;
 	}
-	lck_mtx_unlock(nfsd_mutex);
+	lck_mtx_unlock(&nfsd_mutex);
 
 	return 0;
 }
@@ -1950,7 +1931,7 @@ nfsrv_wg_timer(__unused void *param0, __unused void *param1)
 	cur_usec = now.tv_sec * 1000000 + now.tv_usec;
 	next_usec = cur_usec + (NFSRV_WGATHERDELAY * 1000);
 
-	lck_mtx_lock(nfsd_mutex);
+	lck_mtx_lock(&nfsd_mutex);
 	TAILQ_FOREACH(slp, &nfsrv_sockwg, ns_wgq) {
 		if (slp->ns_wgtime) {
 			writes_pending++;
@@ -1969,10 +1950,10 @@ nfsrv_wg_timer(__unused void *param0, __unused void *param1)
 
 	if (writes_pending == 0) {
 		nfsrv_wg_timer_on = 0;
-		lck_mtx_unlock(nfsd_mutex);
+		lck_mtx_unlock(&nfsd_mutex);
 		return;
 	}
-	lck_mtx_unlock(nfsd_mutex);
+	lck_mtx_unlock(&nfsd_mutex);
 
 	/*
 	 * Return the number of msec to wait again
