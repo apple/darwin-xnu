@@ -2958,6 +2958,13 @@ quotactl(proc_t p, struct quotactl_args *uap, __unused int32_t *retval)
 	vnode_put(nd.ni_vp);
 	nameidone(&nd);
 
+#if CONFIG_MACF
+	error = mac_mount_check_quotactl(ctx, mp, uap->cmd, uap->uid);
+	if (error != 0) {
+		goto out;
+	}
+#endif
+
 	/* copyin any data we will need for downstream code */
 	quota_cmd = uap->cmd >> SUBCMDSHIFT;
 
@@ -3029,6 +3036,7 @@ quotactl(proc_t p, struct quotactl_args *uap, __unused int32_t *retval)
 		break;
 	} /* switch */
 
+out:
 	mount_drop(mp, 0);
 	return error;
 }
@@ -10422,7 +10430,7 @@ searchfs(proc_t p, struct searchfs_args *uap, __unused int32_t *retval)
 	}
 
 #if CONFIG_MACF
-	error = mac_vnode_check_searchfs(ctx, vp, &searchblock.searchattrs);
+	error = mac_vnode_check_searchfs(ctx, vp, returnattrs, &searchblock.searchattrs);
 	if (error) {
 		vnode_put(vp);
 		goto freeandexit;

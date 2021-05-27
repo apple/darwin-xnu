@@ -187,12 +187,44 @@ def ShowBufCtl(cmd_args=None) :
     skm = kern.GetValueFromAddress(cmd_args[0], 'skmem_cache *')
 
     for slab in IterateTAILQ_HEAD(skm.skm_sl_partial, "sl_link") :
-        format_string = "{:<08x} {:<4d} 0x{:<08x} 0x{:08x}"
+        format_string = "{:<18s} {:<4s} {:18s} {:18s}"
+        print format_string.format("slab", "ref", "base", "basem")
+        format_string = "0x{:<08x} {:<4d} 0x{:<08x} 0x{:08x}"
         print format_string.format(slab, slab.sl_refcnt, slab.sl_base, slab.sl_basem)
+        print "\t========================= free ========================="
+        format_string = "\t{:<18s} {:18s} {:18s}"
+        print format_string.format("bufctl", "buf_addr", "buf_addrm")
+        for bc in IterateListEntry(slab.sl_head, 'struct skmem_bufctl *',
+          'bc_link', list_prefix='s') :
+            format_string = "\t0x{:<08x} 0x{:<08x} 0x{:<08x}"
+            print format_string.format(bc, bc.bc_addr, bc.bc_addrm)
 
     for slab in IterateTAILQ_HEAD(skm.skm_sl_empty, "sl_link") :
-        format_string = "{:<08x} {:<4d} 0x{:<08x} 0x{:08x}"
+        format_string = "{:<18s}  {:<4s} {:18s} {:18s}"
+        print format_string.format("slab", "ref", "base", "basem")
+        format_string = "0x{:<08x} {:<4d} 0x{:<08x} 0x{:08x}"
         print format_string.format(slab, slab.sl_refcnt, slab.sl_base, slab.sl_basem)
+        print "\t========================= free ========================="
+        format_string = "\t{:<18s} {:18s} {:18s}"
+        print format_string.format("bufctl", "buf_addr", "buf_addrm")
+        for bc in IterateListEntry(slab.sl_head, 'struct skmem_bufctl *',
+          'bc_link', list_prefix='s') :
+            format_string = "\t0x{:<08x} 0x{:<08x} 0x{:<08x}"
+            print format_string.format(bc, bc.bc_addr, bc.bc_addrm)
+
+    print " "
+    for i in range(0, skm.skm_hash_mask + 1) :
+        format_string = "{:<18s}  {:<4s}"
+        print format_string.format("bucket", "idx")
+        format_string = "0x{:<08x} {:<4d}"
+        print format_string.format(addressof(skm.skm_hash_table[i]), i)
+        print "\t====================== allocated ======================="
+        format_string = "\t{:<18s} {:18s} {:18s}"
+        print format_string.format("bufctl", "buf_addr", "buf_addrm")
+        for bc in IterateListEntry(skm.skm_hash_table[i].bcb_head,
+          'struct skmem_bufctl *', 'bc_link', list_prefix='s') :
+            format_string = "\t0x{:<08x} 0x{:<08x} 0x{:<08x}"
+            print format_string.format(bc, bc.bc_addr, bc.bc_addrm)
 
 def SkmemArenaTypeAsString(type) :
     out_string = ""
@@ -224,8 +256,8 @@ def ShowSkmemArena(cmd_args=None) :
         print format_string.format(i, ar, SkmemArenaTypeAsString(ar.ar_type), ar.ar_mapsize >> 10, str(ar.ar_name))
         i += 1
 
-@lldb_command('showskmemregion')
-def ShowSkmemRegion(cmd_args=None) :
+@lldb_command('showskmemregions')
+def ShowSkmemRegions(cmd_args=None) :
     """ Show the global list of skmem regions
     """
 
@@ -236,6 +268,39 @@ def ShowSkmemRegion(cmd_args=None) :
         format_string = "{:>4d}: 0x{:<08x} \"{:<s}\""
         print format_string.format(i, skr, str(skr.skr_name))
         i += 1
+
+@lldb_command('showskmemregion')
+def ShowSkmemRegion(cmd_args=None) :
+    """ Show segments of a skmem region
+    """
+
+    if (cmd_args == None or len(cmd_args) == 0) :
+        print "Missing argument 0 (skmem_region address)."
+        return
+
+    skr = kern.GetValueFromAddress(cmd_args[0], 'skmem_region *')
+
+    print "\t========================= free ========================="
+    for sg in IterateTAILQ_HEAD(skr.skr_seg_free, "sg_link") :
+        format_string = "{:<18s} {:<4s} {:18s} {:18s}"
+        print format_string.format("segment", "idx", "start", "end")
+        format_string = "0x{:<08x} {:<4d} 0x{:<08x} 0x{:08x}"
+        print format_string.format(sg, sg.sg_index, sg.sg_start, sg.sg_end)
+        format_string = "\t{:<18s} {:18s} {:18s}"
+        print format_string.format("bufctl", "buf_addr", "buf_addrm")
+
+    print " "
+    for i in range(0, skr.skr_hash_mask + 1) :
+        format_string = "{:<18s}  {:<4s}"
+        print format_string.format("bucket", "idx")
+        format_string = "0x{:<08x} {:<4d}"
+        print format_string.format(addressof(skr.skr_hash_table[i]), i)
+        print "\t====================== allocated ======================="
+        format_string = "\t{:<18s} {:4s} {:18s} {:18s}"
+        print format_string.format("segment", "idx", "start", "end")
+        for sg in IterateTAILQ_HEAD(skr.skr_hash_table[i].sgb_head, "sg_link") :
+            format_string = "\t0x{:<08x} {:<4d} 0x{:<08x} 0x{:<08x}"
+            print format_string.format(sg, sg.sg_index, sg.sg_start, sg.sg_end)
 
 @lldb_command('showchannelupphash')
 def ShowChannelUppHash(cmd_args=None) :

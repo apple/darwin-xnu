@@ -153,6 +153,7 @@ struct machine_thread {
 	uint8_t                 insn_cacheline[65];     /* XXX: Hard-coded cacheline size */
 #endif
 	x86_lbrs_t              lbrs;
+	bool                    insn_copy_optout;
 };
 typedef struct machine_thread *pcb_t;
 

@@ -8071,7 +8071,7 @@ hibernate_create_paddr_map(void)
 			}
 			next_ppnum_in_run = VM_PAGE_GET_PHYS_PAGE(&vm_pages[i]) + 1;
 		}
-		ppnm->ppnm_eindx++;
+		ppnm->ppnm_eindx = vm_pages_count;
 
 		hibernate_paddr_map_inited = TRUE;
 	}

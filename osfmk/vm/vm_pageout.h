@@ -798,6 +798,20 @@ extern struct vm_pageout_debug vm_pageout_debug;
 
 #define MAX_COMPRESSOR_THREAD_COUNT      8
 
+struct vm_compressor_swapper_stats {
+	uint64_t unripe_under_30s;
+	uint64_t unripe_under_60s;
+	uint64_t unripe_under_300s;
+	uint64_t reclaim_swapins;
+	uint64_t defrag_swapins;
+	uint64_t compressor_swap_threshold_exceeded;
+	uint64_t external_q_throttled;
+	uint64_t free_count_below_reserve;
+	uint64_t thrashing_detected;
+	uint64_t fragmentation_detected;
+};
+extern struct vm_compressor_swapper_stats vmcs_stats;
+
 #if DEVELOPMENT || DEBUG
 typedef struct vmct_stats_s {
 	uint64_t vmct_runtimes[MAX_COMPRESSOR_THREAD_COUNT];

@@ -266,7 +266,7 @@ L_cpcdr_loop:
 	// It may be tempting to clean the cache (dc cvac), 
 	// but see Cyclone UM 5.3.8.3 -- it's always a NOP on Cyclone.
 	//
-	// Clean & Invalidate, however, will work as long as S3_0_C15_C4_0.DisDCMvaOps isn't set.
+	// Clean & Invalidate, however, will work as long as HID4.DisDCMvaOps isn't set.
 	dc		civac, x0							// Clean & Invalidate dcache line to PoC
 #else
 	dc		cvac, x0 							// Clean dcache line to PoC
@@ -298,19 +298,19 @@ LEXT(CleanPoC_DcacheRegion)
 	.align 2
 	.globl EXT(CleanPoC_DcacheRegion_Force_nopreempt)
 LEXT(CleanPoC_DcacheRegion_Force_nopreempt)
-#if defined(APPLE_ARM64_ARCH_FAMILY)
+#if defined(APPLE_ARM64_ARCH_FAMILY) && !APPLEVIRTUALPLATFORM
 	ARM64_STACK_PROLOG
 	PUSH_FRAME
 	isb		sy
 	ARM64_IS_PCORE x15
-	ARM64_READ_EP_SPR x15, x14, S3_0_C15_C4_1, S3_0_C15_C4_0
+	ARM64_READ_EP_SPR x15, x14, EHID4, HID4
 	and		x14, x14, (~ARM64_REG_HID4_DisDcMVAOps)
-	ARM64_WRITE_EP_SPR x15, x14, S3_0_C15_C4_1, S3_0_C15_C4_0
+	ARM64_WRITE_EP_SPR x15, x14, EHID4, HID4
 	isb		sy
 	bl		EXT(CleanPoC_DcacheRegion_internal)
 	isb		sy
 	orr		x14, x14, ARM64_REG_HID4_DisDcMVAOps
-	ARM64_WRITE_EP_SPR x15, x14, S3_0_C15_C4_1, S3_0_C15_C4_0
+	ARM64_WRITE_EP_SPR x15, x14, EHID4, HID4
 	isb		sy
 	POP_FRAME
 	ARM64_STACK_EPILOG

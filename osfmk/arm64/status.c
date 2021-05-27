@@ -1366,6 +1366,10 @@ machine_thread_dup(thread_t self,
 	}
 #endif /* defined(HAS_APPLE_PAC) */
 
+	arm_neon_saved_state_t *self_neon_state = self->machine.uNeon;
+	arm_neon_saved_state_t *target_neon_state = target->machine.uNeon;
+	bcopy(self_neon_state, target_neon_state, sizeof(*target_neon_state));
+
 	return KERN_SUCCESS;
 }
 

@@ -554,6 +554,9 @@ IOUserClient::CreateMemoryDescriptorFromClient_Impl(
 	if (!me) {
 		return kIOReturnBadArgument;
 	}
+	if (!me->fTask) {
+		return kIOReturnNotReady;
+	}
 
 	mdOptions = 0;
 	if (kIOMemoryDirectionOut & memoryDescriptorCreateOptions) {
@@ -4378,7 +4381,7 @@ IOUserServer::serviceWillTerminate(IOService * client, IOService * provider, IOO
 	}
 
 	if (willTerminate) {
-		if ((true) || IOServicePH::serverSlept()) {
+		if (provider->isInactive() || IOServicePH::serverSlept()) {
 			client->Stop_async(provider);
 			ret = kIOReturnOffline;
 		} else {
@@ -4645,6 +4648,7 @@ IOUserUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments * 
 				kr = kIOReturnBadArgument;
 			} else {
 				bcopy((const void *) structureOutput->getBytesNoCopy(), args->structureOutput, copylen);
+				args->structureOutputSize = (uint32_t) copylen;
 			}
 			OSSafeReleaseNULL(structureOutput);
 		}

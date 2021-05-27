@@ -382,6 +382,14 @@
 /* D-Cache. */
 #define MMU_CLINE   6
 
+#elif defined (VMAPPLE)
+
+/* I-Cache. */
+#define MMU_I_CLINE 6
+
+/* D-Cache. */
+#define MMU_CLINE   6
+
 #else
 #error processor not supported
 #endif

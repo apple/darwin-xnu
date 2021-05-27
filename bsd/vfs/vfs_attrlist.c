@@ -3109,7 +3109,7 @@ getattrlist_internal(vfs_context_t ctx, vnode_t vp, struct attrlist  *alp,
 	    (options & FSOPT_NOFOLLOW) ? "no":"", vp->v_name);
 
 #if CONFIG_MACF
-	error = mac_vnode_check_getattrlist(ctx, vp, alp);
+	error = mac_vnode_check_getattrlist(ctx, vp, alp, options);
 	if (error) {
 		goto out;
 	}

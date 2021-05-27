@@ -109,33 +109,18 @@ machine_thread_switch_cpu_data(thread_t old, thread_t new)
 	new->machine.pcpu_data_base = base;
 }
 
-/*
- * Routine: machine_switch_context
+/**
+ * routine: machine_switch_pmap_and_extended_context
+ *
+ * Helper function used by machine_switch_context and machine_stack_handoff to switch the
+ * extended context and switch the pmap if necessary.
  *
  */
-thread_t
-machine_switch_context(thread_t old,
-    thread_continue_t continuation,
-    thread_t new)
+
+static inline void
+machine_switch_pmap_and_extended_context(thread_t old, thread_t new)
 {
-	thread_t retval;
-	pmap_t       new_pmap;
-
-#if __ARM_PAN_AVAILABLE__
-	if (__improbable(__builtin_arm_rsr("pan") == 0)) {
-		panic("context switch with PAN disabled");
-	}
-#endif
-
-#define machine_switch_context_kprintf(x...) \
-	/* kprintf("machine_switch_context: " x) */
-
-	if (old == new) {
-		panic("machine_switch_context");
-	}
-
-	kpc_off_cpu(old);
-
+	pmap_t new_pmap;
 
 
 
@@ -160,6 +145,35 @@ machine_switch_context(thread_t old,
 
 
 	machine_thread_switch_cpu_data(old, new);
+}
+
+/*
+ * Routine: machine_switch_context
+ *
+ */
+thread_t
+machine_switch_context(thread_t old,
+    thread_continue_t continuation,
+    thread_t new)
+{
+	thread_t retval;
+
+#if __ARM_PAN_AVAILABLE__
+	if (__improbable(__builtin_arm_rsr("pan") == 0)) {
+		panic("context switch with PAN disabled");
+	}
+#endif
+
+#define machine_switch_context_kprintf(x...) \
+	/* kprintf("machine_switch_context: " x) */
+
+	if (old == new) {
+		panic("machine_switch_context");
+	}
+
+	kpc_off_cpu(old);
+
+	machine_switch_pmap_and_extended_context(old, new);
 
 	machine_switch_context_kprintf("old= %x contination = %x new = %x\n", old, continuation, new);
 
@@ -431,7 +445,6 @@ machine_stack_handoff(thread_t old,
     thread_t new)
 {
 	vm_offset_t  stack;
-	pmap_t       new_pmap;
 
 #if __ARM_PAN_AVAILABLE__
 	if (__improbable(__builtin_arm_rsr("pan") == 0)) {
@@ -450,30 +463,7 @@ machine_stack_handoff(thread_t old,
 		new->reserved_stack = stack;
 	}
 
-
-
-
-	new_pmap = new->map->pmap;
-	if (old->map->pmap != new_pmap) {
-		pmap_switch(new_pmap);
-	} else {
-		/*
-		 * If the thread is preempted while performing cache or TLB maintenance,
-		 * it may be migrated to a different CPU between the completion of the relevant
-		 * maintenance instruction and the synchronizing DSB.   ARM requires that the
-		 * synchronizing DSB must be issued *on the PE that issued the maintenance instruction*
-		 * in order to guarantee completion of the instruction and visibility of its effects.
-		 * Issue DSB here to enforce that guarantee.  We only do this for the case in which
-		 * the pmap isn't changing, as we expect pmap_switch() to issue DSB when it updates
-		 * TTBR0.  Note also that cache maintenance may be performed in userspace, so we
-		 * cannot further limit this operation e.g. by setting a per-thread flag to indicate
-		 * a pending kernel TLB or cache maintenance instruction.
-		 */
-		__builtin_arm_dsb(DSB_ISH);
-	}
-
-
-	machine_thread_switch_cpu_data(old, new);
+	machine_switch_pmap_and_extended_context(old, new);
 
 	machine_set_current_thread(new);
 	thread_initialize_kernel_state(new);

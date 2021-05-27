@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2020 Apple Inc. All rights reserved.
+ * Copyright (c) 2017-2021 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -212,7 +212,7 @@ struct frame802154 {
 	uint16_t src_pid;               /**< Source PAN ID */
 	frame802154_aux_hdr_t aux_hdr;  /**< Aux security header */
 	//uint8_t *payload;               /**< Pointer to 802.15.4 payload */
-	int payload_len;                /**< Length of payload field */
+	uint32_t payload_len;                /**< Length of payload field */
 };
 typedef struct frame802154 frame802154_t;
 

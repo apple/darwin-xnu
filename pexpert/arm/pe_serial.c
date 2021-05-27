@@ -719,6 +719,93 @@ SECURITY_READ_ONLY_LATE(static struct pe_serial_functions) pi3_uart_serial_funct
 
 /*****************************************************************************/
 
+#ifdef VMAPPLE_UART
+
+static vm_offset_t vmapple_uart0_base_vaddr = 0;
+
+#define PL011_LCR_WORD_LENGTH_8  0x60u
+#define PL011_LCR_FIFO_DISABLE   0x00u
+
+#define PL011_LCR_FIFO_ENABLE    0x10u
+
+#define PL011_LCR_ONE_STOP_BIT   0x00u
+#define PL011_LCR_PARITY_DISABLE 0x00u
+#define PL011_LCR_BREAK_DISABLE  0x00u
+#define PL011_IBRD_DIV_38400     0x27u
+#define PL011_FBRD_DIV_38400     0x09u
+#define PL011_ICR_CLR_ALL_IRQS   0x07ffu
+#define PL011_CR_UART_ENABLE     0x01u
+#define PL011_CR_TX_ENABLE       0x100u
+#define PL011_CR_RX_ENABLE       0x200u
+
+#define VMAPPLE_UART0_DR         *((volatile uint32_t *) (vmapple_uart0_base_vaddr + 0x00))
+#define VMAPPLE_UART0_ECR        *((volatile uint32_t *) (vmapple_uart0_base_vaddr + 0x04))
+#define VMAPPLE_UART0_FR         *((volatile uint32_t *) (vmapple_uart0_base_vaddr + 0x18))
+#define VMAPPLE_UART0_IBRD       *((volatile uint32_t *) (vmapple_uart0_base_vaddr + 0x24))
+#define VMAPPLE_UART0_FBRD       *((volatile uint32_t *) (vmapple_uart0_base_vaddr + 0x28))
+#define VMAPPLE_UART0_LCR_H      *((volatile uint32_t *) (vmapple_uart0_base_vaddr + 0x2c))
+#define VMAPPLE_UART0_CR         *((volatile uint32_t *) (vmapple_uart0_base_vaddr + 0x30))
+#define VMAPPLE_UART0_TIMSC      *((volatile uint32_t *) (vmapple_uart0_base_vaddr + 0x38))
+#define VMAPPLE_UART0_ICR        *((volatile uint32_t *) (vmapple_uart0_base_vaddr + 0x44))
+
+static int
+vmapple_uart_transmit_ready(void)
+{
+	return (int) !(VMAPPLE_UART0_FR & 0x20);
+}
+
+static void
+vmapple_uart_transmit_data(int c)
+{
+	VMAPPLE_UART0_DR = (uint32_t) c;
+}
+
+static int
+vmapple_uart_receive_ready(void)
+{
+	return (int) !(VMAPPLE_UART0_FR & 0x10);
+}
+
+static int
+vmapple_uart_receive_data(void)
+{
+	return (int) (VMAPPLE_UART0_DR & 0xff);
+}
+
+static void
+vmapple_uart_init(void)
+{
+	VMAPPLE_UART0_CR = 0x0;
+	VMAPPLE_UART0_ECR = 0x0;
+	VMAPPLE_UART0_LCR_H = (
+		PL011_LCR_WORD_LENGTH_8 |
+		PL011_LCR_FIFO_ENABLE |
+		PL011_LCR_ONE_STOP_BIT |
+		PL011_LCR_PARITY_DISABLE |
+		PL011_LCR_BREAK_DISABLE
+		);
+	VMAPPLE_UART0_IBRD = PL011_IBRD_DIV_38400;
+	VMAPPLE_UART0_FBRD = PL011_FBRD_DIV_38400;
+	VMAPPLE_UART0_TIMSC = 0x0;
+	VMAPPLE_UART0_ICR = PL011_ICR_CLR_ALL_IRQS;
+	VMAPPLE_UART0_CR = (
+		PL011_CR_UART_ENABLE |
+		PL011_CR_TX_ENABLE |
+		PL011_CR_RX_ENABLE
+		);
+}
+
+SECURITY_READ_ONLY_LATE(static struct pe_serial_functions) vmapple_uart_serial_functions =
+{
+	.uart_init = vmapple_uart_init,
+	.uart_set_baud_rate = NULL,
+	.tr0 = vmapple_uart_transmit_ready,
+	.td0 = vmapple_uart_transmit_data,
+	.rr0 = vmapple_uart_receive_ready,
+	.rd0 = vmapple_uart_receive_data
+};
+
+#endif /* VMAPPLE_UART */
 
 /*****************************************************************************/
 
@@ -782,6 +869,16 @@ serial_init(void)
 	}
 #endif /* PI3_UART */
 
+#ifdef VMAPPLE_UART
+	if (SecureDTFindEntry("name", "uart0", &entryP) == kSuccess) {
+		SecureDTGetProperty(entryP, "reg", (void const **)&reg_prop, &prop_size);
+		vmapple_uart0_base_vaddr = ml_io_map(soc_base + *reg_prop, *(reg_prop + 1));
+	}
+
+	if (vmapple_uart0_base_vaddr != 0) {
+		register_serial_functions(&vmapple_uart_serial_functions);
+	}
+#endif /* VMAPPLE_UART */
 
 #ifdef DOCKCHANNEL_UART
 	uint32_t no_dockchannel_uart = 0;

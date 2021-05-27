@@ -936,7 +936,8 @@ user_trap(
 	 * trapped since the original cache line stores).  If the saved code is not valid,
 	 * we'll catch it below when we process the copyin() for unhandled faults.
 	 */
-	if (type == T_PAGE_FAULT || type == T_INVALID_OPCODE || type == T_GENERAL_PROTECTION) {
+	if (thread->machine.insn_copy_optout == false &&
+	    (type == T_PAGE_FAULT || type == T_INVALID_OPCODE || type == T_GENERAL_PROTECTION)) {
 #define CACHELINE_SIZE 64
 		THREAD_TO_PCB(thread)->insn_cacheline[CACHELINE_SIZE] = (uint8_t)(rip & (CACHELINE_SIZE - 1));
 		bcopy(&cpu_shadowp(current_cpu)->cpu_rtimes[0],
@@ -1212,7 +1213,7 @@ user_trap(
 		 * And of course there's no need to copy the instruction stream if the boot-arg
 		 * was set to 0.
 		 */
-		if (insn_copyin_count > 0 &&
+		if (thread->machine.insn_copy_optout == false && insn_copyin_count > 0 &&
 		    (cs == USER64_CS || cs == USER_CS) && (type != T_PAGE_FAULT || vaddr != rip)) {
 #if DEVELOPMENT || DEBUG
 			copy_instruction_stream(thread, rip, type, inspect_cacheline);
@@ -1363,8 +1364,6 @@ copy_instruction_stream(thread_t thread, uint64_t rip, int __unused trap_code
 						panic("Cacheline mismatch while processing unhandled exception.");
 					}
 				} else {
-					printf("thread %p code cacheline @ %p DOES match with copied-in code\n",
-					    thread, (void *)(rip & ~CACHELINE_MASK));
 					pcb->insn_state->out_of_synch = 0;
 				}
 			} else if (inspect_cacheline) {

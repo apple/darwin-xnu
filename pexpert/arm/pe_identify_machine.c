@@ -464,6 +464,8 @@ PE_init_cpu(void)
 	if (bootarg_stop_clocks != 0) {
 		pe_run_debug_command(enable_stop_clocks);
 	}
+
+	pe_init_fiq();
 }
 
 #else
@@ -473,6 +475,7 @@ void(*const PE_arm_debug_panic_hook)(const char *str) = NULL;
 void
 PE_init_cpu(void)
 {
+	pe_init_fiq();
 }
 
 #endif  // DEVELOPMENT || DEBUG

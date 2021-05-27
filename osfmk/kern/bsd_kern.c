@@ -77,7 +77,7 @@ void task_bsdtask_kill(task_t);
 
 extern uint64_t get_dispatchqueue_serialno_offset_from_proc(void *p);
 extern uint64_t get_dispatchqueue_label_offset_from_proc(void *p);
-extern uint64_t proc_uniqueid(void *p);
+extern uint64_t proc_uniqueid_task(void *p, void *t);
 extern int proc_pidversion(void *p);
 extern int proc_getcdhash(void *p, char *cdhash);
 
@@ -1274,7 +1274,7 @@ uint64_t
 get_task_uniqueid(task_t task)
 {
 	if (task->bsd_info) {
-		return proc_uniqueid(task->bsd_info);
+		return proc_uniqueid_task(task->bsd_info, task);
 	} else {
 		return UINT64_MAX;
 	}

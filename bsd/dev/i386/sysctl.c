@@ -1057,6 +1057,30 @@ extern uint64_t x86_isr_fp_simd_use;
 SYSCTL_QUAD(_machdep, OID_AUTO, x86_fp_simd_isr_uses,
     CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
     &x86_isr_fp_simd_use, "");
+
+static int
+sysctl_kern_insn_copy_optout_task SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	uint32_t soflags = 0;
+	uint32_t old_value = curtask_get_insn_copy_optout() ? 1 : 0;
+
+	int error = SYSCTL_IN(req, &soflags, sizeof(soflags));
+	if (error) {
+		return error;
+	}
+
+	if (soflags) {
+		curtask_set_insn_copy_optout();
+	}
+
+	return SYSCTL_OUT(req, &old_value, sizeof(old_value));
+}
+SYSCTL_PROC(_machdep, OID_AUTO, insn_copy_optout_task,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_MASKED | CTLFLAG_ANYBODY,
+    0, 0, sysctl_kern_insn_copy_optout_task, "I", "");
+
+
 #if DEVELOPMENT || DEBUG
 
 extern int plctrace_enabled;

@@ -692,6 +692,7 @@ mptcp_session_destroy(struct mptses *mpte)
 	}
 	mpte->mpte_itfinfo = NULL;
 
+	mptcp_freeq(mp_tp);
 	m_freem_list(mpte->mpte_reinjectq);
 
 	os_log(mptcp_log_handle, "%s - %lx: Destroying session\n",
@@ -3056,7 +3057,7 @@ int
 mptcp_subflow_output(struct mptses *mpte, struct mptsub *mpts, int flags)
 {
 	struct mptcb *mp_tp = mpte->mpte_mptcb;
-	struct mbuf *sb_mb, *m, *mpt_mbuf = NULL, *head, *tail;
+	struct mbuf *sb_mb, *m, *mpt_mbuf = NULL, *head = NULL, *tail = NULL;
 	struct socket *mp_so, *so;
 	struct tcpcb *tp;
 	uint64_t mpt_dsn = 0, off = 0;
@@ -3133,7 +3134,12 @@ mptcp_subflow_output(struct mptses *mpte, struct mptsub *mpts, int flags)
 	    !(so->so_state & SS_ISCONNECTED) &&
 	    (so->so_flags1 & SOF1_PRECONNECT_DATA)) {
 		tp->t_mpflags |= TMPF_TFO_REQUEST;
-		goto zero_len_write;
+
+		/* Opting to call pru_send as no mbuf at subflow level */
+		error = (*so->so_proto->pr_usrreqs->pru_send)(so, 0, NULL, NULL,
+		    NULL, current_proc());
+
+		goto done_sending;
 	}
 
 	mpt_dsn = sb_mb->m_pkthdr.mp_dsn;
@@ -3376,12 +3382,7 @@ next:
 		}
 
 		error = sock_sendmbuf(so, NULL, head, 0, NULL);
-
-		DTRACE_MPTCP7(send, struct mbuf *, m, struct socket *, so,
-		    struct sockbuf *, &so->so_rcv,
-		    struct sockbuf *, &so->so_snd,
-		    struct mptses *, mpte, struct mptsub *, mpts,
-		    size_t, tot_sent);
+		head = NULL;
 	}
 
 done_sending:
@@ -3452,19 +3453,16 @@ done_sending:
 	}
 out:
 
+	if (head != NULL) {
+		m_freem(head);
+	}
+
 	if (wakeup) {
 		mpte->mpte_mppcb->mpp_flags |= MPP_SHOULD_WWAKEUP;
 	}
 
 	mptcp_handle_deferred_upcalls(mpte->mpte_mppcb, MPP_INSIDE_OUTPUT);
 	return error;
-
-zero_len_write:
-	/* Opting to call pru_send as no mbuf at subflow level */
-	error = (*so->so_proto->pr_usrreqs->pru_send)(so, 0, NULL, NULL,
-	    NULL, current_proc());
-
-	goto done_sending;
 }
 
 static void
@@ -4767,7 +4765,7 @@ mptcp_gc(struct mppcbinfo *mppi)
 		    struct sockbuf *, &mp_so->so_snd,
 		    struct mppcb *, mpp);
 
-		mp_pcbdispose(mpp);
+		mptcp_pcbdispose(mpp);
 		sodealloc(mp_so);
 	}
 

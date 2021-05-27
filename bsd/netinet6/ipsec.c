@@ -5085,7 +5085,7 @@ sysctl_ipsec_wake_packet SYSCTL_HANDLER_ARGS
 
 	struct proc *p = current_proc();
 	if (p != NULL) {
-		uid_t uid = kauth_cred_getuid(proc_ucred(p));
+		uid_t uid = kauth_cred_getuid(kauth_cred_get());
 		if (uid != 0 && priv_check_cred(kauth_cred_get(), PRIV_NET_PRIVILEGED_IPSEC_WAKE_PACKET, 0) != 0) {
 			ipseclog((LOG_ERR, "process does not hold necessary entitlement to get ipsec wake packet"));
 			return EPERM;

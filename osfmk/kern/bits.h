@@ -83,19 +83,19 @@ bit_rol64(uint64_t bitmap, uint n)
 
 /* Non-atomically clear the bit and returns whether the bit value was changed */
 inline static bool
-bit_clear_if_set(uint64_t bitmap, int bit)
+bit_clear_if_set(uint64_t *bitmap, int bit)
 {
-	bool bit_is_set = bit_test(bitmap, bit);
-	bit_clear(bitmap, bit);
+	bool bit_is_set = bit_test(*bitmap, bit);
+	bit_clear(*bitmap, bit);
 	return bit_is_set;
 }
 
 /* Non-atomically set the bit and returns whether the bit value was changed */
 inline static bool
-bit_set_if_clear(uint64_t bitmap, int bit)
+bit_set_if_clear(uint64_t *bitmap, int bit)
 {
-	bool bit_is_set = bit_test(bitmap, bit);
-	bit_set(bitmap, bit);
+	bool bit_is_set = bit_test(*bitmap, bit);
+	bit_set(*bitmap, bit);
 	return !bit_is_set;
 }
 

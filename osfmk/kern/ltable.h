@@ -129,7 +129,8 @@ typedef void (*ltable_poison_func)(struct link_table *, struct lt_elem *);
 struct link_table {
 	struct lt_elem **table;   /* an array of 'slabs' of elements */
 	struct lt_elem **next_free_slab;
-	struct ltable_id free_list __attribute__((aligned(8)));
+	struct ltable_id free_head __attribute__((aligned(8)));
+	struct lt_elem  *free_tail;
 
 	uint32_t         elem_sz;  /* size of a table element (bytes) */
 	uint32_t         slab_shift;
@@ -138,13 +139,13 @@ struct link_table {
 	uint32_t         slab_sz;  /* size of a table 'slab' object (bytes) */
 
 	uint32_t         nelem;
-	uint32_t         used_elem;
 	zone_t           slab_zone;
 
 	ltable_poison_func poison;
 
 	lck_mtx_t        lock;
 	uint32_t         state;
+	uint32_t volatile used_elem;
 
 #if CONFIG_LTABLE_STATS
 	uint32_t         nslabs;

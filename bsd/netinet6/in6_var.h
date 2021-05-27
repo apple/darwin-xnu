@@ -783,7 +783,7 @@ void in6_post_msg(struct ifnet *, u_int32_t, struct in6_ifaddr *, uint8_t *mac);
 #define IN6_IFF_ANYCAST         0x0001  /* anycast address */
 #define IN6_IFF_TENTATIVE       0x0002  /* tentative address */
 #define IN6_IFF_DUPLICATED      0x0004  /* DAD detected duplicate */
-#define IN6_IFF_DETACHED        0x0008  /* may be detached from the link */
+#define IN6_IFF_DETACHED        0x0008  /* XXX Obsolete. May be detached from the link */
 #define IN6_IFF_DEPRECATED      0x0010  /* deprecated address */
 
 /* don't perform DAD on this address (used only at first SIOC* call) */

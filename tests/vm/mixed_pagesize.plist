@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Tests</key>
+	<array>
+		<dict>
+			<key>Command</key>
+			<array>
+				<string>/AppleInternal/Tests/xnu/darwintests/tools/vm_spawn_tool</string>
+				<string>/AppleInternal/Tests/xnu/darwintests/vm/mixed_pagesize</string>
+			</array>
+			<key>TestName</key>
+			<string>xnu.vm.mixed_pagesize</string>
+		</dict>
+	</array>
+	<key>Timeout</key>
+	<integer>240</integer>
+</dict>
+</plist>

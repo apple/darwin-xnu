@@ -1331,6 +1331,24 @@ proc_uniqueid(proc_t p)
 	return p->p_uniqueid;
 }
 
+uint64_t proc_uniqueid_task(void *p_arg, void *t);
+/*
+ * During exec, two tasks point at the proc.  This function is used
+ * to gives tasks a unique ID; we make the matching task have the
+ * proc's uniqueid, and any other task gets the high-bit flipped.
+ * (We need to try to avoid returning UINT64_MAX, which is the
+ * which is the uniqueid of a task without a proc. (e.g. while exiting))
+ *
+ * Only used by get_task_uniqueid(); do not add additional callers.
+ */
+uint64_t
+proc_uniqueid_task(void *p_arg, void *t)
+{
+	proc_t p = p_arg;
+	uint64_t uniqueid = p->p_uniqueid;
+	return uniqueid ^ (__probable(t == (void *)p->task) ? 0 : (1ull << 63));
+}
+
 uint64_t
 proc_puniqueid(proc_t p)
 {
@@ -3518,6 +3536,26 @@ proc_resetregister(proc_t p)
 {
 	proc_lock(p);
 	p->p_lflag &= ~P_LREGISTER;
+	proc_unlock(p);
+}
+
+bool
+proc_get_pthread_jit_allowlist(proc_t p)
+{
+	bool ret = false;
+
+	proc_lock(p);
+	ret = (p->p_lflag & P_LPTHREADJITALLOWLIST);
+	proc_unlock(p);
+
+	return ret;
+}
+
+void
+proc_set_pthread_jit_allowlist(proc_t p)
+{
+	proc_lock(p);
+	p->p_lflag |= P_LPTHREADJITALLOWLIST;
 	proc_unlock(p);
 }
 

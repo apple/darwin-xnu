@@ -612,7 +612,7 @@ experiment_factor_numeric_types
  * This factor will not be printed out via the showexperiments lldb macro.
  */
 #define EXPERIMENT_FACTOR_PROC(parent, name, access, ptr, arg, handler, fmt, descr) \
-	_Static_assert(arg != 1, "arg can not be 1") \
+	_Static_assert(arg != 1, "arg can not be 1"); \
 	SYSCTL_PROC(parent, OID_AUTO, name, access | CTLFLAG_ANYBODY | CTLFLAG_EXPERIMENT, ptr, arg, handler, fmt, descr);
 
 #ifdef XNU_KERNEL_PRIVATE

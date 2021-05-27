@@ -3702,6 +3702,7 @@ realtime_setrun(
 					processor_state_update_from_thread(processor, thread);
 					processor->deadline = thread->realtime.deadline;
 				}
+				bit_set(pset->pending_AST_URGENT_cpu_mask, processor->cpu_id);
 			} else {
 				if (processor == current_processor()) {
 					ast_on(preempt);

@@ -259,9 +259,10 @@ mp_pcbdetach(struct socket *mp_so)
 }
 
 void
-mp_pcbdispose(struct mppcb *mpp)
+mptcp_pcbdispose(struct mppcb *mpp)
 {
 	struct mppcbinfo *mppi = mpp->mpp_pcbinfo;
+	struct socket *mp_so = mpp->mpp_socket;
 
 	VERIFY(mppi != NULL);
 
@@ -291,6 +292,16 @@ mp_pcbdispose(struct mppcb *mpp)
 #if NECP
 	necp_mppcb_dispose(mpp);
 #endif /* NECP */
+
+	sofreelastref(mp_so, 0);
+	if (mp_so->so_rcv.sb_cc > 0 || mp_so->so_snd.sb_cc > 0) {
+		/*
+		 * selthreadclear() already called
+		 * during sofreelastref() above.
+		 */
+		sbrelease(&mp_so->so_rcv);
+		sbrelease(&mp_so->so_snd);
+	}
 
 	lck_mtx_destroy(&mpp->mpp_lock, mppi->mppi_lock_grp);
 

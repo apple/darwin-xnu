@@ -48,6 +48,7 @@ static uint64_t global_flags = 0;
 #define PARSE_STACKSHOT_WAITINFO_SRP         0x80
 #define PARSE_STACKSHOT_TRANSLATED           0x100
 #define PARSE_STACKSHOT_SHAREDCACHE_FLAGS    0x200
+#define PARSE_STACKSHOT_EXEC_INPROGRESS      0x400
 
 /* keys for 'extra' dictionary for parse_stackshot */
 static const NSString* zombie_child_pid_key = @"zombie_child_pid"; // -> @(pid), required for PARSE_STACKSHOT_ZOMBIE
@@ -58,6 +59,8 @@ static const NSString* srp_expected_pid_key = @"srp_expected_pid"; // -> @(pid),
 static const NSString* translated_child_pid_key = @"translated_child_pid"; // -> @(pid), required for PARSE_STACKSHOT_TRANSLATED
 static const NSString* sharedcache_child_pid_key = @"sharedcache_child_pid"; // @(pid), required for PARSE_STACKSHOT_SHAREDCACHE_FLAGS
 static const NSString* sharedcache_child_sameaddr_key = @"sharedcache_child_sameaddr"; // @(0 or 1), required for PARSE_STACKSHOT_SHAREDCACHE_FLAGS
+static const NSString* exec_inprogress_pid_key = @"exec_inprogress_pid";
+static const NSString* exec_inprogress_found_key = @"exec_inprogress_found";  // callback when inprogress is found
 
 #define TEST_STACKSHOT_QUEUE_LABEL        "houston.we.had.a.problem"
 #define TEST_STACKSHOT_QUEUE_LABEL_LENGTH sizeof(TEST_STACKSHOT_QUEUE_LABEL)
@@ -742,6 +745,43 @@ T_DECL(exec, "test getting full task snapshots for a task that execs")
 		
 		parse_stackshot(PARSE_STACKSHOT_POSTEXEC | PARSE_STACKSHOT_DELTA, ssbuf, sslen, @{postexec_child_unique_pid_key: @(unique_pid)});
 	});
+}
+
+T_DECL(exec_inprogress, "test stackshots of processes in the middle of exec")
+{
+	pid_t pid;
+	/* a BASH quine which execs itself as long as the parent doesn't exit */
+        char *bash_prog = "[[ $PPID -ne 1 ]] && exec /bin/bash -c \"$0\" \"$0\"";
+	char *args[] = { "/bin/bash", "-c", bash_prog, bash_prog, NULL };
+
+	posix_spawnattr_t sattr;
+	T_ASSERT_POSIX_ZERO(posix_spawnattr_init(&sattr), "posix_spawnattr_init");
+	T_ASSERT_POSIX_ZERO(posix_spawn(&pid, args[0], NULL, &sattr, args, NULL), "spawn exec_inprogress_child");
+
+	struct scenario scenario = {
+		.name = "exec_inprogress",
+		.flags = (STACKSHOT_KCDATA_FORMAT),
+		.target_pid = pid,
+	};
+
+	int tries = 0;
+	int tries_limit = 30;
+	__block bool found = false;
+	__block uint64_t cid1 = 0, cid2 = 0;
+
+	for (tries = 0; !found && tries < tries_limit; tries++) {
+		take_stackshot(&scenario, false,
+		    ^( void *ssbuf, size_t sslen) {
+			parse_stackshot(PARSE_STACKSHOT_EXEC_INPROGRESS,
+			    ssbuf, sslen, @{
+				exec_inprogress_pid_key: @(pid),
+				exec_inprogress_found_key: ^(uint64_t id1, uint64_t id2) { found = true; cid1 = id1; cid2 = id2; }});
+		});
+	}
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(kill(pid, SIGKILL), "killing exec loop");
+	T_ASSERT_TRUE(found, "able to find our execing process mid-exec in %d tries", tries);
+	T_ASSERT_NE(cid1, cid2, "container IDs for in-progress exec are unique");
+	T_PASS("found mid-exec process in %d tries", tries);
 }
 
 static uint32_t
@@ -1876,6 +1916,7 @@ parse_stackshot(uint64_t stackshot_parsing_flags, void *ssbuf, size_t sslen, NSD
 	bool expect_dispatch_queue_label = (stackshot_parsing_flags & PARSE_STACKSHOT_DISPATCH_QUEUE_LABEL);
 	bool expect_turnstile_lock = (stackshot_parsing_flags & PARSE_STACKSHOT_TURNSTILEINFO);
 	bool expect_srp_waitinfo = (stackshot_parsing_flags & PARSE_STACKSHOT_WAITINFO_SRP);
+	bool expect_exec_inprogress = (stackshot_parsing_flags & PARSE_STACKSHOT_EXEC_INPROGRESS);
 	bool found_zombie_child = false, found_postexec_child = false, found_shared_cache_layout = false, found_shared_cache_uuid = false;
 	bool found_translated_child = false;
 	bool found_dispatch_queue_label = false, found_turnstile_lock = false;
@@ -1888,6 +1929,10 @@ parse_stackshot(uint64_t stackshot_parsing_flags, void *ssbuf, size_t sslen, NSD
 	uint64_t postexec_child_unique_pid = 0, cseg_expected_threadid = 0;
 	uint64_t sharedcache_child_flags = 0, sharedcache_self_flags = 0;
 	char *inflatedBufferBase = NULL;
+	pid_t exec_inprogress_pid = -1;
+	void (^exec_inprogress_cb)(uint64_t, uint64_t) = NULL;
+	int exec_inprogress_found = 0;
+	uint64_t exec_inprogress_containerid = 0;
 
 	if (expect_shared_cache_uuid) {
 		uuid_t shared_cache_uuid;
@@ -1963,6 +2008,15 @@ parse_stackshot(uint64_t stackshot_parsing_flags, void *ssbuf, size_t sslen, NSD
 		T_QUIET; T_ASSERT_NOTNULL(pid_num, "translated child pid provided");
 		translated_child_pid = [pid_num intValue];
 		T_QUIET; T_ASSERT_GT(translated_child_pid, 0, "translated child pid greater than zero");
+	}
+	if (expect_exec_inprogress) {
+		NSNumber* pid_num = extra[exec_inprogress_pid_key];
+		T_QUIET; T_ASSERT_NOTNULL(pid_num, "exec inprogress pid provided");
+		exec_inprogress_pid = [pid_num intValue];
+		T_QUIET; T_ASSERT_GT(exec_inprogress_pid, 0, "exec inprogress pid greater than zero");
+
+		exec_inprogress_cb = extra[exec_inprogress_found_key];
+		T_QUIET; T_ASSERT_NOTNULL(exec_inprogress_cb, "exec inprogress found callback provided");
 	}
 
 	kcdata_iter_t iter = kcdata_iter(ssbuf, sslen);
@@ -2077,6 +2131,7 @@ parse_stackshot(uint64_t stackshot_parsing_flags, void *ssbuf, size_t sslen, NSD
 			if (kcdata_iter_container_type(iter) != STACKSHOT_KCCONTAINER_TASK) {
 				break;
 			}
+			uint64_t containerid = kcdata_iter_container_id(iter);
 
 			NSDictionary *container = parseKCDataContainer(&iter, &error);
 			T_QUIET; T_ASSERT_NOTNULL(container, "parsed container from stackshot");
@@ -2207,7 +2262,17 @@ parse_stackshot(uint64_t stackshot_parsing_flags, void *ssbuf, size_t sslen, NSD
 				
 				continue;
 			}
-
+			if (expect_exec_inprogress && (pid == exec_inprogress_pid || pid == -exec_inprogress_pid)) {
+				exec_inprogress_found++;
+				T_LOG("found exec task with pid %d, instance %d", pid, exec_inprogress_found);
+				T_QUIET; T_ASSERT_LE(exec_inprogress_found, 2, "no more than two with the expected pid");
+				if (exec_inprogress_found == 2) {
+					T_LOG("found 2 tasks with pid %d", exec_inprogress_pid);
+					exec_inprogress_cb(containerid, exec_inprogress_containerid);
+				} else {
+					exec_inprogress_containerid = containerid;
+				}
+			}
 			if (expect_cseg_waitinfo) {
 				NSArray *winfos = container[@"task_snapshots"][@"thread_waitinfo"];
 
@@ -2380,6 +2445,9 @@ parse_stackshot(uint64_t stackshot_parsing_flags, void *ssbuf, size_t sslen, NSD
 				    "sharedcache child should have Other shared region");
 			}
 		}
+	}
+	if (expect_exec_inprogress) {
+		T_QUIET; T_ASSERT_GT(exec_inprogress_found, 0, "found at least 1 task for execing process");
 	}
 	if (expect_zombie_child) {
 		T_QUIET; T_ASSERT_TRUE(found_zombie_child, "found zombie child in kcdata");

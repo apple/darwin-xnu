@@ -488,6 +488,7 @@ extern int ip6_lowportmin;              /* minimum reserved port */
 extern int ip6_lowportmax;              /* maximum reserved port */
 
 extern int ip6_use_tempaddr; /* whether to use temporary addresses. */
+extern int ip6_ula_use_tempaddr; /* whether to use temporary ULA addresses */
 
 /* whether to prefer temporary addresses in the source address selection */
 extern int ip6_prefer_tempaddr;

@@ -525,6 +525,30 @@ mac_proc_check_map_anon(proc_t proc, user_addr_t u_addr,
 	return error;
 }
 
+
+int
+mac_proc_check_memorystatus_control(proc_t proc, uint32_t command, pid_t pid)
+{
+	kauth_cred_t cred;
+	int error;
+
+#if SECURITY_MAC_CHECK_ENFORCE
+	/* 21167099 - only check if we allow write */
+	if (!mac_proc_enforce) {
+		return 0;
+	}
+#endif
+	if (!mac_proc_check_enforce(proc)) {
+		return 0;
+	}
+
+	cred = kauth_cred_proc_ref(proc);
+	MAC_CHECK(proc_check_memorystatus_control, cred, command, pid);
+	kauth_cred_unref(&cred);
+
+	return error;
+}
+
 int
 mac_proc_check_mprotect(proc_t proc,
     user_addr_t addr, user_size_t size, int prot)
@@ -656,6 +680,29 @@ mac_proc_check_wait(proc_t curp, struct proc *proc)
 
 	cred = kauth_cred_proc_ref(curp);
 	MAC_CHECK(proc_check_wait, cred, proc);
+	kauth_cred_unref(&cred);
+
+	return error;
+}
+
+int
+mac_proc_check_work_interval_ctl(proc_t proc, uint32_t operation)
+{
+	kauth_cred_t cred;
+	int error;
+
+#if SECURITY_MAC_CHECK_ENFORCE
+	/* 21167099 - only check if we allow write */
+	if (!mac_proc_enforce) {
+		return 0;
+	}
+#endif
+	if (!mac_proc_check_enforce(proc)) {
+		return 0;
+	}
+
+	cred = kauth_cred_proc_ref(proc);
+	MAC_CHECK(proc_check_work_interval_ctl, cred, operation);
 	kauth_cred_unref(&cred);
 
 	return error;

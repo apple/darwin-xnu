@@ -223,6 +223,8 @@ int     mac_mount_check_label_update(vfs_context_t ctx, struct mount *mp) __resu
 int     mac_mount_check_mount(vfs_context_t ctx, struct vnode *vp,
     struct componentname *cnp, const char *vfc_name) __result_use_check;
 int     mac_mount_check_mount_late(vfs_context_t ctx, struct mount *mp) __result_use_check;
+int     mac_mount_check_quotactl(vfs_context_t ctx, struct mount *mp,
+    int cmd, int id) __result_use_check;
 int     mac_mount_check_snapshot_create(vfs_context_t ctx, struct mount *mp,
     const char *name) __result_use_check;
 int     mac_mount_check_snapshot_delete(vfs_context_t ctx, struct mount *mp,
@@ -246,6 +248,8 @@ int     mac_mount_label_externalize(struct label *label, char *elements,
 int     mac_mount_label_get(struct mount *mp, user_addr_t mac_p) __result_use_check;
 void    mac_mount_label_init(struct mount *);
 int     mac_mount_label_internalize(struct label *, char *string) __result_use_check;
+int     mac_necp_check_open(proc_t proc, int flags) __result_use_check;
+int     mac_necp_check_client_action(proc_t proc, struct fileglob *fg, uint32_t action) __result_use_check;
 int     mac_pipe_check_ioctl(kauth_cred_t cred, struct pipe *cpipe,
     unsigned long cmd) __result_use_check;
 int     mac_pipe_check_kqfilter(kauth_cred_t cred, struct knote *kn,
@@ -312,6 +316,7 @@ int     mac_proc_check_dyld_process_info_notify_register(void) __result_use_chec
 int     mac_proc_check_ledger(proc_t curp, proc_t target, int op) __result_use_check;
 int     mac_proc_check_map_anon(proc_t proc, user_addr_t u_addr,
     user_size_t u_size, int prot, int flags, int *maxprot) __result_use_check;
+int     mac_proc_check_memorystatus_control(proc_t proc, uint32_t command, pid_t pid) __result_use_check;
 int     mac_proc_check_mprotect(proc_t proc,
     user_addr_t addr, user_size_t size, int prot) __result_use_check;
 int     mac_proc_check_run_cs_invalid(proc_t proc) __result_use_check;
@@ -325,6 +330,7 @@ int     mac_proc_check_signal(proc_t proc1, proc_t proc2,
     int signum) __result_use_check;
 int     mac_proc_check_syscall_unix(proc_t proc, int scnum) __result_use_check;
 int     mac_proc_check_wait(proc_t proc1, proc_t proc2) __result_use_check;
+int     mac_proc_check_work_interval_ctl(proc_t proc, uint32_t operation) __result_use_check;
 void    mac_proc_notify_exit(proc_t proc);
 int     mac_socket_check_accept(kauth_cred_t cred, struct socket *so) __result_use_check;
 int     mac_socket_check_accepted(kauth_cred_t cred, struct socket *so) __result_use_check;
@@ -437,7 +443,9 @@ int     mac_vnode_check_fsgetpath(vfs_context_t ctx, struct vnode *vp) __result_
 int     mac_vnode_check_getattr(vfs_context_t ctx, struct ucred *file_cred,
     struct vnode *vp, struct vnode_attr *va) __result_use_check;
 int     mac_vnode_check_getattrlist(vfs_context_t ctx, struct vnode *vp,
-    struct attrlist *alist) __result_use_check;
+    struct attrlist *alist, uint64_t options) __result_use_check;
+int     mac_vnode_check_getattrlistbulk(vfs_context_t ctx, struct vnode *dvp,
+    struct attrlist *alist, uint64_t options) __result_use_check;
 int     mac_vnode_check_getextattr(vfs_context_t ctx, struct vnode *vp,
     const char *name, struct uio *uio) __result_use_check;
 int     mac_vnode_check_ioctl(vfs_context_t ctx, struct vnode *vp,
@@ -464,7 +472,7 @@ int     mac_vnode_check_rename(vfs_context_t ctx, struct vnode *dvp,
     struct vnode *tvp, struct componentname *tcnp) __result_use_check;
 int     mac_vnode_check_revoke(vfs_context_t ctx, struct vnode *vp) __result_use_check;
 int     mac_vnode_check_searchfs(vfs_context_t ctx, struct vnode *vp,
-    struct attrlist *alist) __result_use_check;
+    struct attrlist *returnattrs, struct attrlist *searchattrs) __result_use_check;
 int     mac_vnode_check_select(vfs_context_t ctx, struct vnode *vp,
     int which) __result_use_check;
 int     mac_vnode_check_setacl(vfs_context_t ctx, struct vnode *vp,

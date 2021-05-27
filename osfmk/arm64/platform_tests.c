@@ -1618,13 +1618,13 @@ arm64_spr_lock_test()
 		thread_block(THREAD_CONTINUE_NULL);
 		T_LOG("Running SPR lock test on cpu %d\n", p->cpu_id);
 
-		uint64_t orig_value = __builtin_arm_rsr64(STR(S3_0_C15_C8_0));
+		uint64_t orig_value = __builtin_arm_rsr64(STR(HID8));
 		spr_lock_test_addr = (vm_offset_t)VM_KERNEL_STRIP_PTR(arm64_msr_lock_test);
 		spr_lock_exception_esr = 0;
 		arm64_msr_lock_test(~orig_value);
 		T_EXPECT(spr_lock_exception_esr != 0, "MSR write generated synchronous abort");
 
-		uint64_t new_value = __builtin_arm_rsr64(STR(S3_0_C15_C8_0));
+		uint64_t new_value = __builtin_arm_rsr64(STR(HID8));
 		T_EXPECT(orig_value == new_value, "MSR write did not succeed");
 
 		spr_lock_test_addr = 0;

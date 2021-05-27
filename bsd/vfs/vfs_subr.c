@@ -3801,10 +3801,12 @@ int vfs_sysctl_node SYSCTL_HANDLER_ARGS
 
 	if (is_bad_sysctl_name(vfsp, name[0])) {
 		printf("vfs: bad selector 0x%.8x for old-style sysctl().  use the sysctl-by-fsid interface instead\n", name[0]);
-		return EPERM;
+		error = EPERM;
+	} else {
+		error = (vfsp->vfc_vfsops->vfs_sysctl)(name, namelen,
+		    req->oldptr, &req->oldlen, req->newptr, req->newlen,
+		    vfs_context_current());
 	}
-
-	error = (vfsp->vfc_vfsops->vfs_sysctl)(name, namelen, req->oldptr, &req->oldlen, req->newptr, req->newlen, vfs_context_current());
 
 	mount_list_lock();
 	vfsp->vfc_refcount--;

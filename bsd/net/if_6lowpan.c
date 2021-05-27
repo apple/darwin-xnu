@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2017-2021 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -633,7 +633,7 @@ sixlowpan_input(ifnet_t p, __unused protocol_family_t protocol,
 
 	p = p_6lowpan_ifnet;
 	mc->m_pkthdr.rcvif = p;
-	if (len > mc->m_pkthdr.len) {
+	if (len > mc->m_pkthdr.len || len > MCLBYTES) {
 		err = -1;
 		goto err_out;
 	}
@@ -664,7 +664,11 @@ sixlowpan_input(ifnet_t p, __unused protocol_family_t protocol,
 
 	/* Parse the 802.15.4 frame header */
 	bzero(&ieee02154hdr, sizeof(ieee02154hdr));
-	frame802154_parse(mtod(mc, uint8_t *), len, &ieee02154hdr, &payload);
+	/*
+	 * Use returned payload pointer to evaluate success
+	 * vs failure.
+	 */
+	(void)frame802154_parse(mtod(mc, uint8_t *), len, &ieee02154hdr, &payload);
 	if (payload == NULL) {
 		err = -1;
 		goto err_out;

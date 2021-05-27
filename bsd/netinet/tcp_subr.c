@@ -3232,17 +3232,17 @@ tcp_set_tso(struct tcpcb *tp, struct ifnet *ifp)
 		return;
 	}
 
+	inp = tp->t_inpcb;
+	isipv6 = (inp->inp_vflag & INP_IPV6) != 0;
+
 #if MPTCP
 	/*
 	 * We can't use TSO if this tcpcb belongs to an MPTCP session.
 	 */
-	if (tp->t_mpflags & TMPF_MPTCP_TRUE) {
+	if (inp->inp_socket->so_flags & SOF_MP_SUBFLOW) {
 		return;
 	}
 #endif
-	inp = tp->t_inpcb;
-	isipv6 = (inp->inp_vflag & INP_IPV6) != 0;
-
 	/*
 	 * We can't use TSO if the TSO capability of the tunnel interface does
 	 * not match the capability of another interface known by TCP

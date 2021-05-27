@@ -51,6 +51,8 @@ void ppl_hmac_fetch_hibseg_and_info(/* out */ void *buffer,
     /* in */ uint64_t bufferLen,
     /* out */ IOHibernateHibSegInfo *info);
 void ppl_hmac_compute_rorgn_hmac(void);
+void ppl_hmac_fetch_rorgn_sha(uint8_t *output, size_t outputLen);
+void ppl_hmac_fetch_rorgn_hmac(uint8_t *output, size_t outputLen);
 void ppl_hmac_finalize_image(const void *header, size_t headerLen, uint8_t *hmac, size_t hmacLen);
 void ppl_hmac_get_io_ranges(const ppl_hib_io_range **io_ranges, uint16_t *num_io_ranges);
 

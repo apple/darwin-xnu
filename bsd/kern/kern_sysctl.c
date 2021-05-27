@@ -4071,6 +4071,17 @@ SYSCTL_INT(_vm, OID_AUTO, compressor_sample_max_in_msecs, CTLFLAG_RW | CTLFLAG_L
 SYSCTL_INT(_vm, OID_AUTO, compressor_thrashing_threshold_per_10msecs, CTLFLAG_RW | CTLFLAG_LOCKED, &compressor_thrashing_threshold_per_10msecs, 0, "");
 SYSCTL_INT(_vm, OID_AUTO, compressor_thrashing_min_per_10msecs, CTLFLAG_RW | CTLFLAG_LOCKED, &compressor_thrashing_min_per_10msecs, 0, "");
 
+SYSCTL_QUAD(_vm, OID_AUTO, compressor_swapouts_under_30s, CTLFLAG_RD | CTLFLAG_LOCKED, &vmcs_stats.unripe_under_30s, "");
+SYSCTL_QUAD(_vm, OID_AUTO, compressor_swapouts_under_60s, CTLFLAG_RD | CTLFLAG_LOCKED, &vmcs_stats.unripe_under_60s, "");
+SYSCTL_QUAD(_vm, OID_AUTO, compressor_swapouts_under_300s, CTLFLAG_RD | CTLFLAG_LOCKED, &vmcs_stats.unripe_under_300s, "");
+SYSCTL_QUAD(_vm, OID_AUTO, compressor_swapper_reclaim_swapins, CTLFLAG_RD | CTLFLAG_LOCKED, &vmcs_stats.reclaim_swapins, "");
+SYSCTL_QUAD(_vm, OID_AUTO, compressor_swapper_defrag_swapins, CTLFLAG_RD | CTLFLAG_LOCKED, &vmcs_stats.defrag_swapins, "");
+SYSCTL_QUAD(_vm, OID_AUTO, compressor_swapper_swapout_threshold_exceeded, CTLFLAG_RD | CTLFLAG_LOCKED, &vmcs_stats.compressor_swap_threshold_exceeded, "");
+SYSCTL_QUAD(_vm, OID_AUTO, compressor_swapper_swapout_fileq_throttled, CTLFLAG_RD | CTLFLAG_LOCKED, &vmcs_stats.external_q_throttled, "");
+SYSCTL_QUAD(_vm, OID_AUTO, compressor_swapper_swapout_free_count_low, CTLFLAG_RD | CTLFLAG_LOCKED, &vmcs_stats.free_count_below_reserve, "");
+SYSCTL_QUAD(_vm, OID_AUTO, compressor_swapper_swapout_thrashing_detected, CTLFLAG_RD | CTLFLAG_LOCKED, &vmcs_stats.thrashing_detected, "");
+SYSCTL_QUAD(_vm, OID_AUTO, compressor_swapper_swapout_fragmentation_detected, CTLFLAG_RD | CTLFLAG_LOCKED, &vmcs_stats.fragmentation_detected, "");
+
 SYSCTL_STRING(_vm, OID_AUTO, swapfileprefix, CTLFLAG_RW | CTLFLAG_KERN | CTLFLAG_LOCKED, swapfilename, sizeof(swapfilename) - SWAPFILENAME_INDEX_LEN, "");
 
 SYSCTL_INT(_vm, OID_AUTO, compressor_timing_enabled, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_compressor_time_thread, 0, "");

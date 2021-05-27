@@ -733,6 +733,8 @@ machine_thread_create(
 		pcb->insn_state->insn_stream_valid_bytes = -1;
 	}
 
+	pcb->insn_copy_optout = (task->t_flags & TF_INSN_COPY_OPTOUT) ? true : false;
+
 	return KERN_SUCCESS;
 }
 
@@ -769,6 +771,7 @@ machine_thread_destroy(
 		pcb->insn_state = 0;
 	}
 	pcb->insn_state_copyin_failure_errorcode = 0;
+	pcb->insn_copy_optout = false;
 }
 
 kern_return_t
@@ -840,6 +843,12 @@ machine_tecs(thread_t thr)
 	if (tecs_mode_supported) {
 		thr->machine.mthr_do_segchk = 1;
 	}
+}
+
+void
+machine_thread_set_insn_copy_optout(thread_t thr)
+{
+	thr->machine.insn_copy_optout = true;
 }
 
 int

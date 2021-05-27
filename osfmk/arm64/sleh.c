@@ -328,12 +328,12 @@ arm64_implementation_specific_error(arm_saved_state_t *state, uint32_t esr, vm_o
 #if defined(NO_ECORE)
 	uint64_t l2c_err_sts, l2c_err_adr, l2c_err_inf;
 
-	mmu_err_sts = __builtin_arm_rsr64(STR(S3_6_C15_C0_0));
-	l2c_err_sts = __builtin_arm_rsr64(STR(S3_3_C15_C8_0));
-	l2c_err_adr = __builtin_arm_rsr64(STR(S3_3_C15_C9_0));
-	l2c_err_inf = __builtin_arm_rsr64(STR(S3_3_C15_C10_0));
-	lsu_err_sts = __builtin_arm_rsr64(STR(S3_3_C15_C0_0));
-	fed_err_sts = __builtin_arm_rsr64(STR(S3_4_C15_C0_0));
+	mmu_err_sts = __builtin_arm_rsr64(STR(MMU_ERR_STS));
+	l2c_err_sts = __builtin_arm_rsr64(STR(LLC_ERR_STS));
+	l2c_err_adr = __builtin_arm_rsr64(STR(LLC_ERR_ADR));
+	l2c_err_inf = __builtin_arm_rsr64(STR(LLC_ERR_INF));
+	lsu_err_sts = __builtin_arm_rsr64(STR(LSU_ERR_STS));
+	fed_err_sts = __builtin_arm_rsr64(STR(FED_ERR_STS));
 
 	panic_plain("Unhandled " CPU_NAME
 	    " implementation specific error. state=%p esr=%#x far=%p\n"
@@ -348,12 +348,12 @@ arm64_implementation_specific_error(arm_saved_state_t *state, uint32_t esr, vm_o
 
 	mpidr = __builtin_arm_rsr64("MPIDR_EL1");
 	migsts = __builtin_arm_rsr64(STR(MIGSTS_EL1));
-	mmu_err_sts = __builtin_arm_rsr64(STR(S3_6_C15_C0_0));
-	l2c_err_sts = __builtin_arm_rsr64(STR(S3_3_C15_C8_0));
-	l2c_err_adr = __builtin_arm_rsr64(STR(S3_3_C15_C9_0));
-	l2c_err_inf = __builtin_arm_rsr64(STR(S3_3_C15_C10_0));
-	lsu_err_sts = __builtin_arm_rsr64(STR(S3_3_C15_C0_0));
-	fed_err_sts = __builtin_arm_rsr64(STR(S3_4_C15_C0_0));
+	mmu_err_sts = __builtin_arm_rsr64(STR(MMU_ERR_STS));
+	l2c_err_sts = __builtin_arm_rsr64(STR(LLC_ERR_STS));
+	l2c_err_adr = __builtin_arm_rsr64(STR(LLC_ERR_ADR));
+	l2c_err_inf = __builtin_arm_rsr64(STR(LLC_ERR_INF));
+	lsu_err_sts = __builtin_arm_rsr64(STR(LSU_ERR_STS));
+	fed_err_sts = __builtin_arm_rsr64(STR(FED_ERR_STS));
 
 	panic_plain("Unhandled " CPU_NAME
 	    " implementation specific error. state=%p esr=%#x far=%p p-core?%d migsts=%p\n"
@@ -365,24 +365,24 @@ arm64_implementation_specific_error(arm_saved_state_t *state, uint32_t esr, vm_o
 #else // !defined(NO_ECORE) && !defined(HAS_MIGSTS)
 	uint64_t llc_err_sts, llc_err_adr, llc_err_inf, mpidr;
 #if defined(HAS_DPC_ERR)
-	uint64_t dpc_err_sts = __builtin_arm_rsr64(STR(S3_5_C15_C0_5));
+	uint64_t dpc_err_sts = __builtin_arm_rsr64(STR(DPC_ERR_STS));
 #endif // defined(HAS_DPC_ERR)
 
 	mpidr = __builtin_arm_rsr64("MPIDR_EL1");
 
 	if (mpidr & MPIDR_PNE) {
-		mmu_err_sts = __builtin_arm_rsr64(STR(S3_6_C15_C0_0));
-		lsu_err_sts = __builtin_arm_rsr64(STR(S3_3_C15_C0_0));
-		fed_err_sts = __builtin_arm_rsr64(STR(S3_4_C15_C0_0));
+		mmu_err_sts = __builtin_arm_rsr64(STR(MMU_ERR_STS));
+		lsu_err_sts = __builtin_arm_rsr64(STR(LSU_ERR_STS));
+		fed_err_sts = __builtin_arm_rsr64(STR(FED_ERR_STS));
 	} else {
-		mmu_err_sts = __builtin_arm_rsr64(STR(S3_6_C15_C2_0));
-		lsu_err_sts = __builtin_arm_rsr64(STR(S3_3_C15_C2_0));
-		fed_err_sts = __builtin_arm_rsr64(STR(S3_4_C15_C0_2));
+		mmu_err_sts = __builtin_arm_rsr64(STR(E_MMU_ERR_STS));
+		lsu_err_sts = __builtin_arm_rsr64(STR(E_LSU_ERR_STS));
+		fed_err_sts = __builtin_arm_rsr64(STR(E_FED_ERR_STS));
 	}
 
-	llc_err_sts = __builtin_arm_rsr64(STR(S3_3_C15_C8_0));
-	llc_err_adr = __builtin_arm_rsr64(STR(S3_3_C15_C9_0));
-	llc_err_inf = __builtin_arm_rsr64(STR(S3_3_C15_C10_0));
+	llc_err_sts = __builtin_arm_rsr64(STR(LLC_ERR_STS));
+	llc_err_adr = __builtin_arm_rsr64(STR(LLC_ERR_ADR));
+	llc_err_inf = __builtin_arm_rsr64(STR(LLC_ERR_INF));
 
 	panic_plain("Unhandled " CPU_NAME
 	    " implementation specific error. state=%p esr=%#x far=%p p-core?%d"
@@ -1796,7 +1796,7 @@ sleh_fiq(arm_saved_state_t *state)
 	uint64_t     ipi_sr = 0;
 
 	if (gFastIPI) {
-		MRS(ipi_sr, "S3_5_C15_C1_1");
+		MRS(ipi_sr, "IPISR_EL1");
 
 		if (ipi_sr & 1) {
 			is_ipi = TRUE;
@@ -1818,6 +1818,9 @@ sleh_fiq(arm_saved_state_t *state)
 
 	sleh_interrupt_handler_prologue(state, type);
 
+#if APPLEVIRTUALPLATFORM
+	uint64_t iar = __builtin_arm_rsr64("ICC_IAR0_EL1");
+#endif
 
 #if defined(HAS_IPI)
 	if (is_ipi) {
@@ -1829,7 +1832,7 @@ sleh_fiq(arm_saved_state_t *state)
 		 * IPI to this CPU may be lost.  ISB is required to ensure the msr
 		 * is retired before execution of cpu_signal_handler().
 		 */
-		MSR("S3_5_C15_C1_1", ipi_sr);
+		MSR("IPISR_EL1", ipi_sr);
 		__builtin_arm_isb(ISB_SY);
 		cpu_signal_handler();
 	} else
@@ -1861,6 +1864,12 @@ sleh_fiq(arm_saved_state_t *state)
 		INTERRUPT_MASKED_DEBUG_END();
 	}
 
+#if APPLEVIRTUALPLATFORM
+	if (iar != GIC_SPURIOUS_IRQ) {
+		__builtin_arm_wsr64("ICC_EOIR0_EL1", iar);
+		__builtin_arm_isb(ISB_SY);
+	}
+#endif
 
 	sleh_interrupt_handler_epilogue();
 #if MACH_ASSERT

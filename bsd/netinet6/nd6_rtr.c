@@ -108,9 +108,7 @@ static int nd6_prefix_onlink_common(struct nd_prefix *, boolean_t,
 static struct nd_prefix *nd6_prefix_equal_lookup(struct nd_prefix *, boolean_t);
 static void nd6_prefix_sync(struct ifnet *);
 
-static void in6_init_address_ltimes(struct nd_prefix *,
-    struct in6_addrlifetime *);
-
+static void in6_init_address_ltimes(struct in6_addrlifetime *);
 static int rt6_deleteroute(struct radix_node *, void *);
 
 static struct nd_defrouter *nddr_alloc(zalloc_flags_t);
@@ -128,6 +126,7 @@ int nd6_defifindex = 0;
 static unsigned int nd6_defrouter_genid;
 
 int ip6_use_tempaddr = IP6_USE_TMPADDR_DEFAULT; /* use temp addr by default for testing now */
+int ip6_ula_use_tempaddr = IP6_ULA_USE_TMPADDR_DEFAULT;
 
 int nd6_accept_6to4 = 1;
 
@@ -2319,7 +2318,6 @@ prelist_remove(struct nd_prefix *pr)
 {
 	struct nd_pfxrouter *pfr, *next;
 	struct ifnet *ifp = pr->ndpr_ifp;
-	int e;
 	struct nd_ifinfo *ndi = NULL;
 
 	LCK_MTX_ASSERT(nd6_mutex, LCK_MTX_ASSERT_OWNED);
@@ -2349,14 +2347,15 @@ prelist_remove(struct nd_prefix *pr)
 	 * when executing "ndp -p".
 	 */
 	if (pr->ndpr_stateflags & NDPRF_ONLINK) {
+		int error = 0;
 		NDPR_ADDREF(pr);
 		NDPR_UNLOCK(pr);
 		lck_mtx_unlock(nd6_mutex);
-		if ((e = nd6_prefix_offlink(pr)) != 0) {
+		if ((error = nd6_prefix_offlink(pr)) != 0) {
 			nd6log(error, "prelist_remove: failed to make "
 			    "%s/%d offlink on %s, errno=%d\n",
 			    ip6_sprintf(&pr->ndpr_prefix.sin6_addr),
-			    pr->ndpr_plen, if_name(ifp), e);
+			    pr->ndpr_plen, if_name(ifp), error);
 			/* what should we do? */
 		}
 		lck_mtx_lock(nd6_mutex);
@@ -2419,7 +2418,6 @@ prelist_update(
 	int error = 0;
 	int newprefix = 0;
 	int auth;
-	struct in6_addrlifetime lt6_tmp;
 	uint64_t timenow = net_uptime();
 
 	/* no need to lock "new" here, as it is local to the caller */
@@ -2542,8 +2540,9 @@ prelist_update(
 	 */
 	ifnet_lock_shared(ifp);
 	TAILQ_FOREACH(ifa, &ifp->if_addrlist, ifa_list) {
-		struct in6_ifaddr *ifa6;
-		u_int32_t remaininglifetime;
+		struct in6_ifaddr *ifa6 = NULL;
+		u_int32_t remaininglifetime = 0;
+		struct in6_addrlifetime lt6_tmp = {};
 
 		IFA_LOCK(ifa);
 		if (ifa->ifa_addr->sa_family != AF_INET6) {
@@ -2674,8 +2673,7 @@ prelist_update(
 			}
 		}
 
-		in6_init_address_ltimes(pr, &lt6_tmp);
-
+		in6_init_address_ltimes(&lt6_tmp);
 		in6ifa_setlifetime(ifa6, &lt6_tmp);
 		ifa6->ia6_updatetime = timenow;
 		IFA_UNLOCK(ifa);
@@ -2713,7 +2711,9 @@ prelist_update(
 			 * addresses.  Thus, we specifiy 1 as the 2nd arg of
 			 * in6_tmpifadd().
 			 */
-			if (ip6_use_tempaddr) {
+			if (ip6_use_tempaddr &&
+			    (!IN6_IS_ADDR_UNIQUE_LOCAL(&new->ndpr_prefix.sin6_addr)
+			    || ip6_ula_use_tempaddr)) {
 				int e;
 				if ((e = in6_tmpifadd(ia6, 1)) != 0) {
 					nd6log(info, "prelist_update: "
@@ -3062,7 +3062,17 @@ find_pfxlist_reachable_router(struct nd_prefix *pr)
 	genid = pr->ndpr_genid;
 	pfxrtr = LIST_FIRST(&pr->ndpr_advrtrs);
 	while (pfxrtr) {
+		/* XXX This should be same as prefixes interface. */
 		ifp = pfxrtr->router->ifp;
+
+		/*
+		 * As long as there's a router advertisting this prefix
+		 * on cellular (for that matter any interface that is point
+		 * to point really), we treat the router as reachable.
+		 */
+		if (ifp->if_type == IFT_CELLULAR) {
+			break;
+		}
 		if (pfxrtr->router->stateflags & NDDRF_MAPPED) {
 			rtaddr = pfxrtr->router->rtaddr_mapped;
 		} else {
@@ -3122,6 +3132,7 @@ pfxlist_onlink_check(void)
 	int err, i, found = 0;
 	struct ifaddr **ifap = NULL;
 	struct nd_prefix *ndpr;
+	u_int64_t timenow = net_uptime();
 
 	LCK_MTX_ASSERT(nd6_mutex, LCK_MTX_ASSERT_OWNED);
 
@@ -3148,10 +3159,9 @@ pfxlist_onlink_check(void)
 		NDPR_ADDREF(pr);
 		if (pr->ndpr_raf_onlink && find_pfxlist_reachable_router(pr) &&
 		    (pr->ndpr_debug & IFD_ATTACHED)) {
+			NDPR_UNLOCK(pr);
 			if (NDPR_REMREF(pr) == NULL) {
 				pr = NULL;
-			} else {
-				NDPR_UNLOCK(pr);
 			}
 			break;
 		}
@@ -3261,16 +3271,21 @@ pfxlist_onlink_check(void)
 		NDPR_UNLOCK(prclear);
 	}
 	/*
-	 * Remove each interface route associated with a (just) detached
-	 * prefix, and reinstall the interface route for a (just) attached
-	 * prefix.  Note that all attempt of reinstallation does not
+	 * Instead of removing interface route for detached prefix,
+	 * keep the route and treat unreachability similar to the processing
+	 * of an RA that has just deprecated the prefix.
+	 * Keep around the detached flag just to be able to be able
+	 * to differentiate the scenario from explicit RA deprecation
+	 * of prefix.
+	 * Keep the logic to install the interface route for a (just) attached
+	 * prefix. Note that all attempt of reinstallation does not
 	 * necessarily success, when a same prefix is shared among multiple
 	 * interfaces.  Such cases will be handled in nd6_prefix_onlink,
 	 * so we don't have to care about them.
 	 */
 	pr = nd_prefix.lh_first;
 	while (pr) {
-		int e;
+		int error;
 
 		NDPR_LOCK(pr);
 		if (pr->ndpr_raf_onlink == 0 ||
@@ -3283,32 +3298,21 @@ pfxlist_onlink_check(void)
 		}
 		pr->ndpr_stateflags |= NDPRF_PROCESSED_ONLINK;
 		NDPR_ADDREF(pr);
-		if ((pr->ndpr_stateflags & NDPRF_DETACHED) != 0 &&
-		    (pr->ndpr_stateflags & NDPRF_ONLINK) != 0) {
+		if (pr->ndpr_stateflags & NDPRF_DETACHED) {
+			pr->ndpr_pltime = 0;
+			pr->ndpr_vltime = TWOHOUR;
+			in6_init_prefix_ltimes(pr);
 			NDPR_UNLOCK(pr);
-			lck_mtx_unlock(nd6_mutex);
-			if ((e = nd6_prefix_offlink(pr)) != 0) {
-				nd6log(error,
-				    "pfxlist_onlink_check: failed to "
-				    "make %s/%d offlink, errno=%d\n",
-				    ip6_sprintf(&pr->ndpr_prefix.sin6_addr),
-				    pr->ndpr_plen, e);
-			}
-			lck_mtx_lock(nd6_mutex);
-			NDPR_REMREF(pr);
-			pr = nd_prefix.lh_first;
-			continue;
-		}
-		if ((pr->ndpr_stateflags & NDPRF_DETACHED) == 0 &&
+		} else if ((pr->ndpr_stateflags & NDPRF_DETACHED) == 0 &&
 		    (pr->ndpr_stateflags & NDPRF_ONLINK) == 0 &&
 		    pr->ndpr_raf_onlink) {
 			NDPR_UNLOCK(pr);
-			if ((e = nd6_prefix_onlink(pr)) != 0) {
+			if ((error = nd6_prefix_onlink(pr)) != 0) {
 				nd6log(error,
 				    "pfxlist_onlink_check: failed to "
 				    "make %s/%d offlink, errno=%d\n",
 				    ip6_sprintf(&pr->ndpr_prefix.sin6_addr),
-				    pr->ndpr_plen, e);
+				    pr->ndpr_plen, error);
 			}
 			NDPR_REMREF(pr);
 			pr = nd_prefix.lh_first;
@@ -3372,10 +3376,10 @@ pfxlist_onlink_check(void)
 		NDPR_LOCK(ndpr);
 		NDPR_ADDREF(ndpr);
 		if (find_pfxlist_reachable_router(ndpr)) {
+			NDPR_UNLOCK(ndpr);
 			if (NDPR_REMREF(ndpr) == NULL) {
 				found = 0;
 			} else {
-				NDPR_UNLOCK(ndpr);
 				found = 1;
 			}
 			break;
@@ -3385,6 +3389,8 @@ pfxlist_onlink_check(void)
 	}
 	if (found) {
 		for (i = 0; ifap[i]; i++) {
+			struct in6_addrlifetime lt6_tmp = {};
+
 			ifa = ifatoia6(ifap[i]);
 			IFA_LOCK(&ifa->ia_ifa);
 			if ((ifa->ia6_flags & IN6_IFF_AUTOCONF) == 0 ||
@@ -3400,47 +3406,28 @@ pfxlist_onlink_check(void)
 			IFA_UNLOCK(&ifa->ia_ifa);
 			NDPR_LOCK(ndpr);
 			NDPR_ADDREF(ndpr);
-			if (find_pfxlist_reachable_router(ndpr)) {
+			if (find_pfxlist_reachable_router(ndpr) == NULL) {
 				NDPR_UNLOCK(ndpr);
 				IFA_LOCK(&ifa->ia_ifa);
-				if (ifa->ia6_flags & IN6_IFF_DETACHED) {
-					ifa->ia6_flags &= ~IN6_IFF_DETACHED;
-					in6_ifaddr_set_dadprogress((struct in6_ifaddr *)ifa);
-					IFA_UNLOCK(&ifa->ia_ifa);
-					nd6_dad_start((struct ifaddr *)ifa, 0);
-				} else {
-					IFA_UNLOCK(&ifa->ia_ifa);
-				}
+				in6ifa_getlifetime(ifa, &lt6_tmp, 0);
+				/* We want to immediately deprecate the address */
+				lt6_tmp.ia6t_pltime = 0;
+				lt6_tmp.ia6t_vltime = TWOHOUR;
+
+				in6_init_address_ltimes(&lt6_tmp);
+				in6ifa_setlifetime(ifa, &lt6_tmp);
+				ifa->ia6_updatetime = timenow;
+
+				/*
+				 * The next nd6 service timer expiry will take
+				 * care of marking the addresses as deprecated
+				 * and issuing the notifications as well.
+				 */
+				IFA_UNLOCK(&ifa->ia_ifa);
 			} else {
 				NDPR_UNLOCK(ndpr);
-				IFA_LOCK(&ifa->ia_ifa);
-				if ((ifa->ia6_flags & IN6_IFF_DETACHED) == 0) {
-					ifa->ia6_flags |= IN6_IFF_DETACHED;
-					in6_event_enqueue_nwk_wq_entry(IN6_ADDR_MARKED_DETACHED,
-					    ifa->ia_ifa.ifa_ifp, &ifa->ia_addr.sin6_addr,
-					    0);
-				}
-				IFA_UNLOCK(&ifa->ia_ifa);
 			}
 			NDPR_REMREF(ndpr);
-		}
-	} else {
-		for (i = 0; ifap[i]; i++) {
-			ifa = ifatoia6(ifap[i]);
-			IFA_LOCK(&ifa->ia_ifa);
-			if ((ifa->ia6_flags & IN6_IFF_AUTOCONF) == 0) {
-				IFA_UNLOCK(&ifa->ia_ifa);
-				continue;
-			}
-			if (ifa->ia6_flags & IN6_IFF_DETACHED) {
-				ifa->ia6_flags &= ~IN6_IFF_DETACHED;
-				in6_ifaddr_set_dadprogress((struct in6_ifaddr *)ifa);
-				IFA_UNLOCK(&ifa->ia_ifa);
-				/* Do we need a delay in this case? */
-				nd6_dad_start((struct ifaddr *)ifa, 0);
-			} else {
-				IFA_UNLOCK(&ifa->ia_ifa);
-			}
 		}
 	}
 	ifnet_free_address_list(ifap);
@@ -4316,9 +4303,8 @@ in6_init_prefix_ltimes(struct nd_prefix *ndpr)
 }
 
 static void
-in6_init_address_ltimes(struct nd_prefix *new, struct in6_addrlifetime *lt6)
+in6_init_address_ltimes(struct in6_addrlifetime *lt6)
 {
-#pragma unused(new)
 	uint64_t timenow = net_uptime();
 
 	/* Valid lifetime must not be updated unless explicitly specified. */

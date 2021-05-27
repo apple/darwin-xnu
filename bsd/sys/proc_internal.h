@@ -475,9 +475,9 @@ struct proc_ident {
 #define P_LSIGEXC       0x00000800      /* */
 #define P_LNOATTACH     0x00001000      /* */
 #define P_LPPWAIT       0x00002000      /* */
-#define P_LKQWDRAIN     0x00004000
-#define P_LKQWDRAINWAIT 0x00008000
-#define P_LKQWDEAD      0x00010000
+#define P_LPTHREADJITALLOWLIST  0x00004000      /* process has pthread JIT write function allowlist */
+/* was #define P_LKQWDRAINWAIT 0x00008000, free for re-use */
+/* was #define P_LKQWDEAD      0x00010000, free for re-use */
 #define P_LLIMCHANGE    0x00020000      /* process is changing its plimit (rlim_cur, rlim_max) */
 #define P_LLIMWAIT      0x00040000
 #define P_LWAITED       0x00080000
@@ -824,6 +824,8 @@ void proc_knote(struct proc * p, long hint);
 void proc_knote_drain(struct proc *p);
 void proc_setregister(proc_t p);
 void proc_resetregister(proc_t p);
+bool proc_get_pthread_jit_allowlist(proc_t p);
+void proc_set_pthread_jit_allowlist(proc_t p);
 /* returns the first thread_t in the process, or NULL XXX for NFS, DO NOT USE */
 thread_t proc_thread(proc_t);
 extern int proc_pendingsignals(proc_t, sigset_t);

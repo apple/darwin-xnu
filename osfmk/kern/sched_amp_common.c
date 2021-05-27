@@ -148,7 +148,7 @@ pset_signal_spill(processor_set_t pset, int spilled_thread_priority)
 	uint64_t idle_map = pset->recommended_bitmask & pset->cpu_state_map[PROCESSOR_IDLE];
 	for (int cpuid = lsb_first(idle_map); cpuid >= 0; cpuid = lsb_next(idle_map, cpuid)) {
 		processor = processor_array[cpuid];
-		if (bit_set_if_clear(pset->pending_spill_cpu_mask, processor->cpu_id)) {
+		if (bit_set_if_clear(&pset->pending_spill_cpu_mask, processor->cpu_id)) {
 			KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_AMP_SIGNAL_SPILL) | DBG_FUNC_NONE, processor->cpu_id, 0, 0, 0);
 
 			processor->deadline = UINT64_MAX;

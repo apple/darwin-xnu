@@ -76,7 +76,8 @@
 #define kIOKitSystemGUIDPrefix                  (kIOKitSystemGUID ":")
 // Internal only key to give access to system region on internal builds
 #define kIONVRAMSystemInternalAllowKey          "com.apple.private.iokit.system-nvram-internal-allow"
-
+// Internal only key to give access to hidden system region variables
+#define kIONVRAMSystemHiddenAllowKey            "com.apple.private.iokit.system-nvram-hidden-allow"
 
 // clientHasPrivilege security token for kIOClientPrivilegeSecureConsoleProcess
 typedef struct _IOUCProcessToken {

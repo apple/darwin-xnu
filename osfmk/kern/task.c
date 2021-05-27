@@ -1505,6 +1505,11 @@ task_create_internal(
 			new_task->t_flags |= TF_FILTER_MSG;
 		}
 
+#if defined(__x86_64__)
+		if (parent_task->t_flags & TF_INSN_COPY_OPTOUT) {
+			new_task->t_flags |= TF_INSN_COPY_OPTOUT;
+		}
+#endif
 		new_task->priority = BASEPRI_DEFAULT;
 		new_task->max_priority = MAXPRI_USER;
 
@@ -8360,3 +8365,34 @@ task_set_tecs(task_t task)
 	}
 	task_unlock(task);
 }
+
+#if defined(__x86_64__)
+bool
+curtask_get_insn_copy_optout(void)
+{
+	bool optout;
+	task_t cur_task = current_task();
+
+	task_lock(cur_task);
+	optout = (cur_task->t_flags & TF_INSN_COPY_OPTOUT) ? true : false;
+	task_unlock(cur_task);
+
+	return optout;
+}
+
+void
+curtask_set_insn_copy_optout(void)
+{
+	task_t cur_task = current_task();
+
+	task_lock(cur_task);
+
+	cur_task->t_flags |= TF_INSN_COPY_OPTOUT;
+
+	thread_t thread;
+	queue_iterate(&cur_task->threads, thread, thread_t, task_threads) {
+		machine_thread_set_insn_copy_optout(thread);
+	}
+	task_unlock(cur_task);
+}
+#endif /* defined(__x86_64__) */

@@ -2996,6 +2996,11 @@ get_xattrinfo(vnode_t xvp, int setting, attr_info_t *ainfop, vfs_context_t conte
 	    ainfop->finderinfo->length >= (sizeof(attr_header_t) - sizeof(apple_double_header_t))) {
 		attr_header_t *attrhdr = (attr_header_t*)filehdr;
 
+		if (ainfop->finderinfo->offset != offsetof(apple_double_header_t, finfo)) {
+			error = ENOATTR;
+			goto bail;
+		}
+
 		if ((error = check_and_swap_attrhdr(attrhdr, ainfop)) == 0) {
 			ainfop->attrhdr = attrhdr;  /* valid attribute header */
 			/* First attr_entry starts immediately following attribute header */

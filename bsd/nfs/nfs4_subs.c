@@ -467,13 +467,8 @@ out:
 	if ((interval < 1) || (nmp->nm_state & NFSSTA_RECOVER)) {
 		interval = 1;
 	}
+	nfs_interval_timer_start(nmp->nm_renew_timer, interval * 1000);
 	lck_mtx_unlock(&nmp->nm_lock);
-
-	lck_mtx_lock(&nmp->nm_timer_lock);
-	if (nmp->nm_renew_timer) {
-		nfs_interval_timer_start(nmp->nm_renew_timer, interval * 1000);
-	}
-	lck_mtx_unlock(&nmp->nm_timer_lock);
 }
 
 /*

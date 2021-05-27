@@ -33,19 +33,21 @@
 #include <security/mac_internal.h>
 
 int
-mac_skywalk_flow_check_connect(proc_t proc, void *flow, const struct sockaddr *addr, int type, int protocol)
+mac_skywalk_flow_check_connect(__unused proc_t proc, void *flow, const struct sockaddr *addr, int type, int protocol)
 {
 	int error;
 
-	MAC_CHECK(skywalk_flow_check_connect, proc_ucred(proc), flow, addr, type, protocol);
+	assert(proc == current_proc());
+	MAC_CHECK(skywalk_flow_check_connect, kauth_cred_get(), flow, addr, type, protocol);
 	return error;
 }
 
 int
-mac_skywalk_flow_check_listen(proc_t proc, void *flow, const struct sockaddr *addr, int type, int protocol)
+mac_skywalk_flow_check_listen(__unused proc_t proc, void *flow, const struct sockaddr *addr, int type, int protocol)
 {
 	int error;
 
-	MAC_CHECK(skywalk_flow_check_listen, proc_ucred(proc), flow, addr, type, protocol);
+	assert(proc == current_proc());
+	MAC_CHECK(skywalk_flow_check_listen, kauth_cred_get(), flow, addr, type, protocol);
 	return error;
 }

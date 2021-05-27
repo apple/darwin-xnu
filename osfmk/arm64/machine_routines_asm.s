@@ -51,6 +51,14 @@
 	.align 2
 	.globl EXT(ml_enable_user_jop_key)
 LEXT(ml_enable_user_jop_key)
+#if HAS_PARAVIRTUALIZED_PAC
+	mov 	x2, x0
+	MOV64	x0, VMAPPLE_PAC_SET_EL0_DIVERSIFIER_AT_EL1
+	mov		x1, #1
+	hvc		#0
+	LOAD_CPU_JOP_KEY x0, x1
+	ret
+#endif /* HAS_PARAVIRTUALIZED_PAC */
 
 /*
  * void ml_disable_user_jop_key(uint64_t user_jop_key, uint64_t saved_jop_state)
@@ -58,6 +66,13 @@ LEXT(ml_enable_user_jop_key)
 	.align 2
 	.globl EXT(ml_disable_user_jop_key)
 LEXT(ml_disable_user_jop_key)
+#if HAS_PARAVIRTUALIZED_PAC
+	mov 	x2, x1
+	MOV64	x0, VMAPPLE_PAC_SET_EL0_DIVERSIFIER_AT_EL1
+	mov		x1, #0
+	hvc		#0
+	ret
+#endif /* HAS_PARAVIRTUALIZED_PAC */
 
 #endif /* defined(HAS_APPLE_PAC) */
 
@@ -980,9 +995,9 @@ LEXT(cpu_defeatures_set)
 	orr		x0, x0, x1
 	msr		HID3, x0
 	LOAD_UINT64	x1, HID4_DEFEATURES_1
-	mrs		x0, S3_0_C15_C4_0
+	mrs		x0, HID4
 	orr		x0, x0, x1
-	msr		S3_0_C15_C4_0, x0
+	msr		HID4, x0
 	LOAD_UINT64	x1, HID7_DEFEATURES_1
 	mrs		x0, HID7
 	orr		x0, x0, x1
@@ -1008,9 +1023,9 @@ cpu_defeatures_set_2:
 	orr		x0, x0, x1
 	msr		HID3, x0
 	LOAD_UINT64	x1, HID4_DEFEATURES_2
-	mrs		x0, S3_0_C15_C4_0
+	mrs		x0, HID4
 	orr		x0, x0, x1
-	msr		S3_0_C15_C4_0, x0
+	msr		HID4, x0
 	LOAD_UINT64	x1, HID7_DEFEATURES_2
 	mrs		x0, HID7
 	orr		x0, x0, x1

@@ -548,6 +548,7 @@ static uint32_t         gDarkWakeFlags = kDarkWakeFlagPromotionEarly;
 #endif /* !defined(XNU_TARGET_OS_OSX) */
 
 static uint32_t         gNoIdleFlag = 0;
+static uint32_t         gSleepDisabledFlag = 0;
 static uint32_t         gSwdPanic = 1;
 static uint32_t         gSwdSleepTimeout = 0;
 static uint32_t         gSwdWakeTimeout = 0;
@@ -7304,6 +7305,11 @@ IOPMrootDomain::checkSystemSleepAllowed( IOOptionBits options,
 	// Conditions that prevent idle and demand system sleep.
 
 	do {
+		if (gSleepDisabledFlag) {
+			err = kPMConfigPreventSystemSleep;
+			break;
+		}
+
 		if (userDisabledAllSleep) {
 			err = kPMUserDisabledAllSleep; // 1. user-space sleep kill switch
 			break;
@@ -7824,14 +7830,11 @@ IOPMrootDomain::dispatchPowerEvent(
 			systemBooting = false;
 
 			// read noidle setting from Device Tree
-			OSSharedPtr<IORegistryEntry> defaults = IORegistryEntry::fromPath("IODeviceTree:/defaults");
-			if (defaults != NULL) {
-				OSSharedPtr<OSObject> noIdleProp = defaults->copyProperty("no-idle");
-				OSData *data = OSDynamicCast(OSData, noIdleProp.get());
-				if ((data != NULL) && (data->getLength() == 4)) {
-					gNoIdleFlag = *(uint32_t*)data->getBytesNoCopy();
-					DLOG("Setting gNoIdleFlag to %u from device tree\n", gNoIdleFlag);
-				}
+			if (PE_get_default("no-idle", &gNoIdleFlag, sizeof(gNoIdleFlag))) {
+				DLOG("Setting gNoIdleFlag to %u from device tree\n", gNoIdleFlag);
+			}
+			if (PE_get_default("sleep-disabled", &gSleepDisabledFlag, sizeof(gSleepDisabledFlag))) {
+				DLOG("Setting gSleepDisabledFlag to %u from device tree\n", gSleepDisabledFlag);
 			}
 			if (lowBatteryCondition || thermalEmergencyState) {
 				if (lowBatteryCondition) {

@@ -58,6 +58,7 @@ extern int kdb_printf(const char *format, ...) __printflike(1, 2);
 #endif /* KERNEL */
 
 #define HIBERNATE_HMAC_SIZE 48 // SHA384 size in bytes
+#define HIBERNATE_SHA256_SIZE 32 // SHA256 size in bytes
 
 struct IOHibernateHibSegment {
 	uint32_t    iBootMemoryRegion;
@@ -167,6 +168,8 @@ struct IOHibernateImageHeader {
 	uint8_t     handoffHMAC[HIBERNATE_HMAC_SIZE];
 	uint8_t     image1PagesHMAC[HIBERNATE_HMAC_SIZE];
 	uint8_t     image2PagesHMAC[HIBERNATE_HMAC_SIZE];
+	uint8_t     rorgnHMAC[HIBERNATE_HMAC_SIZE];
+	uint8_t     rorgnSHA256[HIBERNATE_SHA256_SIZE];
 #endif /* defined(__arm64__) */
 
 	uint32_t            fileExtentMapSize;

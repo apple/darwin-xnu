@@ -184,6 +184,7 @@ static const char * const gNVRAMSystemList[] = {
 	"prevent-restores", // Keep for factory <rdar://problem/70476321>
 	"prev-lang:kbd",
 	"root-live-fs",
+	"StartupMute", // Set by customers via nvram tool
 	"SystemAudioVolume",
 	"SystemAudioVolumeExtension",
 	"SystemAudioVolumeSaved",
@@ -259,8 +260,9 @@ union VariablePermission {
 		uint64_t KernelOnly           :1;
 		uint64_t ResetNVRAMOnlyDelete :1;
 		uint64_t NeverAllowedToDelete :1;
+		uint64_t SystemReadHidden     :1;
 		uint64_t FullAccess           :1;
-		uint64_t Reserved:58;
+		uint64_t Reserved:57;
 	} Bits;
 	uint64_t Uint64;
 };
@@ -278,7 +280,9 @@ VariablePermissionEntry gVariablePermissions[] = {
 	{"boot-image", .p.Bits.UserWrite = 1},
 	{"com.apple.System.fp-state", .p.Bits.KernelOnly = 1},
 	{"policy-nonce-digests", .p.Bits.ResetNVRAMOnlyDelete = 1}, // Deleting this via user triggered obliterate leave J273a unable to boot
+	{"recoveryos-passcode-blob", .p.Bits.SystemReadHidden = 1},
 	{"security-password", .p.Bits.RootRequired = 1},
+	{"system-passcode-lock-blob", .p.Bits.SystemReadHidden = 1},
 
 #if !defined(__x86_64__)
 	{"acc-cm-override-charger-count", .p.Bits.KernelOnly = 1},
@@ -387,7 +391,8 @@ static bool
 verifyPermission(IONVRAMOperation op, const uuid_t *varGuid, const char *varName)
 {
 	VariablePermission perm;
-	bool kernel, admin, writeEntitled, readEntitled, allowList, systemGuid, systemEntitled, systemInternalEntitled, systemAllow;
+	bool kernel, writeEntitled, readEntitled, allowList, systemGuid, systemEntitled, systemInternalEntitled, systemAllow, systemReadHiddenAllow;
+	bool admin = false;
 	bool ok = false;
 
 	perm = getVariablePermission(varName);
@@ -407,12 +412,15 @@ verifyPermission(IONVRAMOperation op, const uuid_t *varGuid, const char *varName
 	readEntitled           = IOTaskHasEntitlement(current_task(), kIONVRAMReadAccessKey);
 	systemEntitled         = IOTaskHasEntitlement(current_task(), kIONVRAMSystemAllowKey);
 	systemInternalEntitled = IOTaskHasEntitlement(current_task(), kIONVRAMSystemInternalAllowKey);
+	systemReadHiddenAllow  = IOTaskHasEntitlement(current_task(), kIONVRAMSystemHiddenAllowKey);
 
 	systemAllow = systemEntitled || (systemInternalEntitled && gInternalBuild) || kernel;
 
 	switch (op) {
 	case kIONVRAMOperationRead:
-		if (kernel || admin || readEntitled || perm.Bits.FullAccess) {
+		if (systemGuid && perm.Bits.SystemReadHidden) {
+			ok = systemReadHiddenAllow;
+		} else if (kernel || admin || readEntitled || perm.Bits.FullAccess) {
 			ok = true;
 		}
 		break;
@@ -464,8 +472,8 @@ verifyPermission(IONVRAMOperation op, const uuid_t *varGuid, const char *varName
 	}
 
 exit:
-	DEBUG_INFO("Permission for %s of %s %s: kernel=%d, admin=%d, writeEntitled=%d, readEntitled=%d, systemGuid=%d, systemEntitled=%d, systemInternalEntitled=%d, UserWrite=%d\n",
-	    getNVRAMOpString(op), varName, ok ? "granted" : "denied", kernel, admin, writeEntitled, readEntitled, systemGuid, systemEntitled, systemInternalEntitled, perm.Bits.UserWrite);
+	DEBUG_INFO("Permission for %s of %s %s: kernel=%d, admin=%d, writeEntitled=%d, readEntitled=%d, systemGuid=%d, systemEntitled=%d, systemInternalEntitled=%d, systemReadHiddenAllow=%d, UserWrite=%d\n",
+	    getNVRAMOpString(op), varName, ok ? "granted" : "denied", kernel, admin, writeEntitled, readEntitled, systemGuid, systemEntitled, systemInternalEntitled, systemReadHiddenAllow, perm.Bits.UserWrite);
 	return ok;
 }
 
@@ -1919,8 +1927,6 @@ IODTNVRAM::serializeVariables(void)
 			bcopy(buffer, currentRegion->image, currentRegion->size);
 		}
 
-		IODelete(buffer, UInt8, currentRegion->size);
-
 		if ((currentRegion->type == kIONVRAMPartitionSystem) &&
 		    (_systemService != nullptr)) {
 			_systemService->setVariables(_systemDict.get());
@@ -1930,6 +1936,8 @@ IODTNVRAM::serializeVariables(void)
 			_commonService->setVariables(_commonDict.get());
 			commonUsed = (uint32_t)(tmpBuffer - buffer);
 		}
+
+		IODelete(buffer, UInt8, currentRegion->size);
 
 		if (!ok) {
 			ret = kIOReturnBadArgument;

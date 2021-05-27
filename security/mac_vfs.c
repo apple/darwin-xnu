@@ -100,7 +100,7 @@
  * KDBG_EVENTID(DBG_FSYSTEM, DBG_VFS, dcode) global event id, see bsd/sys/kdebug.h.
  * Note that dcode is multiplied by 4 and ORed as part of the construction. See bsd/kern/trace_codes
  * for list of system-wide {global event id, name} pairs. Currently DBG_VFS event ids are in range
- * [0x3130000, 0x3130174].
+ * [0x3130000, 0x313017C].
  */
 
 //#define VFS_TRACE_POLICY_OPS
@@ -1195,7 +1195,7 @@ mac_vnode_check_getattr(vfs_context_t ctx, struct ucred *file_cred,
 
 int
 mac_vnode_check_getattrlist(vfs_context_t ctx, struct vnode *vp,
-    struct attrlist *alist)
+    struct attrlist *alist, uint64_t options)
 {
 	kauth_cred_t cred;
 	int error;
@@ -1211,7 +1211,7 @@ mac_vnode_check_getattrlist(vfs_context_t ctx, struct vnode *vp,
 		return 0;
 	}
 	VFS_KERNEL_DEBUG_START1(40, vp);
-	MAC_CHECK(vnode_check_getattrlist, cred, vp, vp->v_label, alist);
+	MAC_CHECK(vnode_check_getattrlist, cred, vp, vp->v_label, alist, options);
 	VFS_KERNEL_DEBUG_END1(40, vp);
 
 	/* Falsify results instead of returning error? */
@@ -1812,7 +1812,8 @@ mac_vnode_check_revoke(vfs_context_t ctx, struct vnode *vp)
 }
 
 int
-mac_vnode_check_searchfs(vfs_context_t ctx, struct vnode *vp, struct attrlist *alist)
+mac_vnode_check_searchfs(vfs_context_t ctx, struct vnode *vp, struct attrlist *returnattrs,
+    struct attrlist *searchattrs)
 {
 	kauth_cred_t cred;
 	int error;
@@ -1828,7 +1829,7 @@ mac_vnode_check_searchfs(vfs_context_t ctx, struct vnode *vp, struct attrlist *a
 		return 0;
 	}
 	VFS_KERNEL_DEBUG_START1(59, vp);
-	MAC_CHECK(vnode_check_searchfs, cred, vp, vp->v_label, alist);
+	MAC_CHECK(vnode_check_searchfs, cred, vp, vp->v_label, returnattrs, searchattrs);
 	VFS_KERNEL_DEBUG_END1(59, vp);
 	return error;
 }
@@ -2781,4 +2782,50 @@ mac_vnode_notify_reclaim(struct vnode *vp)
 	VFS_KERNEL_DEBUG_START1(94, vp);
 	MAC_PERFORM(vnode_notify_reclaim, vp);
 	VFS_KERNEL_DEBUG_END1(94, vp);
+}
+
+int
+mac_mount_check_quotactl(vfs_context_t ctx, struct mount *mp, int cmd, int id)
+{
+	kauth_cred_t cred;
+	int error;
+
+#if SECURITY_MAC_CHECK_ENFORCE
+	/* 21167099 - only check if we allow write */
+	if (!mac_vnode_enforce) {
+		return 0;
+	}
+#endif
+	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred)) {
+		return 0;
+	}
+	VFS_KERNEL_DEBUG_START1(95, mp);
+	MAC_CHECK(mount_check_quotactl, cred, mp, cmd, id);
+	VFS_KERNEL_DEBUG_END1(95, mp);
+
+	return error;
+}
+
+int
+mac_vnode_check_getattrlistbulk(vfs_context_t ctx, struct vnode *vp, struct attrlist *alist, uint64_t options)
+{
+	kauth_cred_t cred;
+	int error;
+
+#if SECURITY_MAC_CHECK_ENFORCE
+	/* 21167099 - only check if we allow write */
+	if (!mac_vnode_enforce) {
+		return 0;
+	}
+#endif
+	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred)) {
+		return 0;
+	}
+	VFS_KERNEL_DEBUG_START1(96, mp);
+	MAC_CHECK(vnode_check_getattrlistbulk, cred, vp, alist, options);
+	VFS_KERNEL_DEBUG_END1(96, mp);
+
+	return error;
 }

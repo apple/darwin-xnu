@@ -344,6 +344,8 @@ static void vm_compressor_do_delayed_compactions(boolean_t);
 static void vm_compressor_compact_and_swap(boolean_t);
 static void vm_compressor_age_swapped_in_segments(boolean_t);
 
+struct vm_compressor_swapper_stats vmcs_stats;
+
 #if XNU_TARGET_OS_OSX
 static void vm_compressor_take_paging_space_action(void);
 #endif /* XNU_TARGET_OS_OSX */
@@ -917,6 +919,8 @@ try_again:
 	vm_compressor_available = 1;
 
 	vm_page_reactivate_all_throttled();
+
+	bzero(&vmcs_stats, sizeof(struct vm_compressor_swapper_stats));
 }
 
 
@@ -2184,14 +2188,17 @@ compressor_needs_to_swap(void)
 	if (VM_CONFIG_SWAP_IS_ACTIVE) {
 		if (COMPRESSOR_NEEDS_TO_SWAP()) {
 			should_swap = TRUE;
+			vmcs_stats.compressor_swap_threshold_exceeded++;
 			goto check_if_low_space;
 		}
 		if (VM_PAGE_Q_THROTTLED(&vm_pageout_queue_external) && vm_page_anonymous_count < (vm_page_inactive_count / 20)) {
 			should_swap = TRUE;
+			vmcs_stats.external_q_throttled++;
 			goto check_if_low_space;
 		}
 		if (vm_page_free_count < (vm_page_free_reserved - (COMPRESSOR_FREE_RESERVED_LIMIT * 2))) {
 			should_swap = TRUE;
+			vmcs_stats.free_count_below_reserve++;
 			goto check_if_low_space;
 		}
 	}
@@ -2225,6 +2232,7 @@ compressor_needs_to_swap(void)
 #endif
 	if (swapout_target_age) {
 		should_swap = TRUE;
+		vmcs_stats.thrashing_detected++;
 	}
 #endif /* (XNU_TARGET_OS_OSX && __arm64__) */
 
@@ -2276,6 +2284,19 @@ check_if_low_space:
 		 * that we will free up even a single compression segment
 		 */
 		should_swap = vm_compressor_needs_to_major_compact();
+		if (should_swap) {
+			vmcs_stats.fragmentation_detected++;
+#if (XNU_TARGET_OS_OSX && __arm64__)
+			/*
+			 * SSD based systems don't need the fragmentation
+			 * swapout trigger because that was designed for
+			 * systems where the swapout latencies could be long
+			 * enough that the pressure, if allowed to build up,
+			 * would be tightly tied to the swapouts later on.
+			 */
+			should_swap = FALSE;
+#endif /* (XNU_TARGET_OS_OSX && __arm64__) */
+		}
 	}
 
 	/*
@@ -2567,6 +2588,7 @@ vm_compressor_age_swapped_in_segments(boolean_t flush_all)
 		lck_mtx_lock_spin_always(&c_seg->c_lock);
 
 		c_seg_switch_state(c_seg, C_ON_AGE_Q, FALSE);
+		c_seg->c_agedin_ts = (uint32_t) now;
 
 		lck_mtx_unlock_always(&c_seg->c_lock);
 	}
@@ -3191,6 +3213,17 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 				 * This mode of putting a generic c_seg on the swapout list is
 				 * only supported when we have general swapping enabled
 				 */
+				clock_sec_t lnow;
+				clock_nsec_t lnsec;
+				clock_get_system_nanotime(&lnow, &lnsec);
+				if (c_seg->c_agedin_ts && (lnow - c_seg->c_agedin_ts) < 30) {
+					vmcs_stats.unripe_under_30s++;
+				} else if (c_seg->c_agedin_ts && (lnow - c_seg->c_agedin_ts) < 60) {
+					vmcs_stats.unripe_under_60s++;
+				} else if (c_seg->c_agedin_ts && (lnow - c_seg->c_agedin_ts) < 300) {
+					vmcs_stats.unripe_under_300s++;
+				}
+
 				c_seg_switch_state(c_seg, C_ON_SWAPOUT_Q, FALSE);
 			} else {
 				if ((vm_swapout_ripe_segments == TRUE && c_overage_swapped_count < c_overage_swapped_limit)) {

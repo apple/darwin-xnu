@@ -244,6 +244,7 @@ cs_allow_invalid(struct proc *p)
 	task_set_memory_ownership_transfer(p->task, TRUE);
 
 	vm_map_switch_protect(get_task_map(p->task), FALSE);
+	vm_map_cs_debugged_set(get_task_map(p->task), TRUE);
 #endif
 	return (p->p_csflags & (CS_KILL | CS_HARD)) == 0;
 }

@@ -257,8 +257,10 @@ retry_trace_me: ;
 		}
 #endif
 
-		if (kauth_authorize_process(proc_ucred(p), KAUTH_PROCESS_CANTRACE,
-		    t, (uintptr_t)&err, 0, 0) == 0) {
+		err = kauth_authorize_process(kauth_cred_get(), KAUTH_PROCESS_CANTRACE,
+		    t, (uintptr_t)&err, 0, 0);
+
+		if (err == 0) {
 			/* it's OK to attach */
 			proc_lock(t);
 			SET(t->p_lflag, P_LTRACED);
@@ -507,6 +509,7 @@ int
 cantrace(proc_t cur_procp, kauth_cred_t creds, proc_t traced_procp, int *errp)
 {
 	int             my_err;
+	kauth_cred_t    traced_cred;
 	/*
 	 * You can't trace a process if:
 	 *	(1) it's the process that's doing the tracing,
@@ -528,12 +531,15 @@ cantrace(proc_t cur_procp, kauth_cred_t creds, proc_t traced_procp, int *errp)
 	 *	(3) it's not owned by you, or is set-id on exec
 	 *	    (unless you're root).
 	 */
-	if ((kauth_cred_getruid(creds) != kauth_cred_getruid(proc_ucred(traced_procp)) ||
+	traced_cred = kauth_cred_proc_ref(traced_procp);
+	if ((kauth_cred_getruid(creds) != kauth_cred_getruid(traced_cred) ||
 	    ISSET(traced_procp->p_flag, P_SUGID)) &&
 	    (my_err = suser(creds, &cur_procp->p_acflag)) != 0) {
+		kauth_cred_unref(&traced_cred);
 		*errp = my_err;
 		return 0;
 	}
+	kauth_cred_unref(&traced_cred);
 
 	if ((cur_procp->p_lflag & P_LTRACED) && isinferior(cur_procp, traced_procp)) {
 		*errp = EPERM;

@@ -254,6 +254,9 @@ pbuf_resize_segment(pbuf_t *pbuf, int off, int olen, int nlen)
 
 		/* Prepend new length */
 		if (M_PREPEND(n, nlen, M_DONTWAIT, 0) == NULL) {
+			/* mbuf is freed by M_PREPEND in this case */
+			pbuf->pb_mbuf = NULL;
+			pbuf_destroy(pbuf);
 			return NULL;
 		}
 

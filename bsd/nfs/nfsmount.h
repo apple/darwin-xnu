@@ -314,7 +314,6 @@ struct nfsmount {
 			uint64_t mounttime; /* used as client ID verifier */
 			uint64_t clientid; /* client ID, short form */
 			thread_call_t renew_timer; /* RENEW timer call */
-			lck_mtx_t timer_lock; /* RENEW timer lock */
 			nfs_fsid fsid;  /* NFS file system id */
 			TAILQ_HEAD(, nfsnode) delegations; /* list of nodes with delegations */
 			TAILQ_HEAD(, nfsnode) dreturnq; /* list of nodes with delegations to return */
@@ -420,7 +419,6 @@ struct nfsmount {
 #define nm_mounttime    nm_un.v4.mounttime
 #define nm_fsid         nm_un.v4.fsid
 #define nm_renew_timer  nm_un.v4.renew_timer
-#define nm_timer_lock   nm_un.v4.timer_lock
 #define nm_cbid         nm_un.v4.cbid
 #define nm_cblink       nm_un.v4.cblink
 #define nm_cbrefs       nm_un.v4.cbrefs

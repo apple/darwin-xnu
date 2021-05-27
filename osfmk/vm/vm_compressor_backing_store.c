@@ -674,6 +674,7 @@ vm_swap_defragment()
 #endif /* CONFIG_FREEZE */
 			if (c_seg_swapin(c_seg, TRUE, FALSE) == 0) {
 				lck_mtx_unlock_always(&c_seg->c_lock);
+				vmcs_stats.defrag_swapins += (round_page_32(C_SEG_OFFSET_TO_BYTES(c_seg->c_populated_offset))) >> PAGE_SHIFT;
 			}
 
 			vm_swap_defragment_swapin++;
@@ -2090,6 +2091,7 @@ ReTry_for_cseg:
 		}
 
 		counter_add(&vm_statistics_swapins, c_size >> PAGE_SHIFT);
+		vmcs_stats.reclaim_swapins += c_size >> PAGE_SHIFT;
 
 		if (vm_swap_put(addr, &f_offset, c_size, c_seg, NULL)) {
 			vm_offset_t     c_buffer;

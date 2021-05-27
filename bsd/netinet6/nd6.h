@@ -526,6 +526,7 @@ struct  in6_ndifreq_64 {
 	        ((MAX_RANDOM_FACTOR - MIN_RANDOM_FACTOR) * (x >> 10)))) /1000)
 
 #define IP6_USE_TMPADDR_DEFAULT         1
+#define IP6_ULA_USE_TMPADDR_DEFAULT     0
 /* prefix expiry times */
 #define ND6_PREFIX_EXPIRY_UNSPEC        -1
 #define ND6_PREFIX_EXPIRY_NEVER         0

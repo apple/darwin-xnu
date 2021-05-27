@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2021 Apple Inc. All rights reserved.
  */
 #ifndef _PEXPERT_ARM_PROTOS_H
 #define _PEXPERT_ARM_PROTOS_H
@@ -23,6 +23,7 @@ void serial_putc(char);
 void uart_putc(char);
 int uart_getc(void);
 
+void pe_init_fiq(void);
 int switch_to_serial_console(void);
 void switch_to_old_console(int);
 

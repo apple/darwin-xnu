@@ -1326,6 +1326,7 @@ vm_map_create_options(
 	result->map_disallow_new_exec = FALSE;
 	result->terminated = FALSE;
 	result->cs_enforcement = FALSE;
+	result->cs_debugged = FALSE;
 	result->highest_entry_end = 0;
 	result->first_free = vm_map_to_entry(result);
 	result->hint = vm_map_to_entry(result);
@@ -8629,6 +8630,29 @@ vm_map_copy_copy(
 	return new_copy;
 }
 
+static boolean_t
+vm_map_entry_is_overwritable(
+	vm_map_t        dst_map __unused,
+	vm_map_entry_t  entry)
+{
+	if (!(entry->protection & VM_PROT_WRITE)) {
+		/* can't overwrite if not writable */
+		return FALSE;
+	}
+#if !__x86_64__
+	if (entry->used_for_jit &&
+	    vm_map_cs_enforcement(dst_map) &&
+	    !dst_map->cs_debugged) {
+		/*
+		 * Can't overwrite a JIT region while cs_enforced
+		 * and not cs_debugged.
+		 */
+		return FALSE;
+	}
+#endif /* !__x86_64__ */
+	return TRUE;
+}
+
 static kern_return_t
 vm_map_overwrite_submap_recurse(
 	vm_map_t        dst_map,
@@ -8723,6 +8747,11 @@ start_pass_1:
 		}
 
 		if (!(entry->protection & VM_PROT_WRITE)) {
+			vm_map_unlock(dst_map);
+			return KERN_PROTECTION_FAILURE;
+		}
+
+		if (!vm_map_entry_is_overwritable(dst_map, entry)) {
 			vm_map_unlock(dst_map);
 			return KERN_PROTECTION_FAILURE;
 		}
@@ -8990,6 +9019,11 @@ start_pass_1:
 		}
 
 		if (!(entry->protection & VM_PROT_WRITE)) {
+			vm_map_unlock(dst_map);
+			return KERN_PROTECTION_FAILURE;
+		}
+
+		if (!vm_map_entry_is_overwritable(dst_map, entry)) {
 			vm_map_unlock(dst_map);
 			return KERN_PROTECTION_FAILURE;
 		}
@@ -10034,6 +10068,11 @@ vm_map_copy_overwrite_aligned(
 		 */
 
 		if (!(entry->protection & VM_PROT_WRITE)) {
+			vm_map_unlock(dst_map);
+			return KERN_PROTECTION_FAILURE;
+		}
+
+		if (!vm_map_entry_is_overwritable(dst_map, entry)) {
 			vm_map_unlock(dst_map);
 			return KERN_PROTECTION_FAILURE;
 		}
@@ -20142,6 +20181,16 @@ vm_map_cs_wx_enable(
 	vm_map_t map)
 {
 	return pmap_cs_allow_invalid(vm_map_pmap(map));
+}
+
+void
+vm_map_cs_debugged_set(
+	vm_map_t map,
+	boolean_t val)
+{
+	vm_map_lock(map);
+	map->cs_debugged = val;
+	vm_map_unlock(map);
 }
 
 void

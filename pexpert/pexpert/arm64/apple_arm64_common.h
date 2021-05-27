@@ -63,9 +63,11 @@
 #include <pexpert/arm64/AIC.h>
 
 #ifndef ASSEMBLER
+#ifndef APPLEVIRTUALPLATFORM
 #include <pexpert/arm/S3cUART.h>
+#endif
 
-#if !defined(APPLETYPHOON) && !defined(APPLETWISTER)
+#if !defined(APPLETYPHOON) && !defined(APPLETWISTER) && !defined(APPLEVIRTUALPLATFORM)
 #include <pexpert/arm/dockchannel.h>
 
 // AOP_CLOCK frequency * 30 ms

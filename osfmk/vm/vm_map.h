@@ -521,9 +521,10 @@ struct _vm_map {
 	/* boolean_t */ terminated:1,
 	/* boolean_t */ is_alien:1,              /* for platform simulation, i.e. PLATFORM_IOS on OSX */
 	/* boolean_t */ cs_enforcement:1,        /* code-signing enforcement */
+	/* boolean_t */ cs_debugged:1,           /* code-signed but debugged */
 	/* boolean_t */ reserved_regions:1,      /* has reserved regions. The map size that userspace sees should ignore these. */
 	/* boolean_t */ single_jit:1,        /* only allow one JIT mapping */
-	/* reserved */ pad:15;
+	/* reserved */ pad:14;
 	unsigned int            timestamp;      /* Version number */
 };
 
@@ -1144,6 +1145,10 @@ extern boolean_t vm_map_cs_enforcement(
 extern void vm_map_cs_enforcement_set(
 	vm_map_t                map,
 	boolean_t               val);
+
+extern void vm_map_cs_debugged_set(
+	vm_map_t map,
+	boolean_t val);
 
 extern kern_return_t vm_map_cs_wx_enable(vm_map_t map);
 

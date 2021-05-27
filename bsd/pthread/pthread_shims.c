@@ -507,6 +507,7 @@ static const struct pthread_callbacks_s pthread_callbacks = {
 	.proc_set_pthhash = proc_set_pthhash,
 	.proc_get_register = proc_get_register,
 	.proc_set_register = proc_set_register,
+	.proc_get_pthread_jit_allowlist = proc_get_pthread_jit_allowlist,
 
 	/* kernel IPI interfaces */
 	.ipc_port_copyout_send = ipc_port_copyout_send,

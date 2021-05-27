@@ -468,14 +468,14 @@ load_machfile(
 		ledger_task = task;
 	}
 
-#if defined(PMAP_CREATE_FORCE_4K_PAGES) && (DEBUG || DEVELOPMENT)
+#if XNU_TARGET_OS_OSX && _POSIX_SPAWN_FORCE_4K_PAGES && PMAP_CREATE_FORCE_4K_PAGES
 	if (imgp->ip_px_sa != NULL) {
 		struct _posix_spawnattr* psa = (struct _posix_spawnattr *) imgp->ip_px_sa;
 		if (psa->psa_flags & _POSIX_SPAWN_FORCE_4K_PAGES) {
 			pmap_flags |= PMAP_CREATE_FORCE_4K_PAGES;
 		}
 	}
-#endif /* defined(PMAP_CREATE_FORCE_4K_PAGES) && (DEBUG || DEVELOPMENT) */
+#endif /* XNU_TARGET_OS_OSX && _POSIX_SPAWN_FORCE_4K_PAGES && PMAP_CREATE_FORCE_4K_PAGE */
 
 	pmap = pmap_create_options(get_task_ledger(ledger_task),
 	    (vm_map_size_t) 0,

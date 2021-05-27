@@ -1012,7 +1012,7 @@ sys_fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 	}
 
 #if CONFIG_MACF
-	error = mac_file_check_fcntl(proc_ucred(p), fp->fp_glob, uap->cmd,
+	error = mac_file_check_fcntl(kauth_cred_get(), fp->fp_glob, uap->cmd,
 	    uap->arg);
 	if (error) {
 		goto out;
@@ -1258,7 +1258,7 @@ sys_fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 		}
 
 #if CONFIG_MACF
-		error = mac_file_check_lock(proc_ucred(p), fp->fp_glob,
+		error = mac_file_check_lock(kauth_cred_get(), fp->fp_glob,
 		    F_SETLK, &fl);
 		if (error) {
 			(void)vnode_put(vp);
@@ -1404,7 +1404,7 @@ sys_fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 			}
 
 #if CONFIG_MACF
-			error = mac_file_check_lock(proc_ucred(p), fp->fp_glob,
+			error = mac_file_check_lock(kauth_cred_get(), fp->fp_glob,
 			    uap->cmd, &fl);
 			if (error == 0)
 #endif
@@ -2701,7 +2701,7 @@ dropboth:
 
 #if CONFIG_MACF
 		/* Re-do MAC checks against the new FD, pass in a fake argument */
-		error = mac_file_check_fcntl(proc_ucred(p), fp2->fp_glob, uap->cmd, 0);
+		error = mac_file_check_fcntl(kauth_cred_get(), fp2->fp_glob, uap->cmd, 0);
 		if (error) {
 			fp_drop(p, fd2, fp2, 1);
 			goto out;
@@ -3212,6 +3212,7 @@ finishdup(proc_t p,
 	struct fileproc *ofp;
 #if CONFIG_MACF
 	int error;
+	kauth_cred_t cred;
 #endif
 
 #if DIAGNOSTIC
@@ -3224,7 +3225,9 @@ finishdup(proc_t p,
 	}
 
 #if CONFIG_MACF
-	error = mac_file_check_dup(proc_ucred(p), ofp->fp_glob, new);
+	cred = kauth_cred_proc_ref(p);
+	error = mac_file_check_dup(cred, ofp->fp_glob, new);
+	kauth_cred_unref(&cred);
 	if (error) {
 		fdrelse(p, new);
 		return error;
@@ -3322,6 +3325,9 @@ fp_close_and_unlock(proc_t p, int fd, struct fileproc *fp, int flags)
 {
 	struct filedesc *fdp = p->p_fd;
 	struct fileglob *fg = fp->fp_glob;
+#if CONFIG_MACF
+	kauth_cred_t cred;
+#endif
 
 #if DIAGNOSTIC
 	proc_fdlock_assert(p, LCK_MTX_ASSERT_OWNED);
@@ -3370,7 +3376,9 @@ fp_close_and_unlock(proc_t p, int fd, struct fileproc *fp, int flags)
 				kauth_authorize_fileop(fg->fg_cred, KAUTH_FILEOP_CLOSE,
 				    (uintptr_t)fg->fg_data, (uintptr_t)fileop_flags);
 #if CONFIG_MACF
-				mac_file_notify_close(proc_ucred(p), fp->fp_glob);
+				cred = kauth_cred_proc_ref(p);
+				mac_file_notify_close(cred, fp->fp_glob);
+				kauth_cred_unref(&cred);
 #endif
 				vnode_put((vnode_t)fg->fg_data);
 			}
@@ -4541,6 +4549,9 @@ falloc_withalloc(proc_t p, struct fileproc **resultfp, int *resultfd,
 	struct fileproc *fp;
 	struct fileglob *fg;
 	int error, nfd;
+#if CONFIG_MACF
+	kauth_cred_t cred;
+#endif
 
 	/* Make sure we don't go beyond the system-wide limit */
 	if (nfiles >= maxfiles) {
@@ -4557,7 +4568,9 @@ falloc_withalloc(proc_t p, struct fileproc **resultfp, int *resultfd,
 	}
 
 #if CONFIG_MACF
-	error = mac_file_check_create(proc_ucred(p));
+	cred = kauth_cred_proc_ref(p);
+	error = mac_file_check_create(cred);
+	kauth_cred_unref(&cred);
 	if (error) {
 		proc_fdunlock(p);
 		return error;
@@ -5204,7 +5217,7 @@ sys_flock(proc_t p, struct flock_args *uap, __unused int32_t *retval)
 		goto out;
 	}
 #if CONFIG_MACF
-	error = mac_file_check_lock(proc_ucred(p), fp->fp_glob, F_SETLK, &lf);
+	error = mac_file_check_lock(kauth_cred_get(), fp->fp_glob, F_SETLK, &lf);
 	if (error) {
 		goto out;
 	}
@@ -5471,7 +5484,7 @@ dupfdopen(struct filedesc *fdp, int indx, int dfd, int flags, int error)
 		return EBADF;
 	}
 #if CONFIG_MACF
-	myerror = mac_file_check_dup(proc_ucred(p), wfp->fp_glob, dfd);
+	myerror = mac_file_check_dup(kauth_cred_get(), wfp->fp_glob, dfd);
 	if (myerror) {
 		proc_fdunlock(p);
 		return myerror;

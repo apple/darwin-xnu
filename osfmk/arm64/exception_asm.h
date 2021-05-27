@@ -26,6 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#include <arm64/pac_asm.h>
 #include <pexpert/arm64/board_config.h>
 #include "assym.s"
 
@@ -181,28 +182,6 @@
 
 #if defined(HAS_APPLE_PAC)
 	.if \mode != HIBERNATE_MODE
-	/**
-	 * Restore kernel keys if:
-	 *
-	 * - Entering the kernel from EL0, and
-	 * - CPU lacks fast A-key switching (fast A-key switching is
-	 *   implemented by reprogramming KERNKey on context switch)
-	 */
-	.if \mode == KERNEL_MODE
-#if HAS_PAC_SLOW_A_KEY_SWITCHING
-	IF_PAC_FAST_A_KEY_SWITCHING	Lskip_restore_kernel_keys_\@, x21
-	and		x21, x23, #(PSR64_MODE_EL_MASK)
-	cmp		x21, #(PSR64_MODE_EL0)
-	bne		Lskip_restore_kernel_keys_\@
-
-	MOV64	x2, KERNEL_JOP_ID
-	mrs		x3, TPIDR_EL1
-	ldr		x3, [x3, ACT_CPUDATAP]
-	REPROGRAM_JOP_KEYS	Lskip_restore_kernel_keys_\@, x2, x3, x4
-	isb		sy
-Lskip_restore_kernel_keys_\@:
-#endif /* HAS_PAC_SLOW_A_KEY_SWITCHING */
-	.endif /* \mode == KERNEL_MODE */
 
 	/* Save x1 and LR to preserve across call */
 	mov		x21, x1

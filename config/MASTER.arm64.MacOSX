@@ -40,11 +40,11 @@
 #  VPN =            [ ipsec flow_divert necp content_filter ]
 #  PF =             [ pf pflog ]
 #  MULTIPATH =      [ multipath mptcp ]
-#if defined(SOC_CONFIG_t8020)
+#if defined(SOC_CONFIG_t8020) || defined(SOC_CONFIG_vmapple)
 #  HIBERNATION =    [ ]
-#else /*!(defined(SOC_CONFIG_t8020)*/
+#else /*!(defined(SOC_CONFIG_t8020) || defined(SOC_CONFIG_vmapple))*/
 #  HIBERNATION =    [ ]
-#endif /*!(defined(SOC_CONFIG_t8020)*/
+#endif /*!(defined(SOC_CONFIG_t8020) || defined(SOC_CONFIG_vmapple))*/
 #  IOKIT_BASE =     [ iokit iokitcpp no_kernel_hid config_sleep iokitstats HIBERNATION ]
 #  IOKIT_RELEASE =  [ IOKIT_BASE ]
 #  IOKIT_DEV =      [ IOKIT_BASE iotracking ]

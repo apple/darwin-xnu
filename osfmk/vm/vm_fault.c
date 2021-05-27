@@ -3930,6 +3930,7 @@ vm_fault_internal(
 	vm_map_offset_t         trace_real_vaddr;
 	vm_map_size_t           fault_page_size;
 	vm_map_size_t           fault_page_mask;
+	int                     fault_page_shift;
 	vm_map_offset_t         fault_phys_offset;
 	vm_map_offset_t         real_vaddr;
 	bool                    resilient_media_retry = FALSE;
@@ -3951,6 +3952,7 @@ vm_fault_internal(
 		fault_phys_offset = (vm_map_offset_t)-1;
 		fault_page_size = VM_MAP_PAGE_SIZE(original_map);
 		fault_page_mask = VM_MAP_PAGE_MASK(original_map);
+		fault_page_shift = VM_MAP_PAGE_SHIFT(original_map);
 		if (fault_page_size < PAGE_SIZE) {
 			DEBUG4K_FAULT("map %p vaddr 0x%llx caller_prot 0x%x\n", map, (uint64_t)trace_real_vaddr, caller_prot);
 			vaddr = vm_map_trunc_page(vaddr, fault_page_mask);
@@ -3959,6 +3961,7 @@ vm_fault_internal(
 		fault_phys_offset = 0;
 		fault_page_size = PAGE_SIZE;
 		fault_page_mask = PAGE_MASK;
+		fault_page_shift = PAGE_SHIFT;
 		vaddr = vm_map_trunc_page(vaddr, PAGE_MASK);
 	}
 
@@ -4450,9 +4453,7 @@ upgrade_lock_and_retry:
 			    !cur_object->internal &&
 			    !cur_object->pager_trusted &&
 			    vm_protect_privileged_from_untrusted &&
-			    !((prot & VM_PROT_EXECUTE) &&
-			    cur_object->code_signed &&
-			    pmap_get_vm_map_cs_enforced(caller_pmap ? caller_pmap : pmap)) &&
+			    !cur_object->code_signed &&
 			    current_proc_is_privileged()) {
 				/*
 				 * We're faulting on a page in "object" and
@@ -5646,9 +5647,7 @@ handle_copy_delay:
 	    VM_PAGE_OBJECT(m) != object &&
 	    !VM_PAGE_OBJECT(m)->pager_trusted &&
 	    vm_protect_privileged_from_untrusted &&
-	    !((prot & VM_PROT_EXECUTE) &&
-	    VM_PAGE_OBJECT(m)->code_signed &&
-	    pmap_get_vm_map_cs_enforced(caller_pmap ? caller_pmap : pmap)) &&
+	    !VM_PAGE_OBJECT(m)->code_signed &&
 	    current_proc_is_privileged()) {
 		/*
 		 * We found the page we want in an "untrusted" VM object
@@ -5862,12 +5861,12 @@ handle_copy_delay:
 				/*
 				 * Set up a block mapped area
 				 */
-				assert((uint32_t)((ldelta + hdelta) >> PAGE_SHIFT) == ((ldelta + hdelta) >> PAGE_SHIFT));
-				kr = pmap_map_block(caller_pmap,
+				assert((uint32_t)((ldelta + hdelta) >> fault_page_shift) == ((ldelta + hdelta) >> fault_page_shift));
+				kr = pmap_map_block_addr(caller_pmap,
 				    (addr64_t)(caller_pmap_addr - ldelta),
-				    (ppnum_t)((((vm_map_offset_t) (VME_OBJECT(entry)->vo_shadow_offset)) +
-				    VME_OFFSET(entry) + (laddr - entry->vme_start) - ldelta) >> PAGE_SHIFT),
-				    (uint32_t)((ldelta + hdelta) >> PAGE_SHIFT), prot,
+				    (pmap_paddr_t)(((vm_map_offset_t) (VME_OBJECT(entry)->vo_shadow_offset)) +
+				    VME_OFFSET(entry) + (laddr - entry->vme_start) - ldelta),
+				    (uint32_t)((ldelta + hdelta) >> fault_page_shift), prot,
 				    (VM_WIMG_MASK & (int)object->wimg_bits) | superpage, 0);
 
 				if (kr != KERN_SUCCESS) {
@@ -5877,12 +5876,12 @@ handle_copy_delay:
 				/*
 				 * Set up a block mapped area
 				 */
-				assert((uint32_t)((ldelta + hdelta) >> PAGE_SHIFT) == ((ldelta + hdelta) >> PAGE_SHIFT));
-				kr = pmap_map_block(real_map->pmap,
+				assert((uint32_t)((ldelta + hdelta) >> fault_page_shift) == ((ldelta + hdelta) >> fault_page_shift));
+				kr = pmap_map_block_addr(real_map->pmap,
 				    (addr64_t)(vaddr - ldelta),
-				    (ppnum_t)((((vm_map_offset_t)(VME_OBJECT(entry)->vo_shadow_offset)) +
-				    VME_OFFSET(entry) + (laddr - entry->vme_start) - ldelta) >> PAGE_SHIFT),
-				    (uint32_t)((ldelta + hdelta) >> PAGE_SHIFT), prot,
+				    (pmap_paddr_t)(((vm_map_offset_t)(VME_OBJECT(entry)->vo_shadow_offset)) +
+				    VME_OFFSET(entry) + (laddr - entry->vme_start) - ldelta),
+				    (uint32_t)((ldelta + hdelta) >> fault_page_shift), prot,
 				    (VM_WIMG_MASK & (int)object->wimg_bits) | superpage, 0);
 
 				if (kr != KERN_SUCCESS) {

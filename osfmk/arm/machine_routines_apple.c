@@ -57,6 +57,32 @@ configure_misc_apple_regs(void)
 
 #if HAS_APPLE_PAC
 
+#if HAS_PARAVIRTUALIZED_PAC
+static uint64_t vmapple_default_rop_pid;
+static uint64_t vmapple_default_jop_pid;
+
+static inline void
+vmapple_pac_get_default_keys()
+{
+	static bool initialized = false;
+	if (os_atomic_xchg(&initialized, true, relaxed)) {
+		return;
+	}
+
+	const uint64_t fn = VMAPPLE_PAC_GET_DEFAULT_KEYS;
+	asm volatile (
+                "mov	x0, %[fn]"      "\n"
+                "hvc	#0"             "\n"
+                "str	x2, %[b_key]"   "\n"
+                "str	x3, %[el0_key]" "\n"
+                : [b_key] "=m"(vmapple_default_rop_pid),
+                  [el0_key] "=m"(vmapple_default_jop_pid)
+                : [fn] "r"(fn)
+                : "x0", "x1", "x2", "x3", "x4"
+        );
+}
+
+#endif /* HAS_PARAVIRTUALIZED_PAC */
 
 /**
  * Returns the default ROP key.
@@ -64,7 +90,12 @@ configure_misc_apple_regs(void)
 uint64_t
 ml_default_rop_pid(void)
 {
+#if HAS_PARAVIRTUALIZED_PAC
+	vmapple_pac_get_default_keys();
+	return vmapple_default_rop_pid;
+#else
 	return 0;
+#endif /* HAS_PARAVIRTUALIZED_PAC */
 }
 
 /**
@@ -73,6 +104,11 @@ ml_default_rop_pid(void)
 uint64_t
 ml_default_jop_pid(void)
 {
+#if HAS_PARAVIRTUALIZED_PAC
+	vmapple_pac_get_default_keys();
+	return vmapple_default_jop_pid;
+#else
 	return 0;
+#endif /* HAS_PARAVIRTUALIZED_PAC */
 }
 #endif /* HAS_APPLE_PAC */

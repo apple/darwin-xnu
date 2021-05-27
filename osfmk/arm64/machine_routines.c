@@ -184,15 +184,15 @@ ml_cpu_signal_type(unsigned int cpu_mpidr, uint32_t type)
 	MRS(local_mpidr, "MPIDR_EL1");
 	if (MPIDR_CLUSTER_ID(local_mpidr) == MPIDR_CLUSTER_ID(cpu_mpidr)) {
 		uint64_t x = type | MPIDR_CPU_ID(cpu_mpidr);
-		MSR("S3_5_C15_C0_0", x);
+		MSR("IPIRR_LOCAL_EL1", x);
 	} else {
 		#define IPI_RR_TARGET_CLUSTER_SHIFT 16
 		uint64_t x = type | (MPIDR_CLUSTER_ID(cpu_mpidr) << IPI_RR_TARGET_CLUSTER_SHIFT) | MPIDR_CPU_ID(cpu_mpidr);
-		MSR("S3_5_C15_C0_1", x);
+		MSR("IPIRR_GLOBAL_EL1", x);
 	}
 #else
 	uint64_t x = type | MPIDR_CPU_ID(cpu_mpidr);
-	MSR("S3_5_C15_C0_1", x);
+	MSR("IPIRR_GLOBAL_EL1", x);
 #endif
 }
 #endif
@@ -236,7 +236,7 @@ ml_cpu_signal_deferred_adjust_timer(uint64_t nanosecs)
 	/* update deferred_ipi_timer_ns with the new clamped value */
 	absolutetime_to_nanoseconds(abstime, &deferred_ipi_timer_ns);
 
-	MSR("S3_5_C15_C3_1", abstime);
+	MSR("IPICR_EL1", abstime);
 #else
 	(void)nanosecs;
 	panic("Platform does not support ACC Fast IPI");
@@ -494,6 +494,88 @@ machine_processor_shutdown(
 	return Shutdown_context(doshutdown, processor);
 }
 
+#if APPLEVIRTUALPLATFORM
+
+static uint64_t
+virtual_timeout_inflate64(unsigned int vti, uint64_t timeout, uint64_t max_timeout)
+{
+	if (vti >= 64) {
+		return max_timeout;
+	}
+
+	if ((timeout << vti) >> vti != timeout) {
+		return max_timeout;
+	}
+
+	if ((timeout << vti) > max_timeout) {
+		return max_timeout;
+	}
+
+	return timeout << vti;
+}
+
+static uint32_t
+virtual_timeout_inflate32(unsigned int vti, uint32_t timeout, uint32_t max_timeout)
+{
+	if (vti >= 32) {
+		return max_timeout;
+	}
+
+	if ((timeout << vti) >> vti != timeout) {
+		return max_timeout;
+	}
+
+	return timeout << vti;
+}
+
+/*
+ * Some timeouts are later adjusted or used in calculations setting
+ * other values. In order to avoid overflow, cap the max timeout as
+ * 2^47ns (~39 hours). (How did we determine this number?)
+ */
+static const uint64_t max_timeout_ns = 1ULL << 47;
+
+/*
+ * Inflate a timeout in nanosecond.
+ */
+uint64_t
+virtual_timeout_inflate_ns(unsigned int vti, uint64_t timeout)
+{
+	return virtual_timeout_inflate64(vti, timeout, max_timeout_ns);
+}
+
+/*
+ * Inflate a timeout in absolutetime.
+ */
+uint64_t
+virtual_timeout_inflate_abs(unsigned int vti, uint64_t timeout)
+{
+	uint64_t max_timeout;
+	nanoseconds_to_absolutetime(max_timeout_ns, &max_timeout);
+	return virtual_timeout_inflate64(vti, timeout, max_timeout);
+}
+
+/*
+ * Inflate a timeout in absolutetime (32-bit).
+ */
+static uint64_t
+virtual_timeout_inflate_abs_32(unsigned int vti, uint32_t timeout)
+{
+	const uint32_t max_timeout = ~0;
+	return virtual_timeout_inflate32(vti, timeout, max_timeout);
+}
+
+/*
+ * Inflate a timeout in microseconds.
+ */
+static uint32_t
+virtual_timeout_inflate_us(unsigned int vti, uint64_t timeout)
+{
+	const uint32_t max_timeout = ~0;
+	return virtual_timeout_inflate32(vti, timeout, max_timeout);
+}
+
+#endif /* APPLEVIRTUALPLATFORM */
 
 /*
  *      Routine:        ml_init_lock_timeout
@@ -533,6 +615,40 @@ ml_init_lock_timeout(void)
 	MutexSpin = abstime;
 	low_MutexSpin = MutexSpin;
 
+#if APPLEVIRTUALPLATFORM
+	unsigned int vti;
+
+	if (!PE_parse_boot_argn("vti", &vti, sizeof(vti))) {
+		vti = 6;
+	}
+	kprintf("Lock timeouts adjusted for virtualization (<<%d):\n", vti);
+#define VIRTUAL_TIMEOUT_INFLATE_ABS(_timeout)              \
+MACRO_BEGIN                                                \
+	kprintf("%24s: 0x%016llx ", #_timeout, _timeout);      \
+	_timeout = virtual_timeout_inflate_abs(vti, _timeout); \
+	kprintf("-> 0x%016llx\n",  _timeout);                  \
+MACRO_END
+
+#define VIRTUAL_TIMEOUT_INFLATE_ABS_32(_timeout)              \
+MACRO_BEGIN                                                \
+	kprintf("%24s: 0x%08x ", #_timeout, _timeout);      \
+	_timeout = virtual_timeout_inflate_abs_32(vti, _timeout); \
+	kprintf("-> 0x%0x\n",  _timeout);                  \
+MACRO_END
+
+#define VIRTUAL_TIMEOUT_INFLATE_US(_timeout)               \
+MACRO_BEGIN                                                \
+	kprintf("%24s:         0x%08x ", #_timeout, _timeout); \
+	_timeout = virtual_timeout_inflate_us(vti, _timeout);  \
+	kprintf("-> 0x%08x\n",  _timeout);                     \
+MACRO_END
+
+	VIRTUAL_TIMEOUT_INFLATE_US(LockTimeOutUsec);
+	VIRTUAL_TIMEOUT_INFLATE_ABS_32(LockTimeOut);
+	VIRTUAL_TIMEOUT_INFLATE_ABS(TLockTimeOut);
+	VIRTUAL_TIMEOUT_INFLATE_ABS(MutexSpin);
+	VIRTUAL_TIMEOUT_INFLATE_ABS(low_MutexSpin);
+#endif /* APPLEVIRTUALPLATFORM */
 
 	/*
 	 * high_MutexSpin should be initialized as low_MutexSpin * real_ncpus, but

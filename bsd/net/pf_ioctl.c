@@ -1161,7 +1161,7 @@ pf_rule_copyin(struct pf_rule *src, struct pf_rule *dst, struct proc *p,
 	dst->overload_tblname[sizeof(dst->overload_tblname) - 1] = '\0';
 	dst->owner[sizeof(dst->owner) - 1] = '\0';
 
-	dst->cuid = kauth_cred_getuid(p->p_ucred);
+	dst->cuid = kauth_cred_getuid(kauth_cred_get());
 	dst->cpid = p->p_pid;
 
 	dst->anchor = NULL;

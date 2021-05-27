@@ -230,6 +230,18 @@
 #define CORE_NCTRS                     8 /* Placeholder; KPC is not enabled for this target */
 #endif  /* ARM64_BOARD_CONFIG_BCM2837 */
 
+#ifdef ARM64_BOARD_CONFIG_VMAPPLE
+#include <pexpert/arm64/VMAPPLE.h>
+
+#define MAX_L2_CLINE                   7
+#define MAX_CPUS                       32 /* limited by CPU copy window size and cpu checkin mask */
+#define MAX_CPU_CLUSTERS               1
+
+#define CORE_NCTRS                     2
+
+#define USE_APPLEARMSMP                1
+
+#endif  /* ARM64_BOARD_CONFIG_VMAPPLE */
 
 #ifndef HAS_UNCORE_CTRS
 #undef UNCORE_VERSION

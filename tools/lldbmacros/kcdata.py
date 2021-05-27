@@ -176,6 +176,10 @@ def enum(**args):
 def BytesToString(b):
     return b.decode('utf-8', errors="surrogateescape")
 
+# important keys
+SC_SLID_FIRSTMAPPING_KEY = 'sharedCacheSlidFirstMapping'
+
+# important builtin types
 KCSUBTYPE_TYPE = enum(KC_ST_CHAR=1, KC_ST_INT8=2, KC_ST_UINT8=3, KC_ST_INT16=4, KC_ST_UINT16=5, KC_ST_INT32=6, KC_ST_UINT32=7, KC_ST_INT64=8, KC_ST_UINT64=9)
 
 
@@ -1586,11 +1590,39 @@ def SaveStackshotReport(j, outfile_name, incomplete):
     os_version = ss.get('osversion', 'Unknown')
     timebase = ss.get('mach_timebase_info', {"denom": 1, "numer": 1})
 
+    sc_note = None
+    extra_note = None
     dsc_common = None
     shared_cache_info = ss.get('shared_cache_dyld_load_info')
     if shared_cache_info:
         shared_cache_base_addr = shared_cache_info['imageSlidBaseAddress']
-        dsc_common = [format_uuid(shared_cache_info['imageUUID']), shared_cache_info['imageSlidBaseAddress'], "S" ]
+        # If we have a slidFirstMapping and it's >= base_address, use that.
+        #
+        # Otherwise we're processing a stackshot from before the slidFirstMapping
+        # field was introduced and corrected.  On ARM the SlidBaseAddress is the
+        # same, but on x86 it's off by 0x20000000.  We use 'X86_64' in the
+        # kernel version string plus checking kern_page_size == 4k' as
+        # proxy for x86_64, and only adjust SlidBaseAddress if the unslid
+        # address is precisely the expected incorrect value.
+        #
+        is_intel = ('X86_64' in ss.get('osversion', "") and
+           ss.get('kernel_page_size', 0) == 4096)
+        slidFirstMapping = shared_cache_info.get(SC_SLID_FIRSTMAPPING_KEY, -1);
+        if slidFirstMapping >= shared_cache_base_addr:
+            shared_cache_base_addr = slidFirstMapping
+            sc_note = "base-accurate"
+
+        elif is_intel:
+            sc_slide = shared_cache_info['imageLoadAddress']
+            if (shared_cache_base_addr - sc_slide) == 0x7fff00000000:
+                shared_cache_base_addr += 0x20000000
+                sc_note = "base-x86-adjusted"
+                extra_note = "Shared cache base adjusted for x86. "
+            else:
+                sc_note = "base-x86-unknown"
+
+        dsc_common = [format_uuid(shared_cache_info['imageUUID']),
+                shared_cache_base_addr, "S" ]
         print "Shared cache UUID found from the binary data is <%s> " % str(dsc_common[0])
 
     dsc_layout = ss.get('system_shared_cache_layout')
@@ -1615,10 +1647,15 @@ def SaveStackshotReport(j, outfile_name, incomplete):
     obj["frontmostPids"] = [0]
     obj["exception"] = "0xDEADF157"
     obj["processByPid"] = {}
+    if sc_note is not None:
+        obj["sharedCacheNote"] = sc_note
 
     if incomplete:
         obj["reason"] = "!!!INCOMPLETE!!! kernel panic stackshot"
         obj["notes"] = "This stackshot report generated from incomplete data!   Some information is missing! "
+
+    if extra_note is not None:
+        obj["notes"] = obj.get("notes", "") + extra_note
         
     processByPid = obj["processByPid"]
     ssplist = ss.get('task_snapshots', {})
@@ -1850,7 +1887,7 @@ def prettify(data):
                 value = '%02X%02X%02X%02X-%02X%02X-%02X%02X-%02X%02X-%02X%02X%02X%02X%02X%02X' % tuple(value)
             elif 'address' in key.lower() and isinstance(value, (int, long)):
                 value = '0x%X' % value
-            elif key == 'lr' or key == 'sharedCacheSlidFirstMapping':
+            elif key == 'lr' or key == SC_SLID_FIRSTMAPPING_KEY:
                 value = '0x%X' % value
             elif key == 'thread_waitinfo':
                 value = map(formatWaitInfo, value)

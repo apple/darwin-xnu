@@ -1308,6 +1308,9 @@ typedef enum cpuvn {
 } cpuvn_e;
 
 extern int machine_csv(cpuvn_e cve);
+#if defined(__x86_64__)
+extern void machine_thread_set_insn_copy_optout(thread_t thr);
+#endif
 
 /*
  * Translate array of function pointer syscall arguments from userspace representation
@@ -1349,6 +1352,10 @@ extern int machine_trace_thread64(thread_t thread,
 uint64_t thread_get_last_wait_duration(thread_t thread);
 
 extern bool thread_get_no_smt(void);
+#if defined(__x86_64__)
+extern bool curtask_get_insn_copy_optout(void);
+extern void curtask_set_insn_copy_optout(void);
+#endif /* defined(__x86_64__) */
 
 #endif  /* XNU_KERNEL_PRIVATE */
 

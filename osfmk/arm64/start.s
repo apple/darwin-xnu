@@ -737,6 +737,10 @@ common_start:
 
 1:
 #ifdef HAS_APPLE_PAC
+#if HAS_PARAVIRTUALIZED_PAC
+	mov		x0, #VMAPPLE_PAC_SET_INITIAL_STATE
+	hvc		#0
+#endif /* HAS_PARAVIRTUALIZED_PAC */
 
 	// Enable caches, MMU, ROP and JOP
 	MOV64	x0, SCTLR_EL1_DEFAULT
@@ -779,11 +783,13 @@ common_start:
 
 #if defined(APPLE_ARM64_ARCH_FAMILY)
 	// Initialization common to all non-virtual Apple targets
+#if !APPLEVIRTUALPLATFORM
 	ARM64_IS_PCORE x15
-	ARM64_READ_EP_SPR x15, x12, S3_0_C15_C4_1, S3_0_C15_C4_0
+	ARM64_READ_EP_SPR x15, x12, EHID4, HID4
 	orr		x12, x12, ARM64_REG_HID4_DisDcMVAOps
 	orr		x12, x12, ARM64_REG_HID4_DisDcSWL2Ops
-	ARM64_WRITE_EP_SPR x15, x12, S3_0_C15_C4_1, S3_0_C15_C4_0
+	ARM64_WRITE_EP_SPR x15, x12, EHID4, HID4
+#endif  // !APPLEVIRTUALPLATFORM
 #endif  // APPLE_ARM64_ARCH_FAMILY
 
 	// Read MIDR before start of per-SoC tunables

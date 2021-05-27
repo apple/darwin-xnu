@@ -650,8 +650,8 @@ necp_session_open(struct proc *p, struct necp_session_open_args *uap, int *retva
 	struct necp_session *session = NULL;
 	struct fileproc *fp = NULL;
 	int fd = -1;
+	uid_t uid = kauth_cred_getuid(kauth_cred_get());
 
-	uid_t uid = kauth_cred_getuid(proc_ucred(p));
 	if (uid != 0 && priv_check_cred(kauth_cred_get(), PRIV_NET_PRIVILEGED_NECP_POLICIES, 0) != 0) {
 		NECPLOG0(LOG_ERR, "Process does not hold necessary entitlement to open NECP session");
 		error = EACCES;
@@ -6319,7 +6319,8 @@ necp_application_fillout_info_locked(uuid_t application_uuid, uuid_t real_applic
 	}
 
 	if (necp_kernel_application_policies_condition_mask & NECP_KERNEL_CONDITION_ENTITLEMENT && proc != NULL) {
-		info->cred_result = priv_check_cred(proc_ucred(proc), PRIV_NET_PRIVILEGED_NECP_MATCH, 0);
+		info->cred_result = priv_check_cred(kauth_cred_get(), PRIV_NET_PRIVILEGED_NECP_MATCH, 0);
+
 		if (info->cred_result != 0) {
 			// Process does not have entitlement, check the parent process
 			necp_get_parent_cred_result(proc, info);
@@ -6407,9 +6408,9 @@ necp_send_network_denied_event(pid_t pid, uuid_t proc_uuid, u_int32_t network_ty
 
 extern char *proc_name_address(void *p);
 
-#define NECP_VERIFY_DELEGATION_ENTITLEMENT(_p, _d) \
+#define NECP_VERIFY_DELEGATION_ENTITLEMENT(_p, _c, _d) \
 	if (!has_checked_delegation_entitlement) { \
-	        has_delegation_entitlement = (priv_check_cred(proc_ucred(_p), PRIV_NET_PRIVILEGED_SOCKET_DELEGATE, 0) == 0); \
+	        has_delegation_entitlement = (priv_check_cred(_c, PRIV_NET_PRIVILEGED_SOCKET_DELEGATE, 0) == 0); \
 	        has_checked_delegation_entitlement = TRUE; \
 	} \
 	if (!has_delegation_entitlement) { \
@@ -6469,7 +6470,8 @@ necp_application_find_policy_match_internal(proc_t proc,
 	}
 
 	// Initialize UID, PID, and UUIDs to the current process
-	uid_t uid = kauth_cred_getuid(proc_ucred(proc));
+	kauth_cred_t cred = kauth_cred_get();
+	uid_t uid = kauth_cred_getuid(cred);
 	pid_t pid = proc_pid(proc);
 	int32_t pid_version = proc_pidversion(proc);
 	uuid_t application_uuid;
@@ -6523,7 +6525,7 @@ necp_application_find_policy_match_internal(proc_t proc,
 
 	memset(returned_result, 0, sizeof(struct necp_aggregate_result));
 
-	u_int32_t drop_order = necp_process_drop_order(proc_ucred(proc));
+	u_int32_t drop_order = necp_process_drop_order(cred);
 
 	necp_kernel_policy_result drop_dest_policy_result = NECP_KERNEL_POLICY_RESULT_NONE;
 
@@ -6558,7 +6560,7 @@ necp_application_find_policy_match_internal(proc_t proc,
 							break;
 						}
 
-						NECP_VERIFY_DELEGATION_ENTITLEMENT(proc, "euuid");
+						NECP_VERIFY_DELEGATION_ENTITLEMENT(proc, cred, "euuid");
 
 						is_delegated = true;
 						uuid_copy(application_uuid, value);
@@ -6572,7 +6574,7 @@ necp_application_find_policy_match_internal(proc_t proc,
 							break;
 						}
 
-						NECP_VERIFY_DELEGATION_ENTITLEMENT(proc, "uuid");
+						NECP_VERIFY_DELEGATION_ENTITLEMENT(proc, cred, "uuid");
 
 						is_delegated = true;
 						uuid_copy(real_application_uuid, value);
@@ -6586,7 +6588,7 @@ necp_application_find_policy_match_internal(proc_t proc,
 							break;
 						}
 
-						NECP_VERIFY_DELEGATION_ENTITLEMENT(proc, "pid");
+						NECP_VERIFY_DELEGATION_ENTITLEMENT(proc, cred, "pid");
 
 						is_delegated = true;
 						memcpy(&pid, value, sizeof(pid_t));
@@ -6600,7 +6602,7 @@ necp_application_find_policy_match_internal(proc_t proc,
 							break;
 						}
 
-						NECP_VERIFY_DELEGATION_ENTITLEMENT(proc, "uid");
+						NECP_VERIFY_DELEGATION_ENTITLEMENT(proc, cred, "uid");
 
 						is_delegated = true;
 						memcpy(&uid, value, sizeof(uid_t));

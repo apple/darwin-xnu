@@ -284,6 +284,9 @@ struct task {
 #define TF_SYS_VERSION_COMPAT   0x00008000                              /* shim task accesses to OS version data (macOS - app compatibility) */
 #define TF_PAC_EXC_FATAL        0x00010000                              /* task is marked a corpse if a PAC exception occurs */
 #define TF_TECS                 0x00020000                              /* task threads must enable CPU security */
+#if defined(__x86_64__)
+#define TF_INSN_COPY_OPTOUT     0x00040000                              /* task threads opt out of unhandled-fault instruction stream collection */
+#endif
 
 /*
  * Task is running within a 64-bit address space.

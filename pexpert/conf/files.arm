@@ -1,4 +1,5 @@
 pexpert/arm/pe_bootargs.c            standard
+pexpert/arm/pe_fiq.c                 standard
 pexpert/arm/pe_identify_machine.c    standard
 pexpert/arm/pe_init.c                standard
 pexpert/arm/pe_kprintf.c             standard

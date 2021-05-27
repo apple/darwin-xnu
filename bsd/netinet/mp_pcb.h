@@ -109,7 +109,7 @@ extern void mp_pcbinfo_attach(struct mppcbinfo *);
 extern int mp_pcbinfo_detach(struct mppcbinfo *);
 extern int mp_pcballoc(struct socket *, struct mppcbinfo *);
 extern void mp_pcbdetach(struct socket *);
-extern void mp_pcbdispose(struct mppcb *);
+extern void mptcp_pcbdispose(struct mppcb *);
 extern void mp_gc_sched(void);
 extern void mptcp_timer_sched(void);
 extern void mptcp_handle_deferred_upcalls(struct mppcb *mpp, uint32_t flag);

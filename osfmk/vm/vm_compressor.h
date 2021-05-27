@@ -238,6 +238,7 @@ struct c_segment {
 #endif /* CHECKSUM_THE_SWAP */
 
 	thread_t        c_busy_for_thread;
+	uint32_t        c_agedin_ts;
 	uint32_t        c_swappedin_ts;
 
 	int             c_slot_var_array_len;

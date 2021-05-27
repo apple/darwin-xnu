@@ -437,7 +437,7 @@ audit_session_debug_callout(__unused proc_t p, __unused void *arg)
 static int
 audit_session_debug_filterfn(proc_t p, void *st)
 {
-	kauth_cred_t cred = p->p_ucred;
+	kauth_cred_t cred = kauth_cred_get();
 	auditinfo_addr_t *aia_p = cred->cr_audit.as_aia_p;
 	au_sentry_debug_t *sed_tab = (au_sentry_debug_t *) st;
 	au_sentry_debug_t  *sdtp;

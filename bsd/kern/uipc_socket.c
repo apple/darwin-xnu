@@ -2952,8 +2952,10 @@ soreceive_addr(struct proc *p, struct socket *so, struct sockaddr **psa,
 		SBLASTMBUFCHK(&so->so_rcv, "soreceive 1a");
 		socket_unlock(so, 0);
 
-		if (mac_socket_check_received(proc_ucred(p), so,
-		    mtod(m, struct sockaddr *)) != 0) {
+		error = mac_socket_check_received(kauth_cred_get(), so,
+		    mtod(m, struct sockaddr *));
+
+		if (error != 0) {
 			/*
 			 * MAC policy failure; free this record and
 			 * process the next record (or block until

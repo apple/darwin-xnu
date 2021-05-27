@@ -645,6 +645,8 @@ SYSCTL_INT(_net_inet6_ip6, IPV6CTL_RR_PRUNE,
     rr_prune, CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_rr_prune, 0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_USETEMPADDR,
     use_tempaddr, CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_use_tempaddr, 0, "");
+SYSCTL_INT(_net_inet6_ip6, IPV6CTL_ULA_USETEMPADDR,
+    ula_use_tempaddr, CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_ula_use_tempaddr, 0, "");
 SYSCTL_OID(_net_inet6_ip6, IPV6CTL_TEMPPLTIME, temppltime,
     CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_temp_preferred_lifetime, 0,
     sysctl_ip6_temppltime, "I", "");

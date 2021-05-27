@@ -1677,6 +1677,8 @@ memorystatus_do_kill(proc_t p, uint32_t cause, os_reason_t jetsam_reason, uint64
 	case kMemorystatusKilledPerProcessLimit:                        jetsam_flags |= P_JETSAM_PID; break;
 	case kMemorystatusKilledIdleExit:                                       jetsam_flags |= P_JETSAM_IDLEEXIT; break;
 	}
+	/* jetsam_do_kill drops a reference. */
+	os_reason_ref(jetsam_reason);
 	error = jetsam_do_kill(p, jetsam_flags, jetsam_reason);
 	*footprint_of_killed_proc = ((error == 0) ? footprint : 0);
 
@@ -1701,6 +1703,7 @@ memorystatus_do_kill(proc_t p, uint32_t cause, os_reason_t jetsam_reason, uint64
 	KERNEL_DEBUG_CONSTANT((BSDDBG_CODE(DBG_BSD_MEMSTAT, BSD_MEMSTAT_COMPACTOR_RUN)) | DBG_FUNC_END,
 	    victim_pid, cause, vm_page_free_count, 0, 0);
 
+	os_reason_free(jetsam_reason);
 	return error == 0;
 }
 

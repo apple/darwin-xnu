@@ -121,7 +121,7 @@ common_hook(void)
 	return rv;
 }
 
-#if (MAC_POLICY_OPS_VERSION != 74)
+#if (MAC_POLICY_OPS_VERSION != 75)
 # error "struct mac_policy_ops doesn't match definition in mac_policy.h"
 #endif
 /*
@@ -198,8 +198,9 @@ const static struct mac_policy_ops policy_ops = {
 	.mpo_reserved22 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved23 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved24 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved25 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved26 = (mpo_reserved_hook_t *)common_hook,
+
+	CHECK_SET_HOOK(necp_check_open)
+	CHECK_SET_HOOK(necp_check_client_action)
 
 	CHECK_SET_HOOK(file_check_library_validation)
 
@@ -211,8 +212,8 @@ const static struct mac_policy_ops policy_ops = {
 	CHECK_SET_HOOK(vnode_notify_setowner)
 	CHECK_SET_HOOK(vnode_notify_setutimes)
 	CHECK_SET_HOOK(vnode_notify_truncate)
+	CHECK_SET_HOOK(vnode_check_getattrlistbulk)
 
-	.mpo_reserved27 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved28 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved29 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved30 = (mpo_reserved_hook_t *)common_hook,
@@ -222,8 +223,8 @@ const static struct mac_policy_ops policy_ops = {
 	.mpo_reserved34 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved35 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved36 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved37 = (mpo_reserved_hook_t *)common_hook,
 
+	CHECK_SET_HOOK(mount_check_quotactl)
 	CHECK_SET_HOOK(mount_check_fsctl)
 	CHECK_SET_HOOK(mount_check_getattr)
 	CHECK_SET_HOOK(mount_check_label_update)
@@ -348,8 +349,10 @@ const static struct mac_policy_ops policy_ops = {
 	.mpo_reserved56 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved57 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved58 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved59 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved60 = (mpo_reserved_hook_t *)common_hook,
+
+	CHECK_SET_HOOK(proc_check_memorystatus_control)
+	CHECK_SET_HOOK(proc_check_work_interval_ctl)
+
 	.mpo_reserved61 = (mpo_reserved_hook_t *)common_hook,
 
 	CHECK_SET_HOOK(iokit_check_open_service)

@@ -2373,7 +2373,6 @@ nfs4_mount(
 
 	*npp = NULL;
 	fh.fh_len = dirfh.fh_len = 0;
-	lck_mtx_init(&nmp->nm_timer_lock, &nfs_mount_grp, LCK_ATTR_NULL);
 	TAILQ_INIT(&nmp->nm_open_owners);
 	TAILQ_INIT(&nmp->nm_delegations);
 	TAILQ_INIT(&nmp->nm_dreturnq);
@@ -5077,11 +5076,9 @@ nfs_mount_zombie(struct nfsmount *nmp, int nm_state_flags)
 
 	/* cancel any renew timer */
 	if ((nmp->nm_vers >= NFS_VER4) && nmp->nm_renew_timer) {
-		lck_mtx_lock(&nmp->nm_timer_lock);
 		thread_call_cancel(nmp->nm_renew_timer);
 		thread_call_free(nmp->nm_renew_timer);
 		nmp->nm_renew_timer = NULL;
-		lck_mtx_unlock(&nmp->nm_timer_lock);
 	}
 
 #endif
@@ -5301,12 +5298,6 @@ nfs_mount_cleanup(struct nfsmount *nmp)
 	if (nmp->nm_fh) {
 		NFS_ZFREE(nfs_fhandle_zone, nmp->nm_fh);
 	}
-
-#if CONFIG_NFS4
-	if (nmp->nm_vers >= NFS_VER4) {
-		lck_mtx_destroy(&nmp->nm_timer_lock, &nfs_mount_grp);
-	}
-#endif
 
 
 	NFS_ZFREE(nfsmnt_zone, nmp);

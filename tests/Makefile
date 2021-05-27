@@ -206,7 +206,7 @@ text_corruption_helper:
 	$(CC) $(LDFLAGS) $(CFLAGS) text_corruption_helper.c -lm -o $(SYMROOT)/$@;
 	env CODESIGN_ALLOCATE=$(CODESIGN_ALLOCATE) $(CODESIGN) --force --sign - --timestamp=none $(SYMROOT)/$@;
 
-install-text_corruption_helper:
+install-text_corruption_helper: text_corruption_helper
 	mkdir -p $(INSTALLDIR)
 	cp $(SYMROOT)/text_corruption_helper $(INSTALLDIR)/
 
@@ -445,6 +445,10 @@ ifneq ($(PLATFORM),iPhoneOS)
 	EXCLUDED_SOURCES += task_vm_info_decompressions.c
 endif
 
+ifneq ($(PLATFORM),iPhoneOS)
+	EXCLUDED_SOURCES += vm/compression_sweep.c
+endif
+
 socket_bind_35243417: CODE_SIGN_ENTITLEMENTS = network_entitlements.plist
 socket_bind_35685803: CODE_SIGN_ENTITLEMENTS = network_entitlements.plist
 
@@ -609,6 +613,23 @@ install-fault_throughput: fault_throughput
 
 BATS_PLISTS += $(SRCROOT)/vm/fault_throughput.plist
 
+ifeq ($(PLATFORM),MacOSX)
+mixed_pagesize: vm/mixed_pagesize.c
+	mkdir -p $(SYMROOT)/vm
+	$(CC) $(DT_CFLAGS) $(OTHER_CFLAGS) $(CFLAGS) $(DT_LDFLAGS) $(OTHER_LDFLAGS) $(LDFLAGS) $< -o $(SYMROOT)/vm/$@
+
+install-mixed_pagesize: mixed_pagesize
+	mkdir -p $(INSTALLDIR)/vm
+	cp $(SYMROOT)/vm/mixed_pagesize $(INSTALLDIR)/vm/
+
+BATS_PLISTS += $(SRCROOT)/vm/mixed_pagesize.plist
+
+EXCLUDED_SOURCES += vm/mixed_pagesize.c vm/mixed_pagesize.plist
+CUSTOM_TARGETS += mixed_pagesize
+else
+EXCLUDED_SOURCES += vm/mixed_pagesize.c vm/mixed_pagesize.plist
+endif
+
 fault_throughput_benchrun:
 	mkdir -p $(SYMROOT)/vm
 	cp $(SRCROOT)/vm/fault_throughput.lua $(SYMROOT)/vm/fault_throughput.lua
@@ -697,10 +718,9 @@ endif
 
 INCLUDED_TEST_SOURCE_DIRS += lockf_uaf_poc
 
-include $(DEVELOPER_DIR)/AppleInternal/Makefiles/darwintest/Makefile.targets
-
 trial_experiments: CODE_SIGN_ENTITLEMENTS = trial_experiments.entitlements
 trial_experiments: OTHER_CFLAGS += -DENTITLED=1 test_utils.c drop_priv.c
+trial_experiments: OTHER_LDFLAGS += -ldarwintest_utils
 trial_experiments: trial_experiments.c
 	$(CC) $(DT_CFLAGS) $(OTHER_CFLAGS) $(CFLAGS) $(DT_LDFLAGS) $(OTHER_LDFLAGS) $(LDFLAGS) $< -o $(SYMROOT)/$@
 	env CODESIGN_ALLOCATE=$(CODESIGN_ALLOCATE) $(CODESIGN) --force --sign - --timestamp=none --entitlements $(CODE_SIGN_ENTITLEMENTS) $(SYMROOT)/$@;
@@ -708,3 +728,18 @@ trial_experiments: trial_experiments.c
 trial_experiments_unentitled: OTHER_CFLAGS += drop_priv.c test_utils.c
 trial_experiments_unentitled: trial_experiments.c
 	$(CC) $(DT_CFLAGS) $(OTHER_CFLAGS) $(CFLAGS) $(DT_LDFLAGS) $(OTHER_LDFLAGS) $(LDFLAGS) $< -o $(SYMROOT)/$@
+	env CODESIGN_ALLOCATE=$(CODESIGN_ALLOCATE) $(CODESIGN) --force --sign - --timestamp=none $(SYMROOT)/$@;
+
+CUSTOM_TARGETS += print_apple_array
+print_apple_array: print_apple_array.c
+	$(CC) $(DT_CFLAGS) -I $(OBJROOT) $(CFLAGS) $(DT_LDFLAGS) $(OTHER_LDFLAGS) $(LDFLAGS) print_apple_array.c -o $(SYMROOT)/print_apple_array
+	env CODESIGN_ALLOCATE=$(CODESIGN_ALLOCATE) $(CODESIGN) --force --sign - --timestamp=none $(SYMROOT)/$@;
+
+install-print_apple_array: print_apple_array
+	mkdir -p $(INSTALLDIR)/tools
+	cp $(SYMROOT)/print_apple_array $(INSTALLDIR)/tools/
+
+OTHER_TEST_TARGETS += trial_experiments trial_experiments_unentitled
+
+include $(DEVELOPER_DIR)/AppleInternal/Makefiles/darwintest/Makefile.targets
+

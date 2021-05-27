@@ -456,6 +456,7 @@ extern pmap_paddr_t pmap_find_pa(pmap_t map, addr64_t va);
 extern pmap_paddr_t pmap_find_pa_nofault(pmap_t map, addr64_t va);
 extern ppnum_t pmap_find_phys(pmap_t map, addr64_t va);
 extern ppnum_t pmap_find_phys_nofault(pmap_t map, addr64_t va);
+extern void pmap_switch_user(thread_t th, vm_map_t map);
 extern void pmap_set_pmap(pmap_t pmap, thread_t thread);
 extern void pmap_collect(pmap_t pmap);
 extern  void pmap_gc(void);
@@ -468,10 +469,7 @@ extern void * pmap_auth_user_ptr(void *value, ptrauth_key key, uint64_t data, ui
  * Interfaces implemented as macros.
  */
 
-#define PMAP_SWITCH_USER(th, new_map, my_cpu) {                         \
-	th->map = new_map;                                                                              \
-	pmap_set_pmap(vm_map_pmap(new_map), th);                                \
-}
+#define PMAP_SWITCH_USER(th, new_map, my_cpu) pmap_switch_user((th), (new_map))
 
 #define pmap_kernel()                                                                           \
 	(kernel_pmap)
@@ -512,6 +510,7 @@ extern vm_map_address_t phystokv_range(pmap_paddr_t pa, vm_size_t *max_len);
 extern vm_map_address_t pmap_map(vm_map_address_t va, vm_offset_t sa, vm_offset_t ea, vm_prot_t prot, unsigned int flags);
 extern vm_map_address_t pmap_map_high_window_bd( vm_offset_t pa, vm_size_t len, vm_prot_t prot);
 extern kern_return_t pmap_map_block(pmap_t pmap, addr64_t va, ppnum_t pa, uint32_t size, vm_prot_t prot, int attr, unsigned int flags);
+extern kern_return_t pmap_map_block_addr(pmap_t pmap, addr64_t va, pmap_paddr_t pa, uint32_t size, vm_prot_t prot, int attr, unsigned int flags);
 extern void pmap_map_globals(void);
 
 #define PMAP_MAP_BD_DEVICE                    0x0

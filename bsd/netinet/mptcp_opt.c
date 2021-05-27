@@ -463,13 +463,12 @@ mptcp_setup_opts(struct tcpcb *tp, int32_t off, u_char *opt,
 		send_64bit_ack = TRUE;
 	}
 
-#define CHECK_OPTLEN    {                                                       \
-	if ((MAX_TCPOPTLEN - optlen) < dssoptlen) {                             \
-	        mptcplog((LOG_ERR, "%s: dssoptlen %d optlen %d \n", __func__,   \
-	            dssoptlen, optlen),                                         \
-	            MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);                        \
-	        goto ret_optlen;                                                \
-	}                                                                       \
+#define CHECK_OPTLEN    {                                                                   \
+	if ((MAX_TCPOPTLEN - optlen) < dssoptlen) {                                         \
+	        os_log_error(mptcp_log_handle, "%s: dssoptlen %d optlen %d \n", __func__,   \
+	            dssoptlen, optlen);                                                     \
+	            goto ret_optlen;                                                        \
+	}                                                                                   \
 }
 
 #define DO_FIN(dsn_opt) {                                               \
@@ -483,16 +482,15 @@ mptcp_setup_opts(struct tcpcb *tp, int32_t off, u_char *opt,
 	}                                                               \
 }
 
-#define CHECK_DATALEN {                                                 \
-	/* MPTCP socket does not support IP options */                  \
-	if ((len + optlen + dssoptlen) > tp->t_maxopd) {                \
-	        mptcplog((LOG_ERR, "%s: nosp %d len %d opt %d %d %d\n", \
-	            __func__, len, dssoptlen, optlen,                   \
-	            tp->t_maxseg, tp->t_maxopd),                        \
-	            MPTCP_SOCKET_DBG, MPTCP_LOGLVL_ERR);                \
-	/* remove option length from payload len */             \
-	        len = tp->t_maxopd - optlen - dssoptlen;                \
-	}                                                               \
+#define CHECK_DATALEN {                                                             \
+	/* MPTCP socket does not support IP options */                              \
+	if ((len + optlen + dssoptlen) > tp->t_maxopd) {                            \
+	        os_log_error(mptcp_log_handle, "%s: nosp %d len %d opt %d %d %d\n", \
+	            __func__, len, dssoptlen, optlen,                               \
+	            tp->t_maxseg, tp->t_maxopd);                                    \
+	/* remove option length from payload len */                         \
+	        len = tp->t_maxopd - optlen - dssoptlen;                            \
+	}                                                                           \
 }
 
 	if ((tp->t_mpflags & TMPF_SEND_DSN) &&

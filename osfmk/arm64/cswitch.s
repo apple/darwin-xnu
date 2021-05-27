@@ -28,6 +28,7 @@
 #include <machine/asm.h>
 #include <arm64/machine_machdep.h>
 #include <arm64/machine_routines_asm.h>
+#include <arm64/pac_asm.h>
 #include <arm64/proc_reg.h>
 #include "assym.s"
 
@@ -171,6 +172,9 @@
 #endif /* DEBUG || DEVELOPMENT */
 .endmacro
 
+#define CSWITCH_ROP_KEYS	(HAS_APPLE_PAC && HAS_PARAVIRTUALIZED_PAC)
+#define CSWITCH_JOP_KEYS	(HAS_APPLE_PAC && HAS_PARAVIRTUALIZED_PAC)
+
 /*
  * set_process_dependent_keys_and_sync_context
  *
@@ -204,20 +208,32 @@
 #if CSWITCH_ROP_KEYS
 	ldr		\new_key, [\thread, TH_ROP_PID]
 	REPROGRAM_ROP_KEYS	Lskip_rop_keys_\@, \new_key, \cpudatap, \tmp_key
+#if HAS_PARAVIRTUALIZED_PAC
+	/* xnu hypervisor guarantees context synchronization during guest re-entry */
+	mov		\wsync, #0
+#else
 	mov		\wsync, #1
+#endif
 Lskip_rop_keys_\@:
 #endif /* CSWITCH_ROP_KEYS */
 
 #if CSWITCH_JOP_KEYS
 	ldr		\new_key, [\thread, TH_JOP_PID]
 	REPROGRAM_JOP_KEYS	Lskip_jop_keys_\@, \new_key, \cpudatap, \tmp_key
+#if HAS_PARAVIRTUALIZED_PAC
+	mov		\wsync, #0
+#else
 	mov		\wsync, #1
+#endif
 Lskip_jop_keys_\@:
 #endif /* CSWITCH_JOP_KEYS */
 
 	cbz		\wsync, 1f
 	isb 	sy
 
+#if HAS_PARAVIRTUALIZED_PAC
+1:	/* guests need to clear the sync flag even after skipping the isb, in case they synced via hvc instead */
+#endif
 #if defined(__ARM_ARCH_8_5__)
 	strb	wzr, [\cpudatap, CPU_SYNC_ON_CSWITCH]
 #endif

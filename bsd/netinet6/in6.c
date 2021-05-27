@@ -1770,7 +1770,9 @@ in6ctl_aifaddr(struct ifnet *ifp, struct in6_aliasreq *ifra)
 		 */
 		if ((ia->ia6_flags & IN6_IFF_AUTOCONF) != 0 &&
 		    ip6_use_tempaddr &&
-		    pr->ndpr_addrcnt == 1) {
+		    pr->ndpr_addrcnt == 1 &&
+		    (!IN6_IS_ADDR_UNIQUE_LOCAL(&ia->ia_addr.sin6_addr)
+		    || ip6_ula_use_tempaddr)) {
 			addtmp = true;
 		}
 		NDPR_UNLOCK(pr);

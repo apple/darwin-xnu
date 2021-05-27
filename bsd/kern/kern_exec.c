@@ -81,6 +81,7 @@
 #include <machine/reg.h>
 #include <machine/cpu_capabilities.h>
 
+#include <sys/cdefs.h>
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/filedesc.h>
@@ -102,6 +103,7 @@
 #include <sys/signal.h>
 #include <sys/aio_kern.h>
 #include <sys/sysproto.h>
+#include <sys/sysctl.h>
 #include <sys/persona.h>
 #include <sys/reason.h>
 #if SYSV_SHM
@@ -160,6 +162,7 @@
 #include <vm/vm_kern.h>
 #include <vm/vm_fault.h>
 #include <vm/vm_pageout.h>
+#include <vm/pmap.h>
 
 #include <kdp/kdp_dyld.h>
 
@@ -173,6 +176,7 @@
 #endif
 
 #include <IOKit/IOBSD.h>
+#include <IOKit/IOPlatformExpert.h>
 
 extern boolean_t vm_darkwake_mode;
 
@@ -2928,6 +2932,7 @@ proc_apply_jit_and_jumbo_va_policies(proc_t p, task_t task)
 		vm_map_set_jumbo(get_task_map(task));
 		if (jit_entitled) {
 			vm_map_set_jit_entitled(get_task_map(task));
+
 		}
 	}
 }
@@ -5393,6 +5398,10 @@ bad:
  * System malloc engages nanozone for UIAPP.
  */
 #define NANO_ENGAGE_KEY "MallocNanoZone=1"
+/*
+ * Used to pass experiment flags up to libmalloc.
+ */
+#define LIBMALLOC_EXPERIMENT_FACTORS_KEY "MallocExperiment="
 
 #define PFZ_KEY "pfz="
 extern user32_addr_t commpage_text32_location;
@@ -5419,6 +5428,10 @@ extern uuid_string_t bootsessionuuid_string;
 
 #define HEX_STR_LEN 18 // 64-bit hex value "0x0123456701234567"
 #define HEX_STR_LEN32 10 // 32-bit hex value "0x01234567"
+
+#if XNU_TARGET_OS_OSX && _POSIX_SPAWN_FORCE_4K_PAGES && PMAP_CREATE_FORCE_4K_PAGES
+#define VM_FORCE_4K_PAGES_KEY "vm_force_4k_pages=1"
+#endif /* XNU_TARGET_OS_OSX && _POSIX_SPAWN_FORCE_4K_PAGES && PMAP_CREATE_FORCE_4K_PAGES */
 
 static int
 exec_add_entropy_key(struct image_params *imgp,
@@ -5466,6 +5479,8 @@ is_arm64e_running_as_arm64(const struct image_params *imgp)
 }
 #endif /* __has_feature(ptrauth_calls) */
 
+_Atomic uint64_t libmalloc_experiment_factors = 0;
+
 static int
 exec_add_apple_strings(struct image_params *imgp,
     const load_result_t *load_result)
@@ -5474,6 +5489,7 @@ exec_add_apple_strings(struct image_params *imgp,
 	int img_ptr_size = (imgp->ip_flags & IMGPF_IS_64BIT_ADDR) ? 8 : 4;
 	thread_t new_thread;
 	ipc_port_t sright;
+	uint64_t local_experiment_factors = 0;
 
 	/* exec_save_path stored the first string */
 	imgp->ip_applec = 1;
@@ -5695,6 +5711,42 @@ exec_add_apple_strings(struct image_params *imgp,
 
 		error = exec_add_user_string(imgp, CAST_USER_ADDR_T(port_name_hex_str), UIO_SYSSPACE, FALSE);
 		if (error) {
+			goto bad;
+		}
+		imgp->ip_applec++;
+	}
+
+#if XNU_TARGET_OS_OSX && _POSIX_SPAWN_FORCE_4K_PAGES && PMAP_CREATE_FORCE_4K_PAGES
+	if (imgp->ip_px_sa != NULL) {
+		struct _posix_spawnattr* psa = (struct _posix_spawnattr *) imgp->ip_px_sa;
+		if (psa->psa_flags & _POSIX_SPAWN_FORCE_4K_PAGES) {
+			const char *vm_force_4k_string = VM_FORCE_4K_PAGES_KEY;
+			error = exec_add_user_string(imgp, CAST_USER_ADDR_T(vm_force_4k_string), UIO_SYSSPACE, FALSE);
+			if (error) {
+				goto bad;
+			}
+			imgp->ip_applec++;
+		}
+	}
+#endif /* XNU_TARGET_OS_OSX && _POSIX_SPAWN_FORCE_4K_PAGES && PMAP_CREATE_FORCE_4K_PAGES */
+
+	/* adding the libmalloc experiment string */
+	local_experiment_factors = os_atomic_load_wide(&libmalloc_experiment_factors, relaxed);
+	if (__improbable(local_experiment_factors != 0)) {
+		char libmalloc_experiment_factors_string[strlen(LIBMALLOC_EXPERIMENT_FACTORS_KEY) + HEX_STR_LEN + 1];
+
+		snprintf(
+			libmalloc_experiment_factors_string,
+			sizeof(libmalloc_experiment_factors_string),
+			LIBMALLOC_EXPERIMENT_FACTORS_KEY "0x%llx",
+			local_experiment_factors);
+		error = exec_add_user_string(
+			imgp,
+			CAST_USER_ADDR_T(libmalloc_experiment_factors_string),
+			UIO_SYSSPACE,
+			FALSE);
+		if (error) {
+			printf("Failed to add the libmalloc experiment factors string with error %d\n", error);
 			goto bad;
 		}
 		imgp->ip_applec++;
@@ -7214,3 +7266,26 @@ exec_prefault_data(proc_t p __unused, struct image_params *imgp, load_result_t *
 		}
 	}
 }
+
+static int
+sysctl_libmalloc_experiments SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg2, req)
+	int changed;
+	errno_t error;
+	uint64_t value = os_atomic_load_wide(&libmalloc_experiment_factors, relaxed);
+
+	error = sysctl_io_number(req, value, sizeof(value), &value, &changed);
+	if (error) {
+		return error;
+	}
+
+	if (changed) {
+		os_atomic_store_wide(&libmalloc_experiment_factors, value, relaxed);
+	}
+
+	return 0;
+}
+
+EXPERIMENT_FACTOR_PROC(_kern, libmalloc_experiments, CTLTYPE_QUAD | CTLFLAG_RW, 0, 0, &sysctl_libmalloc_experiments, "A", "");
+

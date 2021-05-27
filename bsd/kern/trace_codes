@@ -1150,6 +1150,9 @@
 0x313016C	VFS_label_associate_fdesc
 0x3130170	VFS_mount_check_snapshot_mount
 0x3130174	VFS_check_supplemental_signature
+0x3130178	VFS_notify_reclaim
+0x313017C	VFS_mount_check_quotactl
+0x3130180	VFS_check_getattrlistbulk
 0X3134000	VFS_io_compression_stats
 0x3CF0000	CP_OFFSET_IO
 0x4010004	proc_exit
