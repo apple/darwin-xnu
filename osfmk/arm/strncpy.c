@@ -30,7 +30,7 @@
 
 #undef strncpy
 char *
-strncpy(char * dst, const char * src, size_t maxlen)
+strncpy(char *restrict dst, const char *restrict src, size_t maxlen)
 {
 	const size_t srclen = strnlen(src, maxlen);
 	if (srclen < maxlen) {

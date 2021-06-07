@@ -281,7 +281,7 @@ strchr(const char *s, int c)
 	}
 
 	do {
-		if (*s == c) {
+		if (*s == (char)c) {
 			return __CAST_AWAY_QUALIFIER(s, const, char *);
 		}
 	} while (*s++);
@@ -299,7 +299,7 @@ strrchr(const char *s, int c)
 	}
 
 	do {
-		if (*s == c) {
+		if (*s == (char)c) {
 			found = s;
 		}
 	} while (*s++);
@@ -318,8 +318,8 @@ strrchr(const char *s, int c)
  */
 char *
 strcpy(
-	char *to,
-	const char *from)
+	char * restrict to,
+	const char * restrict from)
 {
 	char *ret = to;
 
@@ -345,22 +345,26 @@ strcpy(
 #undef strncpy
 char *
 strncpy(
-	char *s1,
-	const char *s2,
+	char * restrict s1,
+	const char * restrict s2,
 	size_t n)
 {
-	char *os1 = s1;
+	char * const os1 = s1;
 	unsigned long i;
 
-	for (i = 0; i < n;) {
-		if ((*s1++ = *s2++) == '\0') {
-			for (i++; i < n; i++) {
-				*s1++ = '\0';
-			}
-		} else {
-			i++;
-		}
+	do {
+
+		if (n == 0)
+			return os1;
+		n--;
+
+ 	} while ((*s1++ = *s2++) != '\0');
+
+	while (n != 0) {
+		*s1++ = '\0';
+		n--;
 	}
+
 	return os1;
 }
 #endif // #ifndef __arm__
@@ -457,10 +461,10 @@ itoa(
  */
 char *
 strcat(
-	char *dest,
-	const char *src)
+	char *restrict dest,
+	const char *restrict src)
 {
-	char *old = dest;
+	char * const old = dest;
 
 	while (*dest) {
 		++dest;
@@ -481,33 +485,33 @@ strcat(
  */
 #undef strlcat
 size_t
-strlcat(char *dst, const char *src, size_t siz)
+strlcat(char *restrict dst, const char *restrict src, size_t siz)
 {
-	char *d = dst;
-	const char *s = src;
-	size_t n = siz;
+	char * const d = dst;
+	const char * const s = src;
+	size_t n;
 	size_t dlen;
 
 	/* Find the end of dst and adjust bytes left but don't go past end */
-	while (n-- != 0 && *d != '\0') {
-		d++;
+	for (n = siz; n != 0 && *dst != '\0'; n--) {
+		dst++;
 	}
-	dlen = d - dst;
+	dlen = dst - d;
 	n = siz - dlen;
 
 	if (n == 0) {
-		return dlen + strlen(s);
+		return dlen + strlen(src);
 	}
-	while (*s != '\0') {
+	while (*src != '\0') {
 		if (n != 1) {
-			*d++ = *s;
+			*dst++ = *src;
 			n--;
 		}
-		s++;
+		src++;
 	}
-	*d = '\0';
+	*dst = '\0';
 
-	return dlen + (s - src);       /* count does not include NUL */
+	return dlen + (src - s);       /* count does not include NUL */
 }
 
 /*
@@ -520,32 +524,32 @@ strlcat(char *dst, const char *src, size_t siz)
 // ARM and ARM64 implementation in ../arm/strlcpy.c
 #undef strlcpy
 size_t
-strlcpy(char *dst, const char *src, size_t siz)
+strlcpy(char *restrict dst, const char *restrict src, size_t siz)
 {
-	char *d = dst;
-	const char *s = src;
-	size_t n = siz;
+	char * const oldd = dst;
+	const char * const olds = src;
+	const size_t n = siz;
 
 	/* Copy as many bytes as will fit */
-	if (n != 0 && --n != 0) {
-		do {
-			if ((*d++ = *s++) == 0) {
+	if (siz != 0 && --siz != 0) {
+		while (--siz != 0) {
+			if ((*dst++ = *src++) == 0) {
 				break;
 			}
-		} while (--n != 0);
+		}
 	}
 
 	/* Not enough room in dst, add NUL and traverse rest of src */
-	if (n == 0) {
-		if (siz != 0) {
-			*d = '\0';              /* NUL-terminate dst */
+	if (siz == 0) {
+		if (n != 0) {
+			*dst = '\0';           /* NUL-terminate dst */
 		}
-		while (*s++) {
+		while (*src++) {
 			;
 		}
 	}
 
-	return s - src - 1;    /* count does not include NUL */
+	return src - olds - 1;    /* count does not include NUL */
 }
 #endif
 
@@ -630,11 +634,11 @@ strnstr(const char *s, const char *find, size_t slen)
 	return s;
 }
 
-void * __memcpy_chk(void *dst, void const *src, size_t s, size_t chk_size);
+void * __memcpy_chk(void *restrict dst, void const *restrict src, size_t s, size_t chk_size);
 void * __memmove_chk(void *dst, void const *src, size_t s, size_t chk_size);
 void * __memset_chk(void *dst, int c, size_t s, size_t chk_size);
-size_t __strlcpy_chk(char *dst, char const *src, size_t s, size_t chk_size);
-size_t __strlcat_chk(char *dst, char const *src, size_t s, size_t chk_size);
+size_t __strlcpy_chk(char *restrict dst, char const *restrict src, size_t s, size_t chk_size);
+size_t __strlcat_chk(char *restricr dst, char const *restrict src, size_t s, size_t chk_size);
 char * __strncpy_chk(char *restrict dst, char *restrict src, size_t len, size_t chk_size);
 char * __strncat_chk(char *restrict dst, const char *restrict src, size_t len, size_t chk_size);
 char * __strcpy_chk(char *restrict dst, const char *restrict src, size_t chk_size);
@@ -642,7 +646,7 @@ char * __strcat_chk(char *restrict dst, const char *restrict src, size_t chk_siz
 
 MARK_AS_HIBERNATE_TEXT
 void *
-__memcpy_chk(void *dst, void const *src, size_t s, size_t chk_size)
+__memcpy_chk(void *restrict dst, void const *restrict src, size_t s, size_t chk_size)
 {
 	if (__improbable(chk_size < s)) {
 		panic("__memcpy_chk object size check failed: dst %p, src %p, (%zu < %zu)", dst, src, chk_size, s);
@@ -670,7 +674,7 @@ __memset_chk(void *dst, int c, size_t s, size_t chk_size)
 }
 
 size_t
-__strlcat_chk(char *dst, char const *src, size_t s, size_t chk_size)
+__strlcat_chk(char *restrict dst, char const *restrict src, size_t s, size_t chk_size)
 {
 	if (__improbable(chk_size < s)) {
 		panic("__strlcat_chk object size check failed: dst %p, src %p, (%zu < %zu)", dst, src, chk_size, s);
@@ -679,7 +683,7 @@ __strlcat_chk(char *dst, char const *src, size_t s, size_t chk_size)
 }
 
 size_t
-__strlcpy_chk(char *dst, char const *src, size_t s, size_t chk_size)
+__strlcpy_chk(char *restrict dst, char const *restrict src, size_t s, size_t chk_size)
 {
 	if (__improbable(chk_size < s)) {
 		panic("__strlcpy_chk object size check failed: dst %p, src %p, (%zu < %zu)", dst, src, chk_size, s);
