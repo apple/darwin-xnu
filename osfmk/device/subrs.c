@@ -528,10 +528,10 @@ strlcpy(char *restrict dst, const char *restrict src, size_t siz)
 {
 	char * const oldd = dst;
 	const char * const olds = src;
-	const size_t n = siz;
+	const size_t oldsiz = siz;
 
 	/* Copy as many bytes as will fit */
-	if (siz != 0 && --siz != 0) {
+	if (siz != 0) {
 		while (--siz != 0) {
 			if ((*dst++ = *src++) == 0) {
 				break;
@@ -541,7 +541,7 @@ strlcpy(char *restrict dst, const char *restrict src, size_t siz)
 
 	/* Not enough room in dst, add NUL and traverse rest of src */
 	if (siz == 0) {
-		if (n != 0) {
+		if (oldsiz != 0) {
 			*dst = '\0';           /* NUL-terminate dst */
 		}
 		while (*src++) {
