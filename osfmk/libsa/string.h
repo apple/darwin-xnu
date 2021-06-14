@@ -64,7 +64,7 @@ extern "C" {
 #endif
 #endif
 
-extern void     *memcpy(void * restrict, const void * restrict, size_t);
+extern void     *memcpy(void *restrict, const void *restrict, size_t);
 extern int      memcmp(const void *, const void *, size_t);
 extern void     *memmove(void *, const void *, size_t);
 extern void     *memset(void *, int, size_t);
@@ -83,23 +83,23 @@ extern size_t   strnlen(const char *, size_t);
 
 /* strcpy() and strncpy() are deprecated. Please use strlcpy() instead. */
 __kpi_deprecated_arm64_macos_unavailable
-extern char     *strcpy(char * restrict, const char * restrict) __deprecated;
+extern char     *strcpy(char *restrict, const char *restrict) __deprecated;
 
 __kpi_deprecated_arm64_macos_unavailable
-extern char     *strncpy(char * restrict, const char * restrict, size_t);
+extern char     *strncpy(char *restrict, const char *restrict, size_t);
 
 /* strcat() and strncat() are deprecated. Please use strlcat() instead. */
 __kpi_deprecated_arm64_macos_unavailable
-extern char     *strcat(char * restrict, const char * restrict) __deprecated;
+extern char     *strcat(char *restrict, const char *restrict) __deprecated;
 
 __kpi_deprecated_arm64_macos_unavailable
-extern char     *strncat(char * restrict, const char * restrict, size_t);
+extern char     *strncat(char *restrict, const char *restrict, size_t);
 
 extern int      strcmp(const char *, const char *);
 extern int      strncmp(const char *, const char *, size_t);
 
-extern size_t   strlcpy(char * restrict, const char * restrict, size_t);
-extern size_t   strlcat(char * restrict, const char * restrict, size_t);
+extern size_t   strlcpy(char *restrict, const char *restrict, size_t);
+extern size_t   strlcat(char *restrict, const char *restrict, size_t);
 
 extern int      strcasecmp(const char *s1, const char *s2);
 extern int      strncasecmp(const char *s1, const char *s2, size_t n);
@@ -133,7 +133,7 @@ extern int      timingsafe_bcmp(const void *b1, const void *b2, size_t n);
 
 /* __nochk_ functions for opting out of type 1 bounds checking */
 __attribute__((always_inline)) static inline void *
-__nochk_memcpy(void * restrict dest, const void * restrict src, size_t len)
+__nochk_memcpy(void *restrict dest, const void *restrict src, size_t len)
 {
 	return __builtin___memcpy_chk(dest, src, len, XNU_BOS(dest, 0));
 }

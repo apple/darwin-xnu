@@ -175,19 +175,13 @@ strcmp(
 	const char *s1,
 	const char *s2)
 {
-	unsigned int a, b;
+	while (*s1 == *s2) {
+		if (*s1 == '\0')
+			return 0;
+		s1++, s2++;
+	}
 
-	do {
-		a = *s1++;
-		b = *s2++;
-		if (a != b) {
-			return a - b;     /* includes case when
-			                   *  'a' is zero and 'b' is not zero
-			                   *  or vice versa */
-		}
-	} while (a != '\0');
-
-	return 0;       /* both are zero */
+	return (*(const unsigned char *)s1 - *(const unsigned char *)s2);
 }
 
 /*
@@ -206,20 +200,17 @@ strncmp(
 	const char *s2,
 	size_t n)
 {
-	unsigned int a, b;
-
-	while (n != 0) {
-		a = *s1++;
-		b = *s2++;
-		if (a != b) {
-			return a - b;     /* includes case when
-			                   *  'a' is zero and 'b' is not zero
+	for (; n != 0; n--) {
+		if (*s1 != *s2) {
+			return *(const unsigned char *)s1 - *(const unsigned char *)s2;     
+			                  /* includes case when
+			                   *  '*s1' is zero and '*s2' is not zero
 			                   *  or vice versa */
 		}
-		if (a == '\0') {
+		if (*s1 == '\0') {
 			return 0;       /* both are zero */
 		}
-		n--;
+		s1++, s2++;
 	}
 
 	return 0;
@@ -246,12 +237,14 @@ strcasecmp(const char *s1, const char *s2)
 	const unsigned char *us1 = (const u_char *)s1,
 	    *us2 = (const u_char *)s2;
 
-	while (tolower(*us1) == tolower(*us2++)) {
-		if (*us1++ == '\0') {
+	while (tolower(*us1) == tolower(*us2)) {
+		if (*us1 == '\0') {
 			return 0;
 		}
+		us1++, us2++;
 	}
-	return tolower(*us1) - tolower(*--us2);
+
+	return tolower(*us1) - tolower(*us2);
 }
 
 int
@@ -262,12 +255,13 @@ strncasecmp(const char *s1, const char *s2, size_t n)
 		    *us2 = (const u_char *)s2;
 
 		do {
-			if (tolower(*us1) != tolower(*us2++)) {
-				return tolower(*us1) - tolower(*--us2);
+			if (tolower(*us1) != tolower(*us2)) {
+				return tolower(*us1) - tolower(*us2);
 			}
-			if (*us1++ == '\0') {
+			if (*us1 == '\0') {
 				break;
 			}
+			us1++, us2++;
 		} while (--n != 0);
 	}
 	return 0;
@@ -323,8 +317,8 @@ strcpy(
 {
 	char *ret = to;
 
-	while ((*to++ = *from++) != '\0') {
-		continue;
+	while ((*to = *from) != '\0') {
+		to++, from++;
 	}
 
 	return ret;
@@ -349,23 +343,22 @@ strncpy(
 	const char * restrict s2,
 	size_t n)
 {
-	char * const os1 = s1;
-	unsigned long i;
+	if (n != 0) {
+		char *d = s1;
 
-	do {
+		do {
+			if ((*d = *s2) == '\0') {
+				/* NUL pad the remaining n-1 bytes */
+				while (--n != 0)
+					*++d = '\0';
+				break;
+			}
 
-		if (n == 0)
-			return os1;
-		n--;
-
- 	} while ((*s1++ = *s2++) != '\0');
-
-	while (n != 0) {
-		*s1++ = '\0';
-		n--;
+			d++, s2++;
+		} while (--n != 0);
 	}
 
-	return os1;
+	return s1;
 }
 #endif // #ifndef __arm__
 
@@ -409,12 +402,14 @@ atoi(const char *cp)
 size_t
 strnlen(const char *s, size_t max)
 {
-	const char *es = s + max, *p = s;
-	while (*p && p != es) {
-		p++;
+
+	const char const *p = s;
+	const char *es = s + max;
+	while (*s && s != es) {
+		s++;
 	}
 
-	return p - s;
+	return s - p;
 }
 #endif // #ifndef __arm__
 
@@ -449,7 +444,7 @@ itoa(
 			*cp++ = *--dp;
 		}
 	}
-	*cp++ = '\0';
+	*cp = '\0';
 
 	return str;
 }
@@ -469,8 +464,8 @@ strcat(
 	while (*dest) {
 		++dest;
 	}
-	while ((*dest++ = *src++)) {
-		;
+	while ((*dest = *src) != '\0') {
+		++dest, ++src;
 	}
 	return old;
 }
@@ -583,10 +578,9 @@ strlcpy(char *restrict dst, const char *restrict src, size_t siz)
 char *
 STRDUP(const char *string, int type)
 {
-	size_t len;
 	char *copy;
 
-	len = strlen(string) + 1;
+	const size_t len = strlen(string) + 1;
 	MALLOC(copy, char *, len, type, M_WAITOK);
 	if (copy == NULL) {
 		return NULL;
@@ -617,13 +611,19 @@ strnstr(const char *s, const char *find, size_t slen)
 	char c, sc;
 	size_t len;
 
-	if ((c = *find++) != '\0') {
+	if (slen == 0)
+		return NULL;
+
+	if ((c = *find) != '\0') {
+		find++;
 		len = strlen(find);
 		do {
 			do {
-				if ((sc = *s++) == '\0' || slen-- < 1) {
+				if (slen < len || (sc = *s) == '\0') {
 					return NULL;
 				}
+
+				slen--, s++;
 			} while (sc != c);
 			if (len > slen) {
 				return NULL;
@@ -638,7 +638,7 @@ void * __memcpy_chk(void *restrict dst, void const *restrict src, size_t s, size
 void * __memmove_chk(void *dst, void const *src, size_t s, size_t chk_size);
 void * __memset_chk(void *dst, int c, size_t s, size_t chk_size);
 size_t __strlcpy_chk(char *restrict dst, char const *restrict src, size_t s, size_t chk_size);
-size_t __strlcat_chk(char *restricr dst, char const *restrict src, size_t s, size_t chk_size);
+size_t __strlcat_chk(char *restrict dst, char const *restrict src, size_t s, size_t chk_size);
 char * __strncpy_chk(char *restrict dst, char *restrict src, size_t len, size_t chk_size);
 char * __strncat_chk(char *restrict dst, const char *restrict src, size_t len, size_t chk_size);
 char * __strcpy_chk(char *restrict dst, const char *restrict src, size_t chk_size);

@@ -30,7 +30,7 @@
 
 #undef strlcpy
 size_t
-strlcpy(char * restrict dst, const char * restrict src, size_t maxlen)
+strlcpy(char *restrict dst, const char *restrict src, size_t maxlen)
 {
 	const size_t srclen = strlen(src);
 	if (srclen + 1 < maxlen) {
