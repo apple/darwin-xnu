@@ -181,7 +181,7 @@ strcmp(
 		s1++, s2++;
 	}
 
-	return (*(const unsigned char *)s1 - *(const unsigned char *)s2);
+	return *(const unsigned char *)s1 - *(const unsigned char *)s2;
 }
 
 /*
@@ -221,7 +221,7 @@ strncmp(
 //
 // Lame implementation just for use by strcasecmp/strncasecmp
 //
-static int
+static unsigned char
 tolower(unsigned char ch)
 {
 	if (ch >= 'A' && ch <= 'Z') {
@@ -237,14 +237,16 @@ strcasecmp(const char *s1, const char *s2)
 	const unsigned char *us1 = (const u_char *)s1,
 	    *us2 = (const u_char *)s2;
 
-	while (tolower(*us1) == tolower(*us2)) {
-		if (*us1 == '\0') {
+	unsigned char u1, u2;
+
+	while ((u1 = tolower(*us1)) == (u2 = tolower(*us2))) {
+		if (u1 == '\0') {
 			return 0;
 		}
 		us1++, us2++;
 	}
 
-	return tolower(*us1) - tolower(*us2);
+	return u1 - u2;
 }
 
 int
@@ -254,11 +256,13 @@ strncasecmp(const char *s1, const char *s2, size_t n)
 		const unsigned char *us1 = (const u_char *)s1,
 		    *us2 = (const u_char *)s2;
 
+		unsigned char u1, u2;
+
 		do {
-			if (tolower(*us1) != tolower(*us2)) {
-				return tolower(*us1) - tolower(*us2);
+			if ((u1 = tolower(*us1)) != (u2 = tolower(*us2))) {
+				return u1 - u2;
 			}
-			if (*us1 == '\0') {
+			if (u1 == '\0') {
 				break;
 			}
 			us1++, us2++;
@@ -315,10 +319,10 @@ strcpy(
 	char * restrict to,
 	const char * restrict from)
 {
-	char *ret = to;
+	char * const ret = to;
 
 	while ((*to = *from) != '\0') {
-		to++, from++;
+		++to, ++from;
 	}
 
 	return ret;
@@ -348,8 +352,8 @@ strncpy(
 
 		do {
 			if ((*d = *s2) == '\0') {
-				/* NUL pad the remaining n-1 bytes */
-				while (--n != 0)
+				/* NUL pad the remaining n - 1 bytes. For this reason, we stop when n is 1 */
+				for (; n != 1; --n)
 					*++d = '\0';
 				break;
 			}
@@ -402,14 +406,15 @@ atoi(const char *cp)
 size_t
 strnlen(const char *s, size_t max)
 {
+	size_t len;
 
-	const char const *p = s;
-	const char *es = s + max;
-	while (*s && s != es) {
+	for (len = 0; len < max; len++) {
+		if (!*s)
+			break;
 		s++;
 	}
+	return len;
 
-	return s - p;
 }
 #endif // #ifndef __arm__
 
@@ -488,7 +493,9 @@ strlcat(char *restrict dst, const char *restrict src, size_t siz)
 	size_t dlen;
 
 	/* Find the end of dst and adjust bytes left but don't go past end */
-	for (n = siz; n != 0 && *dst != '\0'; n--) {
+	for (n = siz; n != 0; n--) {
+		if (*dst == '\0')
+			break;
 		dst++;
 	}
 	dlen = dst - d;
