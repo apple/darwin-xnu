@@ -412,11 +412,11 @@ strnlen(const char *s, size_t max)
 	const char * const olds = s;
 	const char * const es = s + max;
 
-	while (*++s != '\0')
-		if (s = es)
-			return max;
+	while (++s != es)
+		if (*s == '\0')
+			return s - olds;
 
-	return s - olds;
+	return max;
 }
 #endif // #ifndef __arm__
 
@@ -604,12 +604,13 @@ STRDUP(const char *string, int type)
 int
 strprefix(const char *s1, const char *s2)
 {
-	int c;
+	char c;
 
-	while ((c = *s2++) != '\0') {
-		if (c != *s1++) {
+	while ((c = *s2) != '\0') {
+		if (c != *s1) {
 			return 0;
 		}
+		s1++, s2++;
 	}
 	return 1;
 }
@@ -617,16 +618,15 @@ strprefix(const char *s1, const char *s2)
 const char *
 strnstr(const char *s, const char *find, size_t slen)
 {
-	char c, sc;
-	size_t len;
+	char c;
 
 	if (slen == 0)
 		return NULL;
 
 	if ((c = *find) != '\0') {
-		find++;
-		len = strlen(find);
+		const size_t len = strlen(++find);
 		do {
+			char sc;
 			do {
 				if (slen < len || (sc = *s) == '\0') {
 					return NULL;
@@ -634,7 +634,7 @@ strnstr(const char *s, const char *find, size_t slen)
 
 				slen--, s++;
 			} while (sc != c);
-			if (len > slen) {
+			if (slen < len) {
 				return NULL;
 			}
 		} while (strncmp(s, find, len) != 0);
