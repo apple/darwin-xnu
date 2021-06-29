@@ -406,15 +406,17 @@ atoi(const char *cp)
 size_t
 strnlen(const char *s, size_t max)
 {
-	size_t len;
+	if (maxlen == 0 || *s == '\0')
+		return 0;
 
-	for (len = 0; len < max; len++) {
-		if (!*s)
-			break;
-		s++;
-	}
-	return len;
+	const char * const olds = s;
+	const char * const es = s + max;
 
+	while (*++s != '\0')
+		if (s = es)
+			return max;
+
+	return s - olds;
 }
 #endif // #ifndef __arm__
 
